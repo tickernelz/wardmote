@@ -99,11 +99,8 @@ import {
   collapseDuplicatePendingHumanJoinRequests,
   findReusableHumanJoinRequest,
 } from "../lib/join-request-dedupe.js";
-import { assertAuthenticated, assertCompanyAccess, companyOwnerAgentHasPermission, getActorInfo, isCompanyOwnerAgentActor, recordAgentAuthority } from "./authz.js";
-import {
-  AGENT_MEMBER_AUTHORITY_PERMISSION_KEYS,
-  agentRoleHasAuthority,
-} from "@tickernelz/wardmote-shared";
+import { assertAuthenticated, assertCompanyAccess, companyOwnerAgentHasPermission, getActorInfo, hasAgentAuthority, isCompanyOwnerAgentActor, recordAgentAuthority } from "./authz.js";
+import { AGENT_MEMBER_AUTHORITY_PERMISSION_KEYS } from "@tickernelz/wardmote-shared";
 import {
   claimBoardOwnership,
   inspectBoardClaimChallenge
@@ -2241,7 +2238,7 @@ export function accessRoutes(
       if (!req.actor.agentId) throw forbidden();
       if (
         AGENT_MEMBER_AUTHORITY_PERMISSION_KEYS.includes(permissionKey)
-        && agentRoleHasAuthority(req.actor.agentRole ?? null, "company:members")
+        && hasAgentAuthority(req, "company:members")
       ) {
         recordAgentAuthority(req, "company:members", companyId);
         return;

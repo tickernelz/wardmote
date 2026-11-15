@@ -122,7 +122,8 @@ export function wardmoteMcpRoutes(db: Db) {
       toolsets,
       agentRole: agent?.role ?? null,
     });
-    const capabilities = agentAuthorityCapabilities(agent?.role);
+    const suspended = req.actor.ownerAuthoritySuspended === true;
+    const capabilities = agentAuthorityCapabilities(suspended ? null : agent?.role);
     const management = capabilities.some((capability) => capability.startsWith("company:"));
     const grants = management ? await access.listPrincipalGrants(companyId, "agent", agentId) : [];
     const responsibleUserId = req.actor.onBehalfOfUserId ?? null;
@@ -141,6 +142,7 @@ export function wardmoteMcpRoutes(db: Db) {
           agentRole: agent?.role ?? null,
           agentStatus: agent?.status ?? null,
           keyScope: req.actor.keyScope ?? null,
+          ownerAuthoritySuspended: suspended,
         }),
       },
       runtimeConnections: {

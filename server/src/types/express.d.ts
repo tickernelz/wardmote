@@ -17,6 +17,7 @@ declare global {
         agentId?: string;
         agentRole?: string | null;
         agentStatus?: string | null;
+        ownerAuthoritySuspended?: boolean;
         agentPermissions?: Record<string, unknown> | null;
         companyId?: string;
         exercisedAgentAuthority?: {

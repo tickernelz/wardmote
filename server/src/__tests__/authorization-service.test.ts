@@ -2068,6 +2068,39 @@ describeEmbeddedPostgres("authorization service", () => {
         expect(companyDecision.reason, action).not.toBe("allow_agent_role_ceo");
       }
     });
+
+    it("keeps active-checkout management by role off for a low-trust CEO inside its own boundary", async () => {
+      const f = await ceoFixture();
+      const boundary = await createProject(db, f.company.id, "Boundary");
+      const issue = await createIssue(db, f.company.id, { projectId: boundary.id, assigneeAgentId: f.engineer.id });
+      const ceo = await createAgent(db, f.company.id, { role: "ceo" });
+      const resource = { type: "issue" as const, companyId: f.company.id, issueId: issue.id, projectId: boundary.id, assigneeAgentId: f.engineer.id };
+      const trusted = await authorizationService(db).decide({
+        actor: f.actorFor(ceo.id, { onBehalfOfUserId: null }), action: "tasks:manage_active_checkouts", resource,
+      });
+      expect(trusted).toMatchObject({ allowed: true, reason: "allow_agent_role_ceo" });
+      await db.update(agents).set({
+        permissions: {
+          trustPreset: "low_trust_review",
+          authorizationPolicy: { trustBoundary: { mode: "low_trust_review", companyId: f.company.id, projectIds: [boundary.id] } },
+        },
+      }).where(eq(agents.id, ceo.id));
+      const decision = await authorizationService(db).decide({
+        actor: f.actorFor(ceo.id, { onBehalfOfUserId: null }), action: "tasks:manage_active_checkouts", resource,
+      });
+      expect(decision).toMatchObject({ allowed: false, reason: "deny_missing_grant" });
+    });
+
+    it("withholds owner-equivalent access when the CEO trust policy does not resolve", async () => {
+      const f = await ceoFixture();
+      await db.update(agents).set({ permissions: { trustPreset: "low_trust_review" } }).where(eq(agents.id, f.ceo.id));
+      const authz = authorizationService(db);
+      const actor = f.actorFor(f.ceo.id, { onBehalfOfUserId: null });
+      await expect(authz.companyOwnerAgentTrusted(actor)).resolves.toBe(false);
+      const decision = await authz.decide({ actor, action: "tools:manage_connections", resource: { type: "company", companyId: f.company.id } });
+      expect(decision.reason).not.toBe("allow_agent_role_ceo");
+      expect(decision.allowed).toBe(false);
+    });
   });
 
   it("grants hire authority through the persisted new-agent default", async () => {
