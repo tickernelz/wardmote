@@ -1,5 +1,5 @@
 import { hasRequiredWorkspaceRecovery } from "./workspace-restore-recovery-state.js";
-import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { environmentLeases, heartbeatRunEvents, heartbeatRuns, issueRecoveryActions, type Db } from "@tickernelz/wardmote-db";
 import { readProcessStartedAt } from "./hot-restart.js";
 import { hasRemoteTerminationReceipt } from "./remote-execution-termination.js";
@@ -108,7 +108,8 @@ export async function getConversationOwnershipBlocker(db: Db, companyId: string,
     .where(and(
       eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.runtimeMode, "legacy"),
       conversationRunPredicate(),
-      sql`coalesce(${heartbeatRuns.nativeIssueId}::text, ${heartbeatRuns.contextSnapshot}->>'issueId') = ${issueId}`,
+      or(eq(heartbeatRuns.nativeIssueId, issueId),
+        and(isNull(heartbeatRuns.nativeIssueId), sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`)),
       inArray(heartbeatRuns.status, ["failed", "timed_out", "interrupted", "cancelled"]),
       or(isNotNull(heartbeatRuns.processPid), isNotNull(heartbeatRuns.processGroupId), activeLease,
         sql`${heartbeatRuns.resultJson}->'workspaceRestoreRecovery'->>'schema' = 'wardmote.workspace-restore-recovery.v1'`),
