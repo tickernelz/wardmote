@@ -8,17 +8,20 @@ import {
   LiveNowFeedback,
   LiveNowHealthChip,
   LiveNowMoreMenu,
+  LiveNowPauseButton,
   LiveNowStopFlow,
   useLiveNowTaskActions,
 } from "./LiveNowRow";
 import type { LiveNowGroup } from "./live-now-health";
-import type { LiveNowItem } from "./useLiveNowModel";
+import type { LiveNowItem, LiveNowPausedItem } from "./useLiveNowModel";
+import { LiveNowPausedCard } from "./LiveNowPaused";
 
 const LANE_CARD_LIMIT = 2;
 
 export const LIVE_NOW_GROUP_LABEL: Record<LiveNowGroup, string> = {
   attention: "Needs attention",
   working: "Working",
+  paused: "Paused",
 };
 
 /** Live tasks as lanes per state above the status board: what needs a hand first, then what is working. */
@@ -30,7 +33,7 @@ export function LiveNowBoardBand({
   listId,
 }: {
   companyId: string;
-  lanes: readonly { group: LiveNowGroup; items: readonly LiveNowItem[] }[];
+  lanes: readonly { group: LiveNowGroup; items: readonly LiveNowItem[]; paused: readonly LiveNowPausedItem[] }[];
   failedIds: ReadonlySet<string>;
   issueLinkState?: unknown;
   listId: string;
@@ -48,6 +51,7 @@ export function LiveNowBoardBand({
           companyId={companyId}
           group={lane.group}
           items={lane.items}
+          paused={lane.paused}
           failedIds={failedIds}
           issueLinkState={issueLinkState}
         />
@@ -56,36 +60,46 @@ export function LiveNowBoardBand({
   );
 }
 
+const EMPTY_LANE_TEXT: Record<LiveNowGroup, string> = {
+  attention: "Nothing needs attention",
+  working: "Nothing working",
+  paused: "Nothing paused",
+};
+
 function LiveNowLane({
   companyId,
   group,
   items,
+  paused,
   failedIds,
   issueLinkState,
 }: {
   companyId: string;
   group: LiveNowGroup;
   items: readonly LiveNowItem[];
+  paused: readonly LiveNowPausedItem[];
   failedIds: ReadonlySet<string>;
   issueLinkState?: unknown;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const total = items.length + paused.length;
   const shown = expanded ? items : items.slice(0, LANE_CARD_LIMIT);
-  const hidden = items.length - shown.length;
+  const shownPaused = expanded ? paused : paused.slice(0, Math.max(0, LANE_CARD_LIMIT - shown.length));
+  const hidden = total - shown.length - shownPaused.length;
   const label = LIVE_NOW_GROUP_LABEL[group];
   return (
     <section
-      aria-label={`${label}, ${items.length}`}
+      aria-label={`${label}, ${total}`}
       data-live-now-lane={group}
       className="live-now-lane flex w-(--live-now-lane-width) shrink-0 snap-start flex-col rounded-lg bg-bg-3/60 p-2 sm:w-auto"
     >
       <h3 className="flex items-center gap-1.5 px-1 pb-2 text-xs font-semibold uppercase tracking-wide text-ink-2">
         <span aria-hidden="true" data-live-group={group} className="live-now-group-dot size-1.5 rounded-full" />
         {label}
-        <span className="ml-auto font-normal tabular-nums text-ink-3">{items.length}</span>
+        <span className="ml-auto font-normal tabular-nums text-ink-3">{total}</span>
       </h3>
-      {items.length === 0 ? (
-        <p className="px-1 pb-1 text-xs text-ink-3">{group === "attention" ? "Nothing needs attention" : "Nothing working"}</p>
+      {total === 0 ? (
+        <p className="px-1 pb-1 text-xs text-ink-3">{EMPTY_LANE_TEXT[group]}</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {shown.map((item) => (
@@ -97,9 +111,12 @@ function LiveNowLane({
               issueLinkState={issueLinkState}
             />
           ))}
+          {shownPaused.map((item) => (
+            <LiveNowPausedCard key={item.pause.holdId} companyId={companyId} item={item} issueLinkState={issueLinkState} />
+          ))}
         </ul>
       )}
-      {items.length > LANE_CARD_LIMIT ? (
+      {total > LANE_CARD_LIMIT ? (
         <button
           type="button"
           className="mt-1.5 self-start rounded-md px-1.5 py-1 text-xs text-ink-3 outline-none hover:bg-bg-3 hover:text-ink focus-visible:ring-2 focus-visible:ring-focus"
@@ -154,14 +171,17 @@ function LiveNowBoardCard({
         />
         <span className="min-w-0 truncate" title={primary.agentName}>{primary.agentName}</span>
         <LiveNowElapsed entry={entry} className="ml-auto" />
-        <span className="relative z-10">
+        <span className="relative z-10 flex items-center gap-1">
+          <LiveNowPauseButton actions={actions} iconOnly />
           <LiveNowMoreMenu
             entry={entry}
             identifier={identifier}
             taskPath={taskPath}
             detailState={detailState}
-            stopping={actions.stopping}
-            onStop={() => actions.setConfirmingStop(true)}
+            stopping={actions.stopping || actions.stopNowPending}
+            stopNow={actions.pausing}
+            onStop={actions.pausing ? actions.stopNow : () => actions.setConfirmingStop(true)}
+            onPauseSubtree={actions.pausable && !actions.pauseBlockedReason ? () => actions.pause("subtree") : undefined}
           />
         </span>
       </span>

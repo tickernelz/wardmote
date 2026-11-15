@@ -1,3 +1,5 @@
+export type AdapterSafePointOutcome = "reached" | "timeout" | "closed";
+
 export interface AdapterSteerTarget {
   capabilities(): Promise<{ steering: boolean }>;
   snapshot(): Promise<{ activeTurnId?: string | null }>;
@@ -8,6 +10,8 @@ export interface AdapterSteerTarget {
     ackTimeoutMs?: number;
   }): Promise<void>;
   onceTurnActive?(listener: () => void): () => void;
+  /** Ends the agent's work once no turn or tool is open, so a following Stop loses no tool result. */
+  stopAtSafePoint?(input: { timeoutMs: number }): Promise<AdapterSafePointOutcome>;
 }
 
 const adapterSteerTargets = new Map<string, AdapterSteerTarget>();

@@ -426,6 +426,7 @@ function buildPlanDecisionResponseText(
 const FEEDBACK_TERMS_URL = import.meta.env.VITE_FEEDBACK_TERMS_URL?.trim() || null;
 const ISSUE_COMMENT_AUTOLOAD_LIMIT = ISSUE_COMMENT_PAGE_SIZE * 3;
 const JUMP_TO_LATEST_MAX_COMMENT_PAGES = 10;
+const SAFE_POINT_PAUSE_WAIT_MS = 150_000;
 const ISSUE_QUEUED_COMMENTS_POLL_MS = 3_000;
 const ISSUE_RUNS_POLL_MS = 15_000;
 const ISSUE_LIVE_RUNS_POLL_MS = 10_000;
@@ -3187,6 +3188,13 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     },
   );
 
+  const { data: runningRunCount = 0 } = useQuery<LiveRunForIssue[], Error, number>({
+    queryKey: queryKeys.issues.liveRuns(issueQueryId!),
+    queryFn: () => heartbeatsApi.liveRunsForIssue(canonicalIssueId!),
+    enabled: !!canonicalIssueId,
+    select: (runs) => runs.filter((run) => run.status === "running").length,
+  });
+
   const { data: hasActiveRun = false } = useQuery<
     ActiveRunForIssue | null,
     Error,
@@ -4166,14 +4174,13 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
       const created = await issuesApi.createTreeHold(issueId!, {
         mode,
         reason: null,
-        releasePolicy: {
-          strategy: "manual",
-          ...(mode === "pause"
-            ? {
-                note: scope === "leaf" ? "leaf_pause" : "full_pause",
-              }
-            : {}),
-        },
+        releasePolicy: { strategy: "manual" },
+        ...(mode === "pause"
+          ? {
+              scope: scope === "leaf" ? "task" : "subtree",
+              stopAt: issue?.conversationAgentId ? "now" : "safe_point",
+            }
+          : {}),
         ...(runId
           ? { metadata: { source: "issue_active_run_control", runId } }
           : {}),
@@ -4186,6 +4193,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
         });
         await waitForStoppedRuns(
           created.preview.activeRuns.map((run) => run.id),
+          issue?.conversationAgentId ? {} : { timeoutMs: SAFE_POINT_PAUSE_WAIT_MS },
         );
       }
       return {
@@ -6562,8 +6570,9 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
 
 
   const canShowSubtreeControls = canManageTreeControl && childIssues.length > 0;
+  const pauseStillStopping = Boolean(activePauseHold) && runningRunCount > 0;
   const canResumeSubtree =
-    canShowSubtreeControls && activePauseHold?.isRoot === true;
+    canShowSubtreeControls && activePauseHold?.isRoot === true && !pauseStillStopping;
   const canRestoreSubtree =
     canShowSubtreeControls && activeCancelHolds.length > 0;
   const isTerminalIssue =
@@ -6578,7 +6587,8 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
   const canResumeLeafWork =
     canManageTreeControl &&
     childIssues.length === 0 &&
-    activePauseHold?.isRoot === true;
+    activePauseHold?.isRoot === true &&
+    !pauseStillStopping;
   const treeControlScope: "leaf" | "subtree" =
     childIssues.length === 0 ? "leaf" : "subtree";
   const previewAffectedIssueCount = treePreviewAffectedIssues.length;
@@ -7262,7 +7272,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                   composerPause={activePauseHold ? {
                     scope: activePauseHold.isRoot && childIssues.length === 0 ? "leaf" : "subtree",
                     pending: executeTreeControl.isPending && executeTreeControl.variables?.mode === "resume",
-                    onResume: activePauseHold.isRoot && canManageTreeControl ? () => {
+                    onResume: activePauseHold.isRoot && canManageTreeControl && !pauseStillStopping ? () => {
                       executeTreeControl.reset();
                       setTreeControlMode("resume");
                       setTreeControlWakeAgentsOnResume(isAgentOwnedNonTerminalIssue || canShowSubtreeControls);

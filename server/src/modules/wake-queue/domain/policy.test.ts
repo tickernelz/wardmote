@@ -233,7 +233,7 @@ describe("decideQueuedCommentAction", () => {
 
 const baseWakeOutcomeFacts: DeferredWakeOutcomeFacts = {
   agent: { agentFound: true, invokable: true },
-  pauseHold: { activePauseHold: false, treeHoldInteractionWake: false },
+  pauseHold: { activePauseHold: false },
 };
 
 describe("decideWakeOutcome", () => {
@@ -253,14 +253,9 @@ describe("decideWakeOutcome", () => {
       expected: { kind: "fail_not_invokable" },
     },
     {
-      name: "cancel_pause_hold: an active pause hold with no verified tree-hold interaction",
-      facts: { ...baseWakeOutcomeFacts, pauseHold: { activePauseHold: true, treeHoldInteractionWake: false } },
+      name: "cancel_pause_hold: an active pause hold cancels every deferred wake",
+      facts: { ...baseWakeOutcomeFacts, pauseHold: { activePauseHold: true } },
       expected: { kind: "cancel_pause_hold" },
-    },
-    {
-      name: "promote: an active pause hold but a verified tree-hold interaction wake survives it",
-      facts: { ...baseWakeOutcomeFacts, pauseHold: { activePauseHold: true, treeHoldInteractionWake: true } },
-      expected: { kind: "promote" },
     },
     {
       name: "promote: an invokable agent and no pause hold",

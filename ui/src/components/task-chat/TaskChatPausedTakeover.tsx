@@ -11,7 +11,7 @@ export interface TaskComposerPause {
   error?: string | null;
 }
 
-/** Replaces all input controls until the effective pause hold is released. */
+/** Pause notice for the composer: a task keeps accepting messages that wait for Resume; a conversation replaces its input. */
 export function TaskChatPausedTakeover({
   scope,
   resumeHref,
@@ -19,11 +19,44 @@ export function TaskChatPausedTakeover({
   pending = false,
   error,
   onResume,
+  acceptsMessages = false,
 }: {
   hasDraft?: boolean;
+  acceptsMessages?: boolean;
 } & TaskComposerPause) {
   const headingId = useId();
   const subtree = scope === "subtree";
+  if (acceptsMessages) {
+    return (
+      <section
+        aria-labelledby={headingId}
+        aria-busy={pending}
+        data-testid="paused-composer-notice"
+        className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-(--status-agent-paused)/40 bg-(--status-agent-paused)/10 px-3 py-2"
+      >
+        <Pause aria-hidden="true" className="size-4 shrink-0 text-(--status-task-icon-todo)" />
+        <p className="min-w-0 flex-1 text-sm text-ink">
+          <span id={headingId}>{subtree ? "Subtree is paused." : "Task is paused."}</span>{" "}
+          <span className="text-ink-3">Your message waits until Resume.</span>
+        </p>
+        {error ? (
+          <p role="alert" className="w-full text-sm text-bad">
+            {error}
+          </p>
+        ) : null}
+        {resumeHref ? (
+          <Button asChild size="sm" variant="secondary">
+            <Link to={resumeHref}><Play aria-hidden="true" />Resume subtree</Link>
+          </Button>
+        ) : onResume ? (
+          <Button size="sm" variant="secondary" disabled={pending} onClick={onResume}>
+            {pending ? <Loader2 aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}
+            {pending ? "Resuming…" : "Resume"}
+          </Button>
+        ) : null}
+      </section>
+    );
+  }
   return (
     <section
       aria-labelledby={headingId}

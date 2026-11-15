@@ -971,9 +971,10 @@ function createPauseHold(
     companyId: "company-1",
     rootIssueId: "issue-1",
     mode: "pause",
+    scope: "subtree",
     status: "active",
     reason: null,
-    releasePolicy: { strategy: "manual", note: "full_pause" },
+    releasePolicy: { strategy: "manual" },
     createdByActorType: "user",
     createdByAgentId: null,
     createdByUserId: "user-1",
@@ -4807,7 +4808,7 @@ describe("IssueDetail", () => {
         isRoot: true,
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "full_pause" },
+        releasePolicy: { strategy: "manual" },
       };
 
       mockIssuesApi.get.mockResolvedValue(createIssue());
@@ -4926,7 +4927,7 @@ describe("IssueDetail", () => {
       id: "pause-hold-1",
       mode: "pause",
       reason: null,
-      releasePolicy: { strategy: "manual", note: "full_pause" },
+      releasePolicy: { strategy: "manual" },
       members: [],
     });
 
@@ -4985,7 +4986,9 @@ describe("IssueDetail", () => {
     expect(mockIssuesApi.createTreeHold).toHaveBeenCalledWith("PAP-1", {
       mode: "pause",
       reason: null,
-      releasePolicy: { strategy: "manual", note: "full_pause" },
+      releasePolicy: { strategy: "manual" },
+      scope: "subtree",
+      stopAt: "safe_point",
     });
   });
 
@@ -5009,7 +5012,7 @@ describe("IssueDetail", () => {
         id: "leaf-pause-hold-1",
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "leaf_pause" },
+        releasePolicy: { strategy: "manual" },
         members: [],
       });
 
@@ -5080,7 +5083,9 @@ describe("IssueDetail", () => {
       } else expect(mockIssuesApi.createTreeHold).toHaveBeenCalledWith("PAP-1", {
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "leaf_pause" },
+        releasePolicy: { strategy: "manual" },
+        scope: "task",
+        stopAt: "safe_point",
         metadata: { source: "issue_active_run_control", runId: "run-active-1" },
       });
 
@@ -5106,7 +5111,9 @@ describe("IssueDetail", () => {
       expect(mockIssuesApi.createTreeHold).toHaveBeenLastCalledWith("PAP-1", {
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "leaf_pause" },
+        releasePolicy: { strategy: "manual" },
+        scope: "task",
+        stopAt: "safe_point",
       });
       expect(mockPushToast).not.toHaveBeenCalled();
       mockIssuesApi.createTreeHold.mockRejectedValueOnce(
@@ -5636,6 +5643,62 @@ describe("IssueDetail", () => {
     });
   });
 
+  it("offers no Resume while the paused task's run is still stopping at its safe point", async () => {
+    mockIssuesApi.get.mockResolvedValue(createIssue({ status: "in_progress", assigneeAgentId: "agent-1" }));
+    mockIssuesApi.getTreeControlState.mockResolvedValue({
+      activePauseHold: {
+        holdId: "hold-1",
+        rootIssueId: "issue-1",
+        issueId: "issue-1",
+        isRoot: true,
+        mode: "pause",
+        reason: null,
+        releasePolicy: { strategy: "manual" },
+      },
+    });
+    mockIssuesApi.listTreeHolds.mockResolvedValue([createPauseHold()]);
+    mockHeartbeatsApi.liveRunsForIssue.mockResolvedValue([
+      {
+        id: "run-stopping",
+        status: "running",
+        invocationSource: "assignment",
+        triggerDetail: "system",
+        startedAt: "2026-04-21T00:00:00.000Z",
+        finishedAt: null,
+        createdAt: "2026-04-21T00:00:00.000Z",
+        agentId: "agent-1",
+        agentName: "Coder",
+        adapterType: "omp_local",
+        issueId: "issue-1",
+      },
+    ]);
+    mockAgentsApi.list.mockResolvedValue([createAgent()]);
+    mockAuthApi.getSession.mockResolvedValue({ session: { userId: "user-1" }, user: { id: "user-1" } });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    await waitForAssertion(() => expect(container.textContent).toContain("Task is paused."));
+    await waitForAssertion(() => expect(mockHeartbeatsApi.liveRunsForIssue).toHaveBeenCalled());
+    await flushReact();
+    await waitForAssertion(() => {
+      const pause = mockIssueChatThreadRender.mock.calls.at(-1)?.[0]?.composerPause;
+      expect(pause).toBeTruthy();
+      expect(pause.onResume).toBeUndefined();
+    });
+    const enabledResume = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).filter(
+      (button) => /^Resume( task| work)?$/.test(button.textContent?.trim() ?? "") && !button.disabled,
+    );
+    expect(enabledResume).toHaveLength(0);
+  });
+
   it("renders a quiet task pause notice and defaults leaf resume to wake the assignee", async () => {
     const activeHold = createPauseHold();
     const releasedHold = createPauseHold({
@@ -5661,7 +5724,7 @@ describe("IssueDetail", () => {
         isRoot: true,
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "leaf_pause" },
+        releasePolicy: { strategy: "manual" },
       },
     });
     mockIssuesApi.listTreeHolds.mockResolvedValue([activeHold]);

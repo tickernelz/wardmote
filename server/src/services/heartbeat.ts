@@ -264,6 +264,7 @@ import {
   settleConversationTurn,
 } from "./agent-conversations.js";
 import { withAdapterExecutionPhase } from "@tickernelz/wardmote-adapter-utils/execution-phase";
+import { getAdapterSteerTarget } from "@tickernelz/wardmote-adapter-utils/adapter-steer-registry";
 import { getConversationConfirmationContext } from "./conversation-confirmation-context.js";
 import {
   recordNativeLocalProcessStop,
@@ -1029,6 +1030,8 @@ export function resolveHeartbeatSchedulingSuppression(
   }
   return { suppressed: false, reason: null };
 }
+
+export const RUN_PAUSE_SAFE_POINT_TIMEOUT_MS = 120_000;
 
 export function heartbeatService(
   db: Db,
@@ -5602,6 +5605,18 @@ export function heartbeatService(
 
     cancelRun: (runId: string, reason?: string, options?: CancelRunOptions) =>
       cancelRunInternal(runId, reason, options),
+
+    pauseRunAtSafePoint: async (runId: string, reason: string, options: CancelRunOptions = {}) => {
+      const requestedAt = new Date().toISOString();
+      const target = getAdapterSteerTarget(runId);
+      const safePoint = target?.stopAtSafePoint
+        ? await target.stopAtSafePoint({ timeoutMs: RUN_PAUSE_SAFE_POINT_TIMEOUT_MS }).catch(() => "closed" as const)
+        : "unsupported";
+      return cancelRunInternal(runId, reason, {
+        ...options,
+        resultJson: { ...options.resultJson, pause: { safePoint, requestedAt, stoppedAt: new Date().toISOString() } },
+      });
+    },
 
     /**
      * Pause-only. Emits errorCode "agent_paused" unconditionally; its sole caller is the

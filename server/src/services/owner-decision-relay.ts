@@ -513,6 +513,7 @@ const DESK_ONLY_REASONS: Partial<Record<AttentionSourceKind, string>> = {
   failed_run: "A failed run is handled on the Wardmote Decisions desk",
   budget_alert: "A budget incident is decided by the owner on the Wardmote Decisions desk",
   agent_error_alert: "An agent error is inspected or dismissed on the Wardmote Decisions desk",
+  paused_task: "A paused task is resumed or its pause ended from the task itself",
   join_request: "A join request is approved or denied by a board member on the Wardmote Decisions desk",
 };
 

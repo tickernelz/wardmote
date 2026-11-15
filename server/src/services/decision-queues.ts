@@ -256,6 +256,7 @@ async function resolveDecisionSources(
       // Keep historical decision queue entries accessible after feature retirement.
       case "productivity_review":
       case "blocker_attention":
+      case "paused_task":
       case "review": {
         const rows = await db.select({ id: issues.id }).from(issues)
           .where(and(eq(issues.companyId, companyId), inArray(issues.id, ids), isNull(issues.hiddenAt)));

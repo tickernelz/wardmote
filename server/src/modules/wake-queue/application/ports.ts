@@ -135,22 +135,7 @@ export interface WakeQueueTransaction {
   }): Promise<DeferredWakeCandidate | null>;
   /** Sets `status = 'failed'` guarded by the current `deferred_issue_execution` status. */
   failDeferredWake(input: { companyId: string; wakeId: string; now: Date }): Promise<boolean>;
-  getPauseHoldFacts(input: {
-    companyId: string;
-    issueId: string;
-    wakeAgentId: string;
-    deferredContextSeed: Record<string, unknown>;
-    requestedByActorType: string | null;
-    requestedByActorId: string | null;
-  }): Promise<{
-    activePauseHold: boolean;
-    treeHoldInteractionWake: boolean;
-    holdId: string | null;
-    rootIssueId: string | null;
-    mode: string | null;
-    reason: string | null;
-    releasePolicy: unknown;
-  }>;
+  getPauseHoldFacts(input: { companyId: string; issueId: string }): Promise<{ activePauseHold: boolean }>;
   getCommentSelfAuthorship(input: {
     companyId: string;
     issueId: string;

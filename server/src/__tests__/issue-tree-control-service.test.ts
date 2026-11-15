@@ -402,7 +402,7 @@ describeEmbeddedPostgres("issueTreeControlService", () => {
     });
   });
 
-  it("walks pause-hold ancestry beyond 15 levels for checkout and interaction waives", async () => {
+  it("walks pause-hold ancestry beyond 15 levels, refuses every checkout under it, and holds only the task for a task-scoped pause", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const issuePath = Array.from({ length: 17 }, () => randomUUID());
@@ -553,74 +553,165 @@ describeEmbeddedPostgres("issueTreeControlService", () => {
     ]);
 
     const treeSvc = issueTreeControlService(db);
-    await treeSvc.createHold(companyId, rootIssueId, {
+    const issueSvc = issueService(db);
+    const subtreeHold = await treeSvc.createHold(companyId, rootIssueId, {
       mode: "pause",
       reason: "operator requested pause",
       actor: { actorType: "user", actorId: "board-user", userId: "board-user" },
     });
-    const deepDescendantGate = await treeSvc.getActivePauseHoldGate(companyId, deepDescendantIssueId);
-    expect(deepDescendantGate).toMatchObject({
-      holdId: expect.any(String),
+    expect(subtreeHold.hold.scope).toBe("subtree");
+    expect(await treeSvc.getActivePauseHoldGate(companyId, deepDescendantIssueId)).toMatchObject({
       rootIssueId,
       issueId: deepDescendantIssueId,
       isRoot: false,
       mode: "pause",
     });
+    for (const runId of [randomUUID(), forgedRunId, deepDescendantRunId]) {
+      await expect(issueSvc.checkout(deepDescendantIssueId, agentId, ["todo"], runId)).rejects.toMatchObject({
+        status: 409,
+        details: expect.objectContaining({ rootIssueId, mode: "pause" }),
+      });
+    }
+    await expect(issueSvc.checkout(rootIssueId, agentId, ["todo"], rootRunId)).rejects.toMatchObject({ status: 409 });
 
-    const issueSvc = issueService(db);
-    await expect(
-      issueSvc.checkout(deepDescendantIssueId, agentId, ["todo"], randomUUID()),
-    ).rejects.toMatchObject({
-      status: 409,
-      details: expect.objectContaining({
-        rootIssueId,
-        mode: "pause",
-      }),
-    });
-    await expect(
-      issueSvc.checkout(deepDescendantIssueId, agentId, ["todo"], forgedRunId),
-    ).rejects.toMatchObject({
-      status: 409,
-      details: expect.objectContaining({
-        rootIssueId,
-        mode: "pause",
-      }),
-    });
-
-    const checkedOutChild = await issueSvc.checkout(deepDescendantIssueId, agentId, ["todo"], deepDescendantRunId);
-    expect(checkedOutChild.status).toBe("in_progress");
-    expect(checkedOutChild.checkoutRunId).toBe(deepDescendantRunId);
-
-    const checkedOutRoot = await issueSvc.checkout(rootIssueId, agentId, ["todo"], rootRunId);
-    expect(checkedOutRoot.status).toBe("in_progress");
-    expect(checkedOutRoot.checkoutRunId).toBe(rootRunId);
-
-    await db.update(issues).set({
-      status: "todo",
-      checkoutRunId: null,
-      executionRunId: null,
-      executionAgentNameKey: null,
-      executionLockedAt: null,
-      updatedAt: new Date(),
-    }).where(eq(issues.id, rootIssueId));
-    await db.update(issueTreeHolds).set({
-      status: "released",
-      releasedAt: new Date(),
-      releasedByActorType: "user",
-      releasedByUserId: "board-user",
-      releaseReason: "switch to full pause",
-      updatedAt: new Date(),
-    }).where(eq(issueTreeHolds.rootIssueId, rootIssueId));
-    await treeSvc.createHold(companyId, rootIssueId, {
-      mode: "pause",
-      reason: "full pause",
-      releasePolicy: { strategy: "manual", note: "full_pause" },
+    await treeSvc.releaseHold(companyId, rootIssueId, subtreeHold.hold.id, {
+      reason: "switch to a task pause",
       actor: { actorType: "user", actorId: "board-user", userId: "board-user" },
     });
+    const taskHold = await treeSvc.createHold(companyId, rootIssueId, {
+      mode: "pause",
+      scope: "task",
+      reason: "pause only the root",
+      actor: { actorType: "user", actorId: "board-user", userId: "board-user" },
+    });
+    expect(taskHold.hold.scope).toBe("task");
+    expect(taskHold.preview.issues.map((issue) => issue.id)).toEqual([rootIssueId]);
+    expect(await treeSvc.getActivePauseHoldGate(companyId, issuePath[1]!)).toBeNull();
+    const checkedOutChild = await issueSvc.checkout(deepDescendantIssueId, agentId, ["todo"], deepDescendantRunId);
+    expect(checkedOutChild.checkoutRunId).toBe(deepDescendantRunId);
+    await expect(issueSvc.checkout(rootIssueId, agentId, ["todo"], rootRunId)).rejects.toMatchObject({ status: 409 });
+  });
 
-    const checkedOutLegacyFullPauseRoot = await issueSvc.checkout(rootIssueId, agentId, ["todo"], rootRunId);
-    expect(checkedOutLegacyFullPauseRoot.status).toBe("in_progress");
-    expect(checkedOutLegacyFullPauseRoot.checkoutRunId).toBe(rootRunId);
+  it("refuses to resume or end a pause while its run is still stopping, so the late stop cannot outlive the pause", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const runId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Wardmote",
+      issuePrefix: `R${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId, companyId, name: "Builder", role: "engineer", status: "active",
+      adapterType: "omp_local", adapterConfig: {}, runtimeConfig: {}, permissions: {},
+    });
+    await db.insert(issues).values({
+      id: issueId, companyId, title: "Pausing task", status: "in_progress", priority: "medium", assigneeAgentId: agentId,
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId, companyId, agentId, issueId, invocationSource: "assignment", triggerDetail: "system",
+      status: "running", contextSnapshot: { issueId },
+    });
+    const treeSvc = issueTreeControlService(db);
+    const actor = { actorType: "user" as const, actorId: "board-user", userId: "board-user" };
+    const { hold } = await treeSvc.createHold(companyId, issueId, { mode: "pause", scope: "task", actor });
+
+    await expect(treeSvc.releaseHold(companyId, issueId, hold.id, { actor })).rejects.toMatchObject({
+      status: 409,
+      details: expect.objectContaining({ code: "pause_still_stopping", runIds: [runId] }),
+    });
+    await expect(treeSvc.createHold(companyId, issueId, { mode: "resume", actor })).rejects.toMatchObject({ status: 409 });
+    expect(await treeSvc.getActivePauseHoldGate(companyId, issueId)).toMatchObject({ holdId: hold.id });
+
+    await db.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date() }).where(eq(heartbeatRuns.id, runId));
+    const released = await treeSvc.releaseHold(companyId, issueId, hold.id, { actor });
+    expect(released.status).toBe("released");
+  });
+
+  it("lists paused tasks with their pausing, paused, and pause-failed states for readers only", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const pausedIssueId = randomUUID();
+    const pausingIssueId = randomUUID();
+    const privateIssueId = randomUUID();
+    const finishedRunId = randomUUID();
+    const liveRunId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Wardmote",
+      issuePrefix: `P${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Builder",
+      role: "engineer",
+      status: "active",
+      adapterType: "omp_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(issues).values([pausedIssueId, pausingIssueId, privateIssueId].map((id, index) => ({
+      id,
+      companyId,
+      title: `Task ${index}`,
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+    })));
+    await db.insert(heartbeatRuns).values([
+      {
+        id: finishedRunId,
+        companyId,
+        agentId,
+        issueId: pausedIssueId,
+        invocationSource: "assignment",
+        triggerDetail: "system",
+        status: "cancelled",
+        finishedAt: new Date(),
+        resultJson: { pause: { safePoint: "reached" } },
+        contextSnapshot: { issueId: pausedIssueId },
+      },
+      {
+        id: liveRunId,
+        companyId,
+        agentId,
+        issueId: pausingIssueId,
+        invocationSource: "assignment",
+        triggerDetail: "system",
+        status: "running",
+        contextSnapshot: { issueId: pausingIssueId },
+      },
+    ]);
+    const treeSvc = issueTreeControlService(db);
+    for (const issueId of [pausedIssueId, pausingIssueId, privateIssueId]) {
+      await treeSvc.createHold(companyId, issueId, {
+        mode: "pause",
+        scope: "task",
+        actor: { actorType: "user", actorId: "board-user", userId: "board-user" },
+      });
+    }
+    const canRead = async (issue: { id: string }) => issue.id !== privateIssueId;
+
+    const listed = await treeSvc.listPausedTasks(companyId, { canRead });
+    expect(listed.map((task) => task.issueId).sort()).toEqual([pausedIssueId, pausingIssueId].sort());
+    expect(listed.find((task) => task.issueId === pausedIssueId)).toMatchObject({
+      state: "paused",
+      scope: "task",
+      assigneeAgentName: "Builder",
+      pausedByUserId: "board-user",
+      liveRunId: null,
+      lastRun: { id: finishedRunId, safePoint: "reached" },
+    });
+    expect(listed.find((task) => task.issueId === pausingIssueId)).toMatchObject({ state: "pausing", liveRunId });
+
+    const late = await treeSvc.listPausedTasks(companyId, { canRead, now: new Date(Date.now() + 151_000) });
+    expect(late.find((task) => task.issueId === pausingIssueId)?.state).toBe("pause_failed");
+    expect(late.find((task) => task.issueId === pausedIssueId)?.state).toBe("paused");
   });
 
   it("resumes subtree pauses by releasing matching pause holds", async () => {

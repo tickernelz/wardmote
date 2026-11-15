@@ -8688,6 +8688,16 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/api/companies/{companyId}/paused-tasks",
+  tags: ["runs"],
+  summary: "List paused tasks for a company",
+  description: "Returns every active pause hold whose task the caller can read, with its state (pausing, paused, pause_failed), live run, and last run, so LIVE NOW keeps showing paused work.",
+  request: { params: z.object({ companyId: z.string() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/api/issues/{issueId}/live-runs",
   tags: ["runs"],
   summary: "List live runs for an issue",
@@ -9452,6 +9462,7 @@ registry.registerPath({
   path: "/api/issues/{id}/tree-holds",
   tags: ["issues"],
   summary: "Create an issue tree hold",
+  description: "A pause with scope task holds only this task; subtree (the default) holds its descendants too. stopAt safe_point lets a running omp_local step finish (up to 120 s) before the run stops; now (the default) stops it at once. Persistent conversations cannot pause at a safe point.",
   request: {
     params: z.object({ id: z.string() }),
     body: jsonBody(createIssueTreeHoldSchema),

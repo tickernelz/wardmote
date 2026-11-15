@@ -3933,7 +3933,7 @@ describeEmbeddedPostgres("heartbeat comment wake batching", () => {
     });
   });
 
-  it("cancels a deferred wake under an active pause hold, but promotes a verified hold interaction with the hold context", async () => {
+  it("cancels every deferred wake under an active pause hold, a human comment wake included", async () => {
     const companyId = randomUUID();
     const finishingAgentId = randomUUID();
     const holdAgentId = randomUUID();
@@ -3991,7 +3991,7 @@ describeEmbeddedPostgres("heartbeat comment wake batching", () => {
     await db.insert(issues).values({
       id: issueId,
       companyId,
-      title: "A pause hold gates a plain wake but not a verified one",
+      title: "A pause hold gates a plain wake and a human comment wake",
       status: "in_progress",
       priority: "medium",
       responsibleUserId: "responsible-user",
@@ -4000,13 +4000,13 @@ describeEmbeddedPostgres("heartbeat comment wake batching", () => {
       identifier: `${issuePrefix}-1`,
       executionRunId: runId,
     });
-    const [hold] = await db.insert(issueTreeHolds).values({
+    await db.insert(issueTreeHolds).values({
       companyId,
       rootIssueId: issueId,
       mode: "pause",
       status: "active",
       reason: "Investigating a regression",
-    }).returning();
+    });
 
     const plainWakeId = randomUUID();
     await db.insert(agentWakeupRequests).values({
@@ -4069,23 +4069,10 @@ describeEmbeddedPostgres("heartbeat comment wake batching", () => {
       status: "cancelled",
       error: "Deferred wake suppressed by active subtree pause hold",
     });
-    // Same settle-then-assert reasoning as the missing-agent test above:
-    // the idle promoted agent's run is claimed synchronously.
-    expect(verifiedWake?.status).toBe("claimed");
-    const promotedRun = await db
-      .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
-      .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.id, verifiedWake!.runId!))
-      .then((rows) => rows[0]);
-    expect(promotedRun?.contextSnapshot).toMatchObject({
-      treeHoldInteraction: true,
-      activeTreeHold: {
-        holdId: hold!.id,
-        rootIssueId: issueId,
-        mode: "pause",
-        reason: "Investigating a regression",
-        interaction: true,
-      },
+    expect(verifiedWake).toMatchObject({
+      status: "cancelled",
+      error: "Deferred wake suppressed by active subtree pause hold",
+      runId: null,
     });
   });
 

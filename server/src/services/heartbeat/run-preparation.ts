@@ -2432,8 +2432,6 @@ export async function buildWardmoteWakePayload(input: {
     simplifiedEnglishInteractions: input.simplifiedEnglishInteractions === true,
     dependencyBlockedInteraction:
       input.contextSnapshot.dependencyBlockedInteraction === true,
-    treeHoldInteraction: input.contextSnapshot.treeHoldInteraction === true,
-    activeTreeHold: parseObject(input.contextSnapshot.activeTreeHold),
     unresolvedBlockerIssueIds: Array.isArray(
       input.contextSnapshot.unresolvedBlockerIssueIds,
     )

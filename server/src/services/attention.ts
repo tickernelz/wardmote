@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@tickernelz/wardmote-db";
 import {
   agents,
@@ -20,6 +20,7 @@ import {
   issueRecoveryActions,
   issueRelations,
   issueThreadInteractions,
+  issueTreeHolds,
   issues,
   joinRequests,
   documents,
@@ -84,6 +85,7 @@ const ATTENTION_SOURCE_KINDS: AttentionSourceKind[] = [
   "failed_run",
   "budget_alert",
   "agent_error_alert",
+  "paused_task",
 ];
 
 const SEVERITY_RANK: Record<AttentionSeverity, number> = {
@@ -105,6 +107,7 @@ const SOURCE_RANK: Record<AttentionSourceKind, number> = {
   review: 8,
   productivity_review: 9,
   join_request: 10,
+  paused_task: 11,
 };
 
 const PENDING_INTERACTION_STATUSES = ["pending"] as const;
@@ -119,6 +122,7 @@ const ADDRESSEE_WAKE_COVERED_RUN_STATUSES = [
 const OPEN_RECOVERY_STATUSES = ["active", "escalated"] as const;
 const HUMAN_RECOVERY_OWNER_TYPES = ["user", "board"] as const;
 const DETAIL_EXCERPT_LENGTH = 160;
+const PAUSE_REMINDER_AFTER_MS = [24 * 3_600_000, 72 * 3_600_000] as const;
 const DETAIL_IMAGE_LIMIT = 3;
 const OPEN_DECISION_DEFAULT_LIMIT = 500;
 const OPEN_DECISION_MAX_LIMIT = 1_000;
@@ -1810,6 +1814,54 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           ...issueContext(issue),
           detail: genericDetail(review.title, issueImages(reviewImageMap, review.id)),
         }));
+      }
+
+      if (options.userId) {
+        const pausedHolds = await db
+          .select({
+            id: issueTreeHolds.id,
+            rootIssueId: issueTreeHolds.rootIssueId,
+            reason: issueTreeHolds.reason,
+            createdAt: issueTreeHolds.createdAt,
+          })
+          .from(issueTreeHolds)
+          .where(and(
+            eq(issueTreeHolds.companyId, companyId),
+            eq(issueTreeHolds.status, "active"),
+            eq(issueTreeHolds.mode, "pause"),
+            eq(issueTreeHolds.createdByUserId, options.userId),
+            lte(issueTreeHolds.createdAt, new Date(now - PAUSE_REMINDER_AFTER_MS[0])),
+          ))
+          .orderBy(desc(issueTreeHolds.createdAt), desc(issueTreeHolds.id));
+        const pausedIssueMap = await loadIssueSummaries(pausedHolds.map((hold) => hold.rootIssueId));
+        for (const hold of pausedHolds) {
+          const issue = pausedIssueMap.get(hold.rootIssueId);
+          if (!issue) continue;
+          const reminderAfterMs = PAUSE_REMINDER_AFTER_MS.filter((afterMs) => now - hold.createdAt.getTime() >= afterMs).at(-1)!;
+          const remindedAt = new Date(hold.createdAt.getTime() + reminderAfterMs);
+          const pausedHours = reminderAfterMs / 3_600_000;
+          add(createItem({
+            companyId,
+            sourceKind: "paused_task",
+            subject: issueSubject(prefix, issue),
+            whyNow: `You paused this task ${pausedHours} hours ago and it is still paused. Resume it or end the pause.`,
+            decisionVerbs: decisionVerbs(
+              { id: "open", label: "Open task", description: "Open the paused task to resume it or end the pause." },
+              { id: "dismiss", label: "Dismiss", description: "Hide this reminder until the next one." },
+            ),
+            inlineResolvable: false,
+            entryRule: "An active pause hold created by this user is at least 24 or 72 hours old.",
+            exitRule: "The pause is resumed or ended, or the reminder is dismissed until the next threshold.",
+            dedupKey: `paused_task:${hold.id}:${pausedHours}h`,
+            severity: reminderAfterMs === PAUSE_REMINDER_AFTER_MS.at(-1) ? "medium" : "low",
+            activityAt: toIso(remindedAt),
+            createdAt: toIso(hold.createdAt),
+            updatedAt: toIso(remindedAt),
+            relatedIssue: null,
+            ...issueContext(issue),
+            detail: genericDetail(hold.reason, []),
+          }));
+        }
       }
 
       const failedRows = await listAttentionExhaustedRuns(db, companyId);

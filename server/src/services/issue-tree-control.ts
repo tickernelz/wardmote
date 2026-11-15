@@ -1,9 +1,10 @@
-import { and, asc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@tickernelz/wardmote-db";
 import {
+  activityLog,
+  agents,
   agentWakeupRequests,
   heartbeatRuns,
-  issueComments,
   issueTreeHoldMembers,
   issueTreeHolds,
   issues,
@@ -16,10 +17,12 @@ import {
   type IssueTreeHold,
   type IssueTreeHoldMember,
   type IssueTreeHoldReleasePolicy,
+  type IssueTreeHoldScope,
   type IssueTreePreviewAgent,
   type IssueTreePreviewIssue,
   type IssueTreePreviewRun,
   type IssueTreePreviewWarning,
+  type PausedTask,
 } from "@tickernelz/wardmote-shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import type { IssuePostCommitAction } from "./issues.js";
@@ -73,157 +76,13 @@ const TERMINAL_ISSUE_STATUSES = new Set<IssueStatus>(["done", "cancelled"]);
 const ACTIVE_RUN_STATUSES = ["queued", "running"] as const;
 const DEFAULT_RELEASE_POLICY: IssueTreeHoldReleasePolicy = { strategy: "manual" };
 const MAX_PAUSE_HOLD_ANCESTOR_DEPTH = 100;
+const PAUSED_TASKS_LIMIT = 200;
+export const PAUSE_FAILED_AFTER_MS = 150_000;
 export const ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS: ReadonlySet<string> = new Set([
   "issue_commented",
   "issue_reopened_via_comment",
   "issue_comment_mentioned",
 ] as const);
-const ISSUE_TREE_CONTROL_INTERACTION_WAKE_SOURCES: Readonly<Record<string, ReadonlySet<string>>> = {
-  issue_commented: new Set(["issue.comment"]),
-  issue_reopened_via_comment: new Set(["issue.comment.reopen"]),
-  issue_comment_mentioned: new Set(["comment.mention"]),
-};
-
-type VerifiedInteractionActor = {
-  requestedByActorType?: string | null;
-  requestedByActorId?: string | null;
-};
-
-function readNonEmptyStringFromRecord(record: unknown, key: string) {
-  if (!record || typeof record !== "object") return null;
-  const value = (record as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function readInteractionWakeCommentId(record: unknown) {
-  if (!record || typeof record !== "object") return null;
-  const value = (record as Record<string, unknown>).wakeCommentIds;
-  if (Array.isArray(value)) {
-    const latest = value
-      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-      .at(-1);
-    if (latest) return latest.trim();
-  }
-  return readNonEmptyStringFromRecord(record, "wakeCommentId") ?? readNonEmptyStringFromRecord(record, "commentId");
-}
-
-function hasVerifiedInteractionSource(wakeReason: string, contextSnapshot: Record<string, unknown>) {
-  const source = readNonEmptyStringFromRecord(contextSnapshot, "source");
-  if (!source) return false;
-  return ISSUE_TREE_CONTROL_INTERACTION_WAKE_SOURCES[wakeReason]?.has(source) ?? false;
-}
-
-function actorMatchesComment(
-  actor: VerifiedInteractionActor,
-  comment: { authorAgentId: string | null; authorUserId: string | null },
-) {
-  if (!actor.requestedByActorType) return false;
-  if (actor.requestedByActorType === "system") return true;
-  if (!actor.requestedByActorId) return false;
-  if (actor.requestedByActorType === "agent") return comment.authorAgentId === actor.requestedByActorId;
-  if (actor.requestedByActorType === "user") return comment.authorUserId === actor.requestedByActorId;
-  return false;
-}
-
-async function hasVerifiedInteractionWakeRequest(
-  dbOrTx: Pick<Db, "select">,
-  input: {
-    companyId: string;
-    agentId?: string | null;
-    runId?: string | null;
-    wakeupRequestId?: string | null;
-    issueId: string;
-    commentId: string;
-    comment: { authorAgentId: string | null; authorUserId: string | null };
-  },
-) {
-  if (!input.runId && !input.wakeupRequestId) return false;
-  const predicates = [
-    eq(agentWakeupRequests.companyId, input.companyId),
-    sql`${agentWakeupRequests.payload} ->> 'issueId' = ${input.issueId}`,
-    sql`${agentWakeupRequests.payload} ->> 'commentId' = ${input.commentId}`,
-  ];
-  if (input.agentId) predicates.push(eq(agentWakeupRequests.agentId, input.agentId));
-  if (input.runId && input.wakeupRequestId) {
-    const requestScope = or(
-      eq(agentWakeupRequests.runId, input.runId),
-      eq(agentWakeupRequests.id, input.wakeupRequestId),
-    );
-    if (requestScope) predicates.push(requestScope);
-  } else if (input.runId) {
-    predicates.push(eq(agentWakeupRequests.runId, input.runId));
-  } else if (input.wakeupRequestId) {
-    predicates.push(eq(agentWakeupRequests.id, input.wakeupRequestId));
-  }
-
-  const requests = await dbOrTx
-    .select({
-      requestedByActorType: agentWakeupRequests.requestedByActorType,
-      requestedByActorId: agentWakeupRequests.requestedByActorId,
-    })
-    .from(agentWakeupRequests)
-    .where(and(...predicates));
-
-  return requests.some((request) => actorMatchesComment(request, input.comment));
-}
-
-export async function isVerifiedIssueTreeControlInteractionWake(
-  dbOrTx: Pick<Db, "select">,
-  input: {
-    companyId: string;
-    issueId: string;
-    agentId?: string | null;
-    contextSnapshot: Record<string, unknown> | null | undefined;
-    requestedByActorType?: "user" | "agent" | "system" | string | null;
-    requestedByActorId?: string | null;
-    runId?: string | null;
-    wakeupRequestId?: string | null;
-  },
-) {
-  const contextSnapshot = input.contextSnapshot ?? null;
-  const wakeReason =
-    readNonEmptyStringFromRecord(contextSnapshot, "wakeReason") ??
-    readNonEmptyStringFromRecord(contextSnapshot, "reason");
-  if (!wakeReason || !ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS.has(wakeReason)) return false;
-  if (!contextSnapshot || !hasVerifiedInteractionSource(wakeReason, contextSnapshot)) return false;
-
-  const commentId = readInteractionWakeCommentId(contextSnapshot);
-  if (!commentId) return false;
-
-  const comment = await dbOrTx
-    .select({
-      id: issueComments.id,
-      authorAgentId: issueComments.authorAgentId,
-      authorUserId: issueComments.authorUserId,
-    })
-    .from(issueComments)
-    .where(
-      and(
-        eq(issueComments.companyId, input.companyId),
-        eq(issueComments.issueId, input.issueId),
-        eq(issueComments.id, commentId),
-      ),
-    )
-    .then((rows) => rows[0] ?? null);
-  if (!comment) return false;
-
-  const directActor = {
-    requestedByActorType: input.requestedByActorType,
-    requestedByActorId: input.requestedByActorId,
-  };
-  if (actorMatchesComment(directActor, comment)) return true;
-
-  return hasVerifiedInteractionWakeRequest(dbOrTx, {
-    companyId: input.companyId,
-    agentId: input.agentId,
-    runId: input.runId,
-    wakeupRequestId: input.wakeupRequestId,
-    issueId: input.issueId,
-    commentId,
-    comment,
-  });
-}
-
 function normalizeReleasePolicy(
   releasePolicy: IssueTreeHoldReleasePolicy | null | undefined,
 ): IssueTreeHoldReleasePolicy {
@@ -255,6 +114,7 @@ function toHold(row: HoldRow, members?: HoldMemberRow[]): IssueTreeHold {
     companyId: row.companyId,
     rootIssueId: row.rootIssueId,
     mode: row.mode as IssueTreeControlMode,
+    scope: row.scope === "task" ? "task" : "subtree",
     status: row.status as IssueTreeHold["status"],
     reason: row.reason,
     releasePolicy: (row.releasePolicy as IssueTreeHoldReleasePolicy | null) ?? null,
@@ -410,7 +270,11 @@ function restoreStatusFromCancelSnapshot(status: IssueStatus): IssueStatus | nul
 }
 
 export function issueTreeControlService(db: Db) {
-  async function listTreeIssues(companyId: string, rootIssueId: string): Promise<TreeIssue[]> {
+  async function listTreeIssues(
+    companyId: string,
+    rootIssueId: string,
+    scope: IssueTreeHoldScope = "subtree",
+  ): Promise<TreeIssue[]> {
     const root = await db
       .select()
       .from(issues)
@@ -421,6 +285,7 @@ export function issueTreeControlService(db: Db) {
     }
 
     const result: TreeIssue[] = [{ ...root, depth: 0 }];
+    if (scope === "task") return result;
     const visited = new Set<string>([root.id]);
     let frontier = [{ id: root.id, depth: 0 }];
 
@@ -549,6 +414,33 @@ export function issueTreeControlService(db: Db) {
     return byIssueId;
   }
 
+  async function assertPauseHoldsNotStopping(companyId: string, holdIds: string[]) {
+    if (holdIds.length === 0) return;
+    const memberIssueIds = (await db
+      .select({ issueId: issueTreeHoldMembers.issueId })
+      .from(issueTreeHoldMembers)
+      .where(and(
+        eq(issueTreeHoldMembers.companyId, companyId),
+        inArray(issueTreeHoldMembers.holdId, holdIds),
+        eq(issueTreeHoldMembers.skipped, false),
+      ))).map((row) => row.issueId);
+    if (memberIssueIds.length === 0) return;
+    const stopping = await db
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(and(
+        eq(heartbeatRuns.companyId, companyId),
+        eq(heartbeatRuns.status, "running"),
+        inArray(heartbeatRuns.issueId, [...new Set(memberIssueIds)]),
+      ));
+    if (stopping.length > 0) {
+      throw conflict("Pausing: the run is still finishing its current step. Wait until it stops, or use Stop now.", {
+        code: "pause_still_stopping",
+        runIds: stopping.map((run) => run.id),
+      });
+    }
+  }
+
   async function activePauseHoldsForIssueIds(companyId: string, issueIds: string[]) {
     if (issueIds.length === 0) return [];
     return db
@@ -565,6 +457,103 @@ export function issueTreeControlService(db: Db) {
       .orderBy(asc(issueTreeHolds.createdAt), asc(issueTreeHolds.id));
   }
 
+  async function listPausedTasks(
+    companyId: string,
+    options: { canRead: (issue: IssueRow) => Promise<boolean>; now?: Date },
+  ): Promise<PausedTask[]> {
+    const now = options.now ?? new Date();
+    const heldRows = await db
+      .select({
+        holdId: issueTreeHolds.id,
+        scope: issueTreeHolds.scope,
+        reason: issueTreeHolds.reason,
+        pausedAt: issueTreeHolds.createdAt,
+        pausedByUserId: issueTreeHolds.createdByUserId,
+        pausedByAgentId: issueTreeHolds.createdByAgentId,
+        issue: issues,
+        assigneeAgentName: agents.name,
+      })
+      .from(issueTreeHolds)
+      .innerJoin(issues, and(eq(issues.id, issueTreeHolds.rootIssueId), eq(issues.companyId, companyId)))
+      .leftJoin(agents, eq(agents.id, issues.assigneeAgentId))
+      .where(and(
+        eq(issueTreeHolds.companyId, companyId),
+        eq(issueTreeHolds.status, "active"),
+        eq(issueTreeHolds.mode, "pause"),
+      ))
+      .orderBy(desc(issueTreeHolds.createdAt), desc(issueTreeHolds.id))
+      .limit(PAUSED_TASKS_LIMIT);
+    const readable = await Promise.all(heldRows.map((hold) => options.canRead(hold.issue)));
+    const holds = heldRows.filter((_, index) => readable[index]);
+    if (holds.length === 0) return [];
+    const issueIds = [...new Set(holds.map((hold) => hold.issue.id))];
+    const [liveRuns, lastRuns] = await Promise.all([
+      db
+        .select({ id: heartbeatRuns.id, issueId: heartbeatRuns.issueId })
+        .from(heartbeatRuns)
+        .where(and(
+          eq(heartbeatRuns.companyId, companyId),
+          inArray(heartbeatRuns.issueId, issueIds),
+          eq(heartbeatRuns.status, "running"),
+        )),
+      db
+        .selectDistinctOn([heartbeatRuns.issueId], {
+          id: heartbeatRuns.id,
+          issueId: heartbeatRuns.issueId,
+          status: heartbeatRuns.status,
+          finishedAt: heartbeatRuns.finishedAt,
+          safePoint: sql<string | null>`${heartbeatRuns.resultJson} -> 'pause' ->> 'safePoint'`,
+        })
+        .from(heartbeatRuns)
+        .where(and(
+          eq(heartbeatRuns.companyId, companyId),
+          inArray(heartbeatRuns.issueId, issueIds),
+          notInArray(heartbeatRuns.status, [...ACTIVE_RUN_STATUSES]),
+        ))
+        .orderBy(heartbeatRuns.issueId, desc(heartbeatRuns.createdAt)),
+    ]);
+    const liveRunIdByIssueId = new Map<string, string>();
+    for (const run of liveRuns) if (run.issueId) liveRunIdByIssueId.set(run.issueId, run.id);
+    const lastRunByIssueId = new Map(lastRuns.map((run) => [run.issueId, run]));
+    const liveRunIds = [...liveRunIdByIssueId.values()];
+    const failedStopRunIds = new Set(liveRunIds.length === 0 ? [] : (await db
+      .select({ runId: activityLog.entityId })
+      .from(activityLog)
+      .where(and(
+        eq(activityLog.companyId, companyId),
+        eq(activityLog.entityType, "heartbeat_run"),
+        inArray(activityLog.entityId, liveRunIds),
+        eq(activityLog.action, "issue.tree_hold_run_interrupt_failed"),
+      ))).map((row) => row.runId));
+
+    return holds.map((hold) => {
+      const liveRunId = liveRunIdByIssueId.get(hold.issue.id) ?? null;
+      const lastRun = lastRunByIssueId.get(hold.issue.id) ?? null;
+      const stopOverdue = now.getTime() - hold.pausedAt.getTime() > PAUSE_FAILED_AFTER_MS;
+      return {
+        holdId: hold.holdId,
+        issueId: hold.issue.id,
+        identifier: hold.issue.identifier,
+        title: hold.issue.title,
+        status: coerceIssueStatus(hold.issue.status),
+        scope: hold.scope === "task" ? "task" : "subtree",
+        assigneeAgentId: hold.issue.assigneeAgentId,
+        assigneeAgentName: hold.assigneeAgentName ?? null,
+        pausedAt: hold.pausedAt,
+        pausedByUserId: hold.pausedByUserId,
+        pausedByAgentId: hold.pausedByAgentId,
+        reason: hold.reason,
+        state: !liveRunId
+          ? "paused"
+          : stopOverdue || failedStopRunIds.has(liveRunId) ? "pause_failed" : "pausing",
+        liveRunId,
+        lastRun: lastRun
+          ? { id: lastRun.id, status: lastRun.status, finishedAt: lastRun.finishedAt, safePoint: lastRun.safePoint }
+          : null,
+      } satisfies PausedTask;
+    });
+  }
+
   async function getActivePauseHoldGate(
     companyId: string,
     issueId: string,
@@ -573,6 +562,7 @@ export function issueTreeControlService(db: Db) {
       .select({
         id: issueTreeHolds.id,
         rootIssueId: issueTreeHolds.rootIssueId,
+        scope: issueTreeHolds.scope,
         reason: issueTreeHolds.reason,
         releasePolicy: issueTreeHolds.releasePolicy,
       })
@@ -587,7 +577,11 @@ export function issueTreeControlService(db: Db) {
       .orderBy(asc(issueTreeHolds.createdAt), asc(issueTreeHolds.id));
     if (activePauseHolds.length === 0) return null;
 
-    const holdByRootIssueId = new Map(activePauseHolds.map((hold) => [hold.rootIssueId, hold]));
+    const holdByRootIssueId = new Map<string, (typeof activePauseHolds)[number]>();
+    for (const hold of activePauseHolds) {
+      if (hold.scope === "task" && hold.rootIssueId !== issueId) continue;
+      holdByRootIssueId.set(hold.rootIssueId, hold);
+    }
     let currentIssueId: string | null = issueId;
     const visited = new Set<string>();
 
@@ -627,9 +621,10 @@ export function issueTreeControlService(db: Db) {
     input: {
       mode: IssueTreeControlMode;
       releasePolicy?: IssueTreeHoldReleasePolicy | null;
+      scope?: IssueTreeHoldScope;
     },
   ): Promise<IssueTreeControlPreview> {
-    const treeIssues = await listTreeIssues(companyId, rootIssueId);
+    const treeIssues = await listTreeIssues(companyId, rootIssueId, input.mode === "pause" ? input.scope : "subtree");
     const issueIds = treeIssues.map((issue) => issue.id);
     const [activeRunRows, holdsByIssueId, activeCancelSnapshots] = await Promise.all([
       activeRunsForTree(companyId, treeIssues),
@@ -707,6 +702,7 @@ export function issueTreeControlService(db: Db) {
       mode: IssueTreeControlMode;
       reason?: string | null;
       releasePolicy?: IssueTreeHoldReleasePolicy | null;
+      scope?: IssueTreeHoldScope;
       actor: ActorInput;
     },
   ): Promise<{
@@ -721,14 +717,17 @@ export function issueTreeControlService(db: Db) {
       if (conversation) throw unprocessable("Stop the active reply instead of cancelling the persistent conversation");
     }
     const holdReleasePolicy = normalizeReleasePolicy(input.releasePolicy);
+    const scope: IssueTreeHoldScope = input.mode === "pause" ? input.scope ?? "subtree" : "subtree";
     const holdPreview = await preview(companyId, rootIssueId, {
       mode: input.mode,
       releasePolicy: holdReleasePolicy,
+      scope,
     });
 
     if (input.mode === "resume") {
       const issueIds = [...new Set(holdPreview.issues.map((issue) => issue.id))];
       const activePauseHolds = await activePauseHoldsForIssueIds(companyId, issueIds);
+      await assertPauseHoldsNotStopping(companyId, activePauseHolds.map((hold) => hold.id));
       const releaseReason = input.reason ?? "Subtree resume applied.";
 
       const { hold: resumeHold } = await db.transaction(async (tx) => {
@@ -816,6 +815,7 @@ export function issueTreeControlService(db: Db) {
           companyId,
           rootIssueId,
           mode: input.mode,
+          scope,
           status: "active",
           reason: input.reason ?? null,
           releasePolicy: holdReleasePolicy as unknown as Record<string, unknown>,
@@ -1142,6 +1142,7 @@ export function issueTreeControlService(db: Db) {
     if (existing.status === "released") {
       throw conflict("Issue tree hold is already released");
     }
+    if (existing.mode === "pause") await assertPauseHoldsNotStopping(companyId, [existing.id]);
 
     const [updated] = await db
       .update(issueTreeHolds)
@@ -1209,6 +1210,7 @@ export function issueTreeControlService(db: Db) {
     getHold,
     listHolds,
     getActivePauseHoldGate,
+    listPausedTasks,
     releaseHold,
     cancelUnclaimedWakeupsForTree,
   };

@@ -289,6 +289,8 @@
   --live-health-thinking: var(--status-task-icon-in_review);
   --live-health-quiet: var(--status-task-icon-todo);
   --live-health-stalled: var(--status-task-icon-blocked);
+  --live-health-pausing: var(--live-health-quiet);
+  --live-health-paused: var(--ink-3);
   --live-now-row-comfortable: 62px;
   --live-now-row-compact: 40px;
   --live-now-row-compact-phone: 60px;
@@ -1787,6 +1789,9 @@ select:where(:not([multiple]):not(.appearance-none)):where(:not([size]), [size="
 [data-live-health="thinking"] { --live-health: var(--live-health-thinking); }
 [data-live-health="quiet"] { --live-health: var(--live-health-quiet); }
 [data-live-health="stalled"] { --live-health: var(--live-health-stalled); }
+[data-live-health="pausing"] { --live-health: var(--live-health-pausing); }
+[data-live-health="paused"] { --live-health: var(--live-health-paused); }
+[data-live-health="pause_failed"] { --live-health: var(--live-health-stalled); }
 }
 
 @layer components {
@@ -1796,6 +1801,9 @@ select:where(:not([multiple]):not(.appearance-none)):where(:not([size]), [size="
 .live-now-health-pill { background-color: color-mix(in oklab, var(--live-health) 14%, transparent); }
 .live-now-group-dot[data-live-group="attention"] { background-color: var(--live-health-stalled); }
 .live-now-group-dot[data-live-group="working"] { background-color: var(--live-health-active); }
+.live-now-group-dot[data-live-group="paused"] { background-color: var(--live-health-paused); }
+.live-now-row[data-live-health="pause_failed"] { background-color: color-mix(in oklab, var(--live-health) 4%, var(--bg-2)); }
+.live-now-board-card[data-live-health="pause_failed"] { border-color: color-mix(in oklab, var(--live-health) 55%, var(--line)); }
 .live-now-row[data-live-health="stalled"] { background-color: color-mix(in oklab, var(--live-health) 4%, var(--bg-2)); }
 .live-now-board-card[data-live-health="quiet"] { border-color: color-mix(in oklab, var(--live-health) 35%, var(--line)); }
 .live-now-board-card[data-live-health="stalled"] { border-color: color-mix(in oklab, var(--live-health) 55%, var(--line)); }

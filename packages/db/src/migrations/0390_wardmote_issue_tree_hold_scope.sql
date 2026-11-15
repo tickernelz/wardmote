@@ -1,0 +1,1 @@
+ALTER TABLE "issue_tree_holds" ADD COLUMN "scope" text DEFAULT 'subtree' NOT NULL;

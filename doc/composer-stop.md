@@ -41,9 +41,10 @@ handle does not authorize a signal or replay. Unknown actions remain
 blocked, and task detail shows the reason even after recovery bookkeeping resolves.
 A run-level Stop leaves the task unpaused; a subsequent comment can continue the
 same session with the earlier queued messages. Composer Stop still creates a
-pause hold. New board messages require Resume first. Both comment creation and
-updates that include a comment return `409` while an effective task or ancestor
-pause hold is active. Interrupted agents may still report their results. Neither path permits a fresh-session fallback
+pause hold. A board message on a paused task is accepted and waits: no run
+starts, and Resume delivers every message that arrived during the pause. A
+persistent conversation still returns `409` for a board message while an
+effective pause hold is active. Interrupted agents may still report their results. Neither path permits a fresh-session fallback
 when the interrupted checkpoint cannot be restored.
 
 The credential-free ACP regression journey uses an actual ACP child process:

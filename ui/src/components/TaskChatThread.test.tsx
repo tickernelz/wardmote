@@ -3844,7 +3844,7 @@ describe("TaskChatThread Wardmote Runner queue", () => {
     expect(container.querySelector('[data-testid="task-chat-queued-messages"]')).not.toBeNull();
 
     render(<TaskChatThread {...props} composerPause={{ scope: "leaf", onResume: () => {} }} />);
-    expect(container.querySelector('[data-testid="paused-composer-takeover"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="paused-composer-notice"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="task-chat-queued-messages"]')).toBeNull();
     expect(onSteerQueuedComment).not.toHaveBeenCalled();
 
@@ -3860,7 +3860,7 @@ describe("TaskChatThread Wardmote Runner queue", () => {
       onInterruptQueued={async () => {}}
       composerPause={{ scope: "leaf", onResume: () => {} }}
     />);
-    expect(container.querySelector('[data-testid="paused-composer-takeover"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="paused-composer-notice"]')).not.toBeNull();
     expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Interrupt")).toBe(false);
   });
 

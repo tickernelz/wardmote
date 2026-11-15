@@ -738,13 +738,6 @@ type WardmoteWakeBlockerSummary = {
   priority: string | null;
 };
 
-type WardmoteWakeTreeHoldSummary = {
-  holdId: string | null;
-  rootIssueId: string | null;
-  mode: string | null;
-  reason: string | null;
-};
-
 type WardmoteWakeCheckboxSelection = {
   prompt: string | null;
   selectedOptionIds: string[];
@@ -820,8 +813,6 @@ type WardmoteWakePayload = {
   // Technical English with brief decision context.
   simplifiedEnglishInteractions: boolean;
   dependencyBlockedInteraction: boolean;
-  treeHoldInteraction: boolean;
-  activeTreeHold: WardmoteWakeTreeHoldSummary | null;
   unresolvedBlockerIssueIds: string[];
   unresolvedBlockerSummaries: WardmoteWakeBlockerSummary[];
   executionStage: WardmoteWakeExecutionStage | null;
@@ -1362,18 +1353,6 @@ function normalizeWardmoteWakeBlockerSummary(
   return { id, identifier, title, status, priority };
 }
 
-function normalizeWardmoteWakeTreeHoldSummary(
-  value: unknown,
-): WardmoteWakeTreeHoldSummary | null {
-  const hold = parseObject(value);
-  const holdId = asString(hold.holdId, "").trim() || null;
-  const rootIssueId = asString(hold.rootIssueId, "").trim() || null;
-  const mode = asString(hold.mode, "").trim() || null;
-  const reason = asString(hold.reason, "").trim() || null;
-  if (!holdId && !rootIssueId && !mode && !reason) return null;
-  return { holdId, rootIssueId, mode, reason };
-}
-
 function normalizeWardmoteWakeCheckboxSelection(
   value: unknown,
 ): WardmoteWakeCheckboxSelection | null {
@@ -1799,9 +1778,6 @@ export function normalizeWardmoteWakePayload(
         .filter((entry): entry is WardmoteWakeBlockerSummary => Boolean(entry))
     : [];
 
-  const activeTreeHold = normalizeWardmoteWakeTreeHoldSummary(
-    payload.activeTreeHold,
-  );
   const checkboxSelection = normalizeWardmoteWakeCheckboxSelection(
     payload.checkboxSelection,
   );
@@ -1845,7 +1821,6 @@ export function normalizeWardmoteWakePayload(
     childIssueSummaries.length === 0 &&
     unresolvedBlockerIssueIds.length === 0 &&
     unresolvedBlockerSummaries.length === 0 &&
-    !activeTreeHold &&
     !executionStage &&
     !continuationSummary &&
     !planReviewContext &&
@@ -1886,8 +1861,6 @@ export function normalizeWardmoteWakePayload(
       payload.dependencyBlockedInteraction,
       false,
     ),
-    treeHoldInteraction: asBoolean(payload.treeHoldInteraction, false),
-    activeTreeHold,
     unresolvedBlockerIssueIds,
     unresolvedBlockerSummaries,
     executionStage,
@@ -2007,8 +1980,6 @@ function hasNormalizedWardmoteExternalChatContext(
   return !(
     normalized.recovery ||
     normalized.dependencyBlockedInteraction ||
-    normalized.treeHoldInteraction ||
-    normalized.activeTreeHold ||
     normalized.unresolvedBlockerIssueIds.length > 0 ||
     normalized.unresolvedBlockerSummaries.length > 0 ||
     normalized.executionStage ||
@@ -2089,8 +2060,6 @@ function isNormalizedWardmoteExternalChatQuestionResponseTurn(
   return !(
     normalized.recovery ||
     normalized.dependencyBlockedInteraction ||
-    normalized.treeHoldInteraction ||
-    normalized.activeTreeHold ||
     normalized.unresolvedBlockerIssueIds.length > 0 ||
     normalized.unresolvedBlockerSummaries.length > 0 ||
     normalized.executionStage ||
@@ -2687,18 +2656,6 @@ function renderWardmoteWakePromptBody(
     } else if (normalized.unresolvedBlockerIssueIds.length > 0) {
       lines.push(
         `- unresolved blocker issue ids: ${normalized.unresolvedBlockerIssueIds.join(", ")}`,
-      );
-    }
-  }
-  if (normalized.treeHoldInteraction) {
-    lines.push("- tree-hold interaction: yes");
-    lines.push(
-      "- execution scope: respond or triage the human comment; the subtree remains paused until an explicit resume action",
-    );
-    if (normalized.activeTreeHold) {
-      const hold = normalized.activeTreeHold;
-      lines.push(
-        `- active tree hold: ${hold.holdId ?? "unknown"}${hold.rootIssueId ? ` rooted at ${hold.rootIssueId}` : ""}${hold.mode ? ` (${hold.mode})` : ""}`,
       );
     }
   }

@@ -4978,7 +4978,6 @@ export const IssueChatComposer = forwardRef<
     Boolean(onStop || stopControl.stopping);
 
   async function handleSubmit() {
-    if (composerPause) return;
     const trimmed = body.trim();
     if (
       (!trimmed && attachedFiles.length === 0) ||
@@ -5002,7 +5001,6 @@ export const IssueChatComposer = forwardRef<
   }
 
   async function submitComment() {
-    if (composerPause) return;
     const deliveryCommand = parseMessageDeliveryCommand(body);
     if (deliveryCommand.matched && "error" in deliveryCommand) {
       setDeliveryError(deliveryCommand.error);
@@ -5374,10 +5372,6 @@ export const IssueChatComposer = forwardRef<
     setDismissedCoachToken(plainNameCandidate.matchedText);
   }
 
-  if (composerPause) {
-    return <TaskChatPausedTakeover {...composerPause} hasDraft={Boolean(body.trim() || attachedFiles.length)} />;
-  }
-
   if (composerDisabledReason) {
     return (
       <div className="rounded-md border border-amber-300/70 bg-amber-50/80 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
@@ -5417,6 +5411,7 @@ export const IssueChatComposer = forwardRef<
       onDragLeaveCapture={handleFileDragLeave}
       onDropCapture={handleFileDrop}
     >
+      {composerPause ? <TaskChatPausedTakeover {...composerPause} acceptsMessages /> : null}
       {isDragOver && canAcceptFiles ? (
         <div
           data-testid="issue-chat-composer-drop-overlay"

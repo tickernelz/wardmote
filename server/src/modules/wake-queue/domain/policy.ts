@@ -171,8 +171,6 @@ export type DeferredWakeAgentFacts = {
 export type DeferredWakePauseHoldFacts = {
   /** True when an active subtree pause hold covers the issue. */
   activePauseHold: boolean;
-  /** True when the wake is a verified issue-tree-control interaction wake that survives a pause hold. */
-  treeHoldInteractionWake: boolean;
 };
 
 export type DeferredWakeOutcomeFacts = {
@@ -212,7 +210,7 @@ export function decideWakeOutcome(facts: DeferredWakeOutcomeFacts): DeferredWake
     return { kind: "fail_not_invokable" };
   }
 
-  if (pauseHold.activePauseHold && !pauseHold.treeHoldInteractionWake) {
+  if (pauseHold.activePauseHold) {
     return { kind: "cancel_pause_hold" };
   }
 

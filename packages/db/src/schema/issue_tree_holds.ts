@@ -11,6 +11,7 @@ export const issueTreeHolds = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     rootIssueId: uuid("root_issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
     mode: text("mode").notNull(),
+    scope: text("scope").notNull().default("subtree"),
     status: text("status").notNull().default("active"),
     reason: text("reason"),
     releasePolicy: jsonb("release_policy").$type<Record<string, unknown>>(),

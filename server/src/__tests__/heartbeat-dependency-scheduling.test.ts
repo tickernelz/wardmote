@@ -1344,7 +1344,7 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
     expect(mockAdapterExecute.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("suppresses normal wakeups while allowing comment interaction wakes under a pause hold", async () => {
+  it("suppresses every wakeup under a pause hold, human comment wakes included, and holds only the task for a task-scoped hold", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const rootIssueId = randomUUID();
@@ -1461,108 +1461,30 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
       },
     });
 
-    expect(childCommentWake).not.toBeNull();
-    const childRun = await db
-      .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
+    expect(childCommentWake).toBeNull();
+    const startedRuns = await db
+      .select({ id: heartbeatRuns.id })
       .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.id, childCommentWake!.id))
-      .then((rows) => rows[0] ?? null);
-    expect(childRun?.contextSnapshot).toMatchObject({
-      treeHoldInteraction: true,
-      activeTreeHold: {
-        holdId: hold.id,
-        rootIssueId,
-        mode: "pause",
-        interaction: true,
-      },
-    });
-  });
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(startedRuns).toHaveLength(0);
 
-  it("allows comment interaction wakes when a legacy hold has a full_pause note", async () => {
-    const companyId = randomUUID();
-    const agentId = randomUUID();
-    const rootIssueId = randomUUID();
-
-    await db.insert(companies).values({
-      id: companyId,
-      name: "Wardmote",
-      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
-      requireBoardApprovalForNewAgents: false,
-      defaultResponsibleUserId: "responsible-user",
-    });
-    await db.insert(agents).values({
-      id: agentId,
-      companyId,
-      name: "SecurityEngineer",
-      role: "engineer",
-      status: "active",
-      adapterType: "omp_local",
-      adapterConfig: {},
-      runtimeConfig: {
-        heartbeat: {
-          wakeOnDemand: true,
-          maxConcurrentRuns: 1,
-        },
-      },
-      permissions: {},
-    });
-    await db.insert(issues).values({
-      id: rootIssueId,
-      companyId,
-      title: "Paused root",
-      status: "todo",
-      priority: "medium",
-      assigneeAgentId: agentId,
-      responsibleUserId: "responsible-user",
-    });
-    await db.insert(issueTreeHolds).values({
-      companyId,
-      rootIssueId,
-      mode: "pause",
-      status: "active",
-      reason: "full pause",
-      releasePolicy: { strategy: "manual", note: "full_pause" },
-    });
-
-    const rootCommentId = randomUUID();
-    await db.insert(issueComments).values({
-      id: rootCommentId,
-      companyId,
-      issueId: rootIssueId,
-      authorUserId: "board-user",
-      body: "Please respond while this hold is active.",
-    });
-
-    const rootCommentWake = await heartbeat.wakeup(agentId, {
+    await db.update(issueTreeHolds).set({ scope: "task" }).where(eq(issueTreeHolds.id, hold.id));
+    const descendantWake = await heartbeat.wakeup(agentId, {
       source: "automation",
       triggerDetail: "system",
-      reason: "issue_commented",
-      payload: { issueId: rootIssueId, commentId: rootCommentId },
-      requestedByActorType: "user",
-      requestedByActorId: "board-user",
-      contextSnapshot: {
-        issueId: rootIssueId,
-        commentId: rootCommentId,
-        wakeCommentId: rootCommentId,
-        wakeReason: "issue_commented",
-        source: "issue.comment",
-      },
+      reason: "issue_blockers_resolved",
+      payload: { issueId: deepDescendantIssueId },
+      contextSnapshot: { issueId: deepDescendantIssueId, wakeReason: "issue_blockers_resolved" },
     });
-
-    expect(rootCommentWake).not.toBeNull();
-    const rootRun = await db
-      .select({ contextSnapshot: heartbeatRuns.contextSnapshot })
-      .from(heartbeatRuns)
-      .where(eq(heartbeatRuns.id, rootCommentWake!.id))
-      .then((rows) => rows[0] ?? null);
-    expect(rootRun?.contextSnapshot).toMatchObject({
-      treeHoldInteraction: true,
-      activeTreeHold: {
-        rootIssueId,
-        mode: "pause",
-        interaction: true,
-      },
+    expect(descendantWake).not.toBeNull();
+    const rootWake = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_blockers_resolved",
+      payload: { issueId: rootIssueId },
+      contextSnapshot: { issueId: rootIssueId, wakeReason: "issue_blockers_resolved" },
     });
+    expect(rootWake).toBeNull();
   });
 
   it("releases the issue execution lock when a dependency-blocked retry is refused", async () => {

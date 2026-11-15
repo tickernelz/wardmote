@@ -1,14 +1,16 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import {
+  issueComments as issueCommentRows,
   issues as issueRows,
   type Db,
 } from "@tickernelz/wardmote-db";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
 import { conflict } from "../errors.js";
 import {
   createIssueTreeHoldSchema,
+  type CreateIssueTreeHold,
   isUuidLike,
   previewIssueTreeControlSchema,
   releaseIssueTreeHoldSchema,
@@ -21,12 +23,13 @@ import {
   issueTreeControlService,
   logActivity,
 } from "../services/index.js";
-import { assertBoardOrAgentAuthority, getAccessibleResource, getActorInfo } from "./authz.js";
+import { assertBoardOrAgentAuthority, assertCompanyAccess, getAccessibleResource, getActorInfo } from "./authz.js";
 
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 const TREE_RUN_CANCELLATION_RESPONSE_WAIT_MS = 1_000;
 const RESUME_EXECUTABLE_STATUSES = ["todo", "in_progress", "in_review"];
+const RESUME_WAKE_COMMENT_LIMIT = 50;
 
 function errorToMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -134,8 +137,17 @@ export function issueTreeControlRoutes(
       userId: actor.actorType === "user" ? actor.actorId : null,
       runId: actor.runId,
     };
+    const { stopAt = "now", ...holdInput } = req.body as CreateIssueTreeHold;
+    if (stopAt === "safe_point" && (holdInput.mode !== "pause" || root.conversationAgentId)) {
+      res.status(422).json({
+        error: holdInput.mode !== "pause"
+          ? "Only a pause can stop at a safe point"
+          : "A persistent conversation can only be stopped, not paused",
+      });
+      return;
+    }
     let result = await treeControlSvc.createHold(root.companyId, root.id, {
-      ...req.body,
+      ...holdInput,
       actor: actorInput,
     });
     await logActivity(db, {
@@ -166,16 +178,21 @@ export function issueTreeControlRoutes(
             // This board-only operation is an intentional interruption, just
             // like composer Stop. Preserve its actor so verified native stops
             // do not manufacture recovery incidents while the hold is active.
-            await heartbeat.cancelRun(
-              heartbeatRunId,
-              `Cancelled by a board operator's subtree ${result.hold.mode}`,
-              {
-                resultJson: {
-                  cancelledByActorType: "user",
-                  cancelledByUserId: req.actor.userId ?? null,
-                },
+            const stopOptions = {
+              resultJson: {
+                cancelledByActorType: "user",
+                cancelledByUserId: req.actor.userId ?? null,
               },
-            );
+            };
+            if (result.hold.mode === "pause" && stopAt === "safe_point") {
+              await heartbeat.pauseRunAtSafePoint(heartbeatRunId, "Paused by a board operator", stopOptions);
+            } else {
+              await heartbeat.cancelRun(
+                heartbeatRunId,
+                `Cancelled by a board operator's subtree ${result.hold.mode}`,
+                stopOptions,
+              );
+            }
             await logActivity(db, {
               companyId: root.companyId,
               actorType: actor.actorType,
@@ -361,6 +378,37 @@ export function issueTreeControlRoutes(
       .json(result);
   });
 
+  router.get("/companies/:companyId/paused-tasks", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const scopeDecision = await access.decide({
+      actor: req.actor,
+      action: "company_scope:read",
+      resource: { type: "company", companyId },
+    });
+    if (!scopeDecision.allowed) {
+      res.status(403).json({ error: "Paused tasks are outside this actor's authorization boundary" });
+      return;
+    }
+    const pausedTasks = await treeControlSvc.listPausedTasks(companyId, {
+      canRead: async (issue) => (await access.decide({
+        actor: req.actor,
+        action: "issue:read",
+        resource: {
+          type: "issue",
+          companyId: issue.companyId,
+          issueId: issue.id,
+          projectId: issue.projectId ?? null,
+          parentIssueId: issue.parentId ?? null,
+          assigneeAgentId: issue.assigneeAgentId ?? null,
+          assigneeUserId: issue.assigneeUserId ?? null,
+          status: issue.status ?? "backlog",
+        },
+      })).allowed,
+    });
+    res.json(pausedTasks);
+  });
+
   router.get("/issues/:id/tree-control/state", async (req, res) => {
     assertBoardOrAgentAuthority(req, "company:issue_control");
     const issueId = req.params.id as string;
@@ -499,6 +547,18 @@ export function issueTreeControlRoutes(
               !RESUME_EXECUTABLE_STATUSES.includes(issue.status)
             )
               continue;
+            const waitingComments = await db
+              .select({ id: issueCommentRows.id })
+              .from(issueCommentRows)
+              .where(and(
+                eq(issueCommentRows.companyId, root.companyId),
+                eq(issueCommentRows.issueId, issue.id),
+                gte(issueCommentRows.createdAt, hold.createdAt),
+                or(isNull(issueCommentRows.authorAgentId), ne(issueCommentRows.authorAgentId, issue.assigneeAgentId)),
+              ))
+              .orderBy(desc(issueCommentRows.createdAt), desc(issueCommentRows.id))
+              .limit(RESUME_WAKE_COMMENT_LIMIT);
+            const wakeCommentIds = waitingComments.map((comment) => comment.id).reverse();
             await heartbeat.wakeup(issue.assigneeAgentId, {
               source: "assignment",
               triggerDetail: "system",
@@ -517,6 +577,7 @@ export function issueTreeControlRoutes(
                 source: "issue.tree_resume",
                 rootIssueId: root.id,
                 holdId: hold.id,
+                ...(wakeCommentIds.length > 0 ? { wakeCommentIds } : {}),
               },
             });
           } catch (error) {

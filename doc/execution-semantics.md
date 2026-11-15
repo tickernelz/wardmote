@@ -1094,6 +1094,17 @@ interrupt. A verified native stop must not become an unexplained failure simply
 because it came from a subtree action. The explicit pause hold still prevents
 future execution until Resume, and missing stop proof still blocks continuation.
 
+A pause holds one task (`scope: task`) or the task and its descendants
+(`scope: subtree`). With `stopAt: safe_point`, a running omp_local RPC run
+finishes its current tool and turn, OMP aborts before the next model call, and
+the ordinary Stop follows; after 120 seconds the Stop runs anyway. The run
+records `resultJson.pause.safePoint` (`reached`, `timeout`, `unsupported`,
+or `closed`). While a pause hold is active no wake starts a run, comment wakes
+included; Resume wakes the assignee with every comment that arrived during the
+pause. Watchdogs and recovery sweeps leave paused tasks alone, and the person
+who paused gets an inbox reminder after 24 and 72 hours. Persistent
+conversations cannot pause at a safe point; they can only be stopped.
+
 ### Provider continuity and bounded finalization
 
 A permanently unusable native runner session may be replaced only with evidence that its predecessor is stopped and fenced, completed results and workspace state are preserved, required task history is available, and pending effects have been reconciled. A provider-native shell command or external write without a reliable outcome receipt is unknown. Unknown effects, integrity failures, and unverified process ownership never authorize speculative replay. Once automatic recovery is ruled out, Wardmote selects a conservative default: preserve recorded work, stop the affected task, and retain a durable no-replay hold. Unknown action outcomes remain unknown. No reconciliation form or user diagnosis is required.

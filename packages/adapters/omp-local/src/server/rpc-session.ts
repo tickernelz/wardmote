@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AdapterExecutionTarget } from "@tickernelz/wardmote-adapter-utils/execution-target";
 import { runAdapterExecutionTargetProcess } from "@tickernelz/wardmote-adapter-utils/execution-target";
 import type { RunProcessResult } from "@tickernelz/wardmote-adapter-utils/server-utils";
+import type { AdapterSafePointOutcome } from "@tickernelz/wardmote-adapter-utils/adapter-steer-registry";
 import {
   createLiveStdinChannel,
   type BoundLiveStdinChannel,
@@ -11,6 +12,7 @@ const STEER_ACK_TIMEOUT_MS = 12_000;
 const DEFAULT_CONTINUATION_IDLE_MS = 60_000;
 const DEFAULT_IDLE_RECHECK_MS = 250;
 const MAX_IDLE_CHECKS = 20;
+const SAFE_POINT_HOLD_MS = 30_000;
 const RPC_PROTOCOL_VERSION = 2;
 const RPC_CHUNK_PAYLOAD_BYTES = 256 * 1024;
 const RPC_MAX_REASSEMBLED_BYTES = 64 * 1024 * 1024;
@@ -178,6 +180,8 @@ export interface OmpRpcSteerSession {
     ackTimeoutMs?: number;
   }): Promise<void>;
   whenSteersSettled(): Promise<void>;
+  stopAtSafePoint(input: { timeoutMs: number }): Promise<AdapterSafePointOutcome>;
+  readonly safePointReached: boolean;
 }
 
 type PendingAck = {
@@ -193,6 +197,26 @@ export function createOmpRpcSteerSession(): OmpRpcSteerSession {
   let activeTurnId: string | null = null;
   const pending = new Map<string, PendingAck>();
   const turnStartListeners = new Set<() => void>();
+  let turnOpen = false;
+  let openTools = 0;
+  let safePointReached = false;
+  const safePointWaiters = new Set<(outcome: AdapterSafePointOutcome) => void>();
+
+  const settleSafePointWaiters = (outcome: AdapterSafePointOutcome) => {
+    const waiters = [...safePointWaiters];
+    safePointWaiters.clear();
+    for (const settle of waiters) settle(outcome);
+  };
+
+  const reachSafePoint = () => {
+    if (safePointReached || closed || safePointWaiters.size === 0) return;
+    safePointReached = true;
+    const write = writer;
+    const abort = write
+      ? write(`${JSON.stringify({ id: `safe-point-${randomUUID()}`, type: "abort" })}\n`).catch(() => undefined)
+      : Promise.resolve();
+    void abort.then(() => settleSafePointWaiters("reached"));
+  };
 
   const failAll = (error: Error) => {
     for (const entry of pending.values()) {
@@ -209,8 +233,19 @@ export function createOmpRpcSteerSession(): OmpRpcSteerSession {
     setWriter(next) {
       writer = next;
     },
+    get safePointReached() {
+      return safePointReached;
+    },
     observeFrame(frame) {
       const type = typeof frame.type === "string" ? frame.type : "";
+      if (type === "turn_start") turnOpen = true;
+      if (type === "tool_execution_start") openTools += 1;
+      if (type === "tool_execution_end") openTools = Math.max(0, openTools - 1);
+      if (type === "turn_end" || type === "agent_end") {
+        turnOpen = false;
+        if (type === "agent_end") openTools = 0;
+        if (openTools === 0) reachSafePoint();
+      }
       if (type === "agent_start" || type === "turn_start") {
         if (activeTurnId !== null || closed) return;
         activeTurnId = `omp-rpc-turn:${randomUUID()}`;
@@ -257,6 +292,27 @@ export function createOmpRpcSteerSession(): OmpRpcSteerSession {
       activeTurnId = null;
       turnStartListeners.clear();
       failAll(new Error("omp_rpc_session_closed"));
+      settleSafePointWaiters("closed");
+    },
+    stopAtSafePoint(input) {
+      if (closed) return Promise.resolve("closed");
+      return new Promise<AdapterSafePointOutcome>((resolve) => {
+        const timer = setTimeout(() => {
+          safePointWaiters.delete(settle);
+          resolve("timeout");
+        }, Math.max(0, input.timeoutMs));
+        const settle = (outcome: AdapterSafePointOutcome) => {
+          clearTimeout(timer);
+          resolve(outcome);
+        };
+        safePointWaiters.add(settle);
+        if (safePointReached) {
+          safePointWaiters.delete(settle);
+          settle("reached");
+          return;
+        }
+        if (!turnOpen && openTools === 0) reachSafePoint();
+      });
     },
     async capabilities() {
       return { steering: !closed };
@@ -348,6 +404,7 @@ export interface OmpRpcRunInput {
   onProcessStopped?: () => void;
   continuationIdleMs?: number;
   idleRecheckMs?: number;
+  safePointHoldMs?: number;
 }
 
 export interface OmpRpcRunResult {
@@ -382,6 +439,8 @@ export async function runOmpRpcSession(
   let idleCheckId: string | null = null;
   let idleCheckAttempts = 0;
   let idleRecheckTimer: ReturnType<typeof setTimeout> | null = null;
+  let safePointHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  const safePointHoldMs = input.safePointHoldMs ?? SAFE_POINT_HOLD_MS;
   const continuationIdleMs = input.continuationIdleMs ?? DEFAULT_CONTINUATION_IDLE_MS;
   const idleRecheckMs = input.idleRecheckMs ?? DEFAULT_IDLE_RECHECK_MS;
 
@@ -399,6 +458,18 @@ export async function runOmpRpcSession(
     if (settled) return;
     settled = true;
     channel.close();
+  };
+
+  const closeWhenIdle = () => {
+    if (!session.safePointReached) {
+      closeStdinOnce();
+      return;
+    }
+    if (safePointHoldTimer || settled) return;
+    safePointHoldTimer = setTimeout(() => {
+      safePointHoldTimer = null;
+      closeStdinOnce();
+    }, safePointHoldMs);
   };
 
   const scheduleContinuationIdle = () => {
@@ -555,8 +626,8 @@ export async function runOmpRpcSession(
           return;
         }
         const queued = typeof data.queuedMessageCount === "number" ? data.queuedMessageCount : 0;
-        if (!success || (queued === 0 && data.isStreaming !== true)) {
-          closeStdinOnce();
+        if (!success || (queued === 0 && data.isStreaming !== true) || (session.safePointReached && data.isStreaming !== true)) {
+          closeWhenIdle();
           return;
         }
         if (data.isStreaming === true) return;
@@ -576,6 +647,10 @@ export async function runOmpRpcSession(
       if (!promptSent) {
         const id = data.sessionId;
         if (typeof id === "string" && id.trim()) sessionId = id.trim();
+        if (session.safePointReached) {
+          closeStdinOnce();
+          return;
+        }
         promptSent = true;
         await send({ id: "prompt-1", type: "prompt", message: input.prompt });
       }
@@ -685,10 +760,11 @@ export async function runOmpRpcSession(
   } finally {
     disarmContinuationIdle();
     clearTimeout(idleRecheckTimer ?? undefined);
+    clearTimeout(safePointHoldTimer ?? undefined);
     session.setWriter(null);
     session.close();
   }
-  if (!promptSent && !promptError) {
+  if (!promptSent && !promptError && !session.safePointReached) {
     promptError = "OMP RPC mode ended before the run's prompt was dispatched.";
   }
   return { proc, promptAcknowledged, promptError, protocolVersion: negotiated, sessionId };

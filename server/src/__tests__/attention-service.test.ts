@@ -31,6 +31,7 @@ import {
   issueRecoveryActions,
   issueRelations,
   issueThreadInteractions,
+  issueTreeHolds,
   issues,
   joinRequests,
   projects,
@@ -88,6 +89,7 @@ describeEmbeddedPostgres("attention service", () => {
     await db.delete(invites);
     await db.delete(issueRecoveryActions);
     await db.delete(issueRelations);
+    await db.delete(issueTreeHolds);
     await db.delete(activityLog);
     await db.delete(approvals);
     await db.delete(issues);
@@ -267,6 +269,41 @@ describeEmbeddedPostgres("attention service", () => {
     expect(feed.items.some((item) => item.subject.id === harnessIssueId)).toBe(false);
     expect(feed.countsBySourceKind.review ?? 0).toBe(0);
     expect(feed.items.flatMap((item) => item.queues).some((queue) => queue.key === "internal-review")).toBe(false);
+  });
+
+  it("reminds only the person who paused a task, at 24 hours and again at 72 hours, without resuming it", async () => {
+    const { companyId, workerId } = await seedCompany("ATP");
+    const now = Date.parse("2026-11-20T12:00:00.000Z");
+    const hours = (count: number) => new Date(now - count * 3_600_000);
+    const [dayOld, fresh, othersOld, released] = await Promise.all(
+      ["ATP-1", "ATP-2", "ATP-3", "ATP-4"].map((identifier) => insertIssue({
+        companyId,
+        identifier,
+        title: `Paused ${identifier}`,
+        status: "in_progress",
+        assigneeAgentId: workerId,
+      })),
+    );
+    await db.insert(issueTreeHolds).values([
+      { companyId, rootIssueId: dayOld, mode: "pause", scope: "task", createdByActorType: "user", createdByUserId: "board-user", createdAt: hours(25) },
+      { companyId, rootIssueId: fresh, mode: "pause", scope: "task", createdByActorType: "user", createdByUserId: "board-user", createdAt: hours(2) },
+      { companyId, rootIssueId: othersOld, mode: "pause", scope: "task", createdByActorType: "user", createdByUserId: "other-user", createdAt: hours(80) },
+      { companyId, rootIssueId: released, mode: "pause", status: "released", releasedAt: hours(1), createdByActorType: "user", createdByUserId: "board-user", createdAt: hours(90) },
+    ]);
+    const pausedItems = (feed: { items: AttentionItem[] }) => feed.items.filter((item) => item.sourceKind === "paused_task");
+
+    const first = pausedItems(await attentionService(db, { now: () => now }).list(companyId, { userId: "board-user" }));
+    expect(first.map((item) => [item.subject.id, item.severity])).toEqual([[dayOld, "low"]]);
+    expect(first[0]?.dedupKey).toMatch(/:24h$/);
+
+    const later = pausedItems(await attentionService(db, { now: () => now + 48 * 3_600_000 }).list(companyId, { userId: "board-user" }));
+    expect(later.map((item) => [item.subject.id, item.severity])).toEqual([[dayOld, "medium"], [fresh, "low"]]);
+    expect(later[0]?.dedupKey).toMatch(/:72h$/);
+
+    const other = pausedItems(await attentionService(db, { now: () => now }).list(companyId, { userId: "other-user" }));
+    expect(other.map((item) => item.subject.id)).toEqual([othersOld]);
+    expect(await db.select({ status: issueTreeHolds.status }).from(issueTreeHolds).where(eq(issueTreeHolds.rootIssueId, dayOld)))
+      .toEqual([{ status: "active" }]);
   });
 
   it("returns ranked decision-only items for every active source and excludes non-human or transient rows", async () => {

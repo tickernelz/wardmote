@@ -2,6 +2,7 @@ import type {
   IssueStatus,
   IssueTreeControlMode,
   IssueTreeHoldReleasePolicyStrategy,
+  IssueTreeHoldScope,
   IssueTreeHoldStatus,
 } from "../constants.js";
 
@@ -95,6 +96,7 @@ export interface IssueTreeHold {
   companyId: string;
   rootIssueId: string;
   mode: IssueTreeControlMode;
+  scope: IssueTreeHoldScope;
   status: IssueTreeHoldStatus;
   reason: string | null;
   releasePolicy: IssueTreeHoldReleasePolicy | null;
@@ -112,6 +114,27 @@ export interface IssueTreeHold {
   createdAt: Date;
   updatedAt: Date;
   members?: IssueTreeHoldMember[];
+}
+
+export type PausedTaskState = "pausing" | "paused" | "pause_failed";
+
+/** One active pause hold, listed so LIVE NOW keeps showing the task while it is paused. */
+export interface PausedTask {
+  holdId: string;
+  issueId: string;
+  identifier: string | null;
+  title: string;
+  status: IssueStatus;
+  scope: IssueTreeHoldScope;
+  assigneeAgentId: string | null;
+  assigneeAgentName: string | null;
+  pausedAt: Date;
+  pausedByUserId: string | null;
+  pausedByAgentId: string | null;
+  reason: string | null;
+  state: PausedTaskState;
+  liveRunId: string | null;
+  lastRun: { id: string; status: string; finishedAt: Date | null; safePoint: string | null } | null;
 }
 
 /** A completed release can include best-effort wake failures. */

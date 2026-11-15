@@ -1290,6 +1290,9 @@ function applyRunLifecycleToCompanyLiveRuns(
       (current: LiveRunForIssue[] | undefined) =>
         removeRunFromList(current, runId),
     );
+    if (queryClient.getQueryData(queryKeys.pausedTasks(companyId))) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.pausedTasks(companyId) });
+    }
     // Always "handled": a terminal run must never be in the live list, so if it
     // wasn't present there is deliberately nothing to refetch (removeRunFromList
     // was a no-op and we must not re-add it).
@@ -1473,6 +1476,7 @@ function invalidateActivityQueries(
     if (action === "issue.tree_hold_created" || action === "issue.tree_hold_released" || action === "issue.updated") {
       // An ancestor hold or reparenting changes descendants' effective pause.
       queryClient.invalidateQueries({ queryKey: ["issues", "tree-control-state"] });
+      if (action !== "issue.updated") queryClient.invalidateQueries({ queryKey: queryKeys.pausedTasks(companyId) });
     }
     if (entityId) {
       patchIssueInListCaches(

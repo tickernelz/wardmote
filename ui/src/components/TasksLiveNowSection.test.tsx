@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@tickernelz/wardmote-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LiveRunForIssue } from "../api/heartbeats";
+import { ToastProvider } from "../context/ToastContext";
 import {
   TasksLiveNowSection,
   liveNowCollapsedStorageKey,
@@ -16,7 +17,13 @@ import {
 import { classifyLiveNowHealth, countLiveNowHealth } from "./live-now/live-now-health";
 import { buildLiveNowEntries } from "./live-now/useLiveNowModel";
 
-const mockIssuesApi = vi.hoisted(() => ({ get: vi.fn(), addComment: vi.fn() }));
+const mockIssuesApi = vi.hoisted(() => ({
+  get: vi.fn(),
+  addComment: vi.fn(),
+  listPausedTasks: vi.fn(),
+  createTreeHold: vi.fn(),
+  releaseTreeHold: vi.fn(),
+}));
 const mockHeartbeatsApi = vi.hoisted(() => ({ cancel: vi.fn() }));
 
 vi.mock("../api/issues", () => ({ issuesApi: mockIssuesApi }));
@@ -76,7 +83,11 @@ function render(node: ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root = createRoot(container);
   flushSync(() => {
-    root!.render(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>);
+    root!.render(
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>{node}</ToastProvider>
+      </QueryClientProvider>,
+    );
   });
 }
 
@@ -113,6 +124,9 @@ beforeEach(() => {
   localStorage.clear();
   mockIssuesApi.get.mockReset();
   mockIssuesApi.addComment.mockReset();
+  mockIssuesApi.listPausedTasks.mockReset().mockResolvedValue([]);
+  mockIssuesApi.createTreeHold.mockReset();
+  mockIssuesApi.releaseTreeHold.mockReset();
   mockHeartbeatsApi.cancel.mockReset();
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
 });
@@ -527,6 +541,97 @@ describe("Live now cards", () => {
     await waitFor(() => expect(mockHeartbeatsApi.cancel).toHaveBeenCalledWith("run-1"));
   });
 
+  it("pauses a task at a safe point from its row, and offers Pause instead of a hard Stop", async () => {
+    mockIssuesApi.listPausedTasks.mockResolvedValue([]);
+    mockIssuesApi.createTreeHold.mockResolvedValue({ hold: { id: "hold-1" }, preview: { activeRuns: [] } });
+    render(<TasksLiveNowSection companyId="company-1" liveRuns={[run({ safePointPause: true })]} issues={[issue({})]} />);
+
+    const pause = liveRows()[0]!.querySelector<HTMLButtonElement>("button[aria-label='Pause ZHA-1']")!;
+    flushSync(() => pause.click());
+    await waitFor(() =>
+      expect(mockIssuesApi.createTreeHold).toHaveBeenCalledWith("issue-1", expect.objectContaining({ mode: "pause", scope: "task", stopAt: "safe_point" })),
+    );
+
+    openMoreMenu(liveRows()[0]!);
+    await waitFor(() => expect(menuItem("Pause subtree")).toBeDefined());
+    flushSync(() => menuItem("Pause subtree")!.click());
+    await waitFor(() =>
+      expect(mockIssuesApi.createTreeHold).toHaveBeenLastCalledWith("issue-1", expect.objectContaining({ scope: "subtree", stopAt: "safe_point" })),
+    );
+
+    openMoreMenu(liveRows()[0]!);
+    await waitFor(() => expect(menuItem("Stop run")).toBeDefined());
+    flushSync(() => menuItem("Stop run")!.click());
+    await waitFor(() => expect(document.body.querySelector("[role='alertdialog']")).not.toBeNull());
+    const instead = [...document.body.querySelectorAll<HTMLButtonElement>("[role='alertdialog'] button")].find(
+      (button) => button.textContent === "Pause instead",
+    )!;
+    flushSync(() => instead.click());
+    await waitFor(() => expect(mockIssuesApi.createTreeHold).toHaveBeenCalledTimes(3));
+    expect(mockHeartbeatsApi.cancel).not.toHaveBeenCalled();
+  });
+
+  it("never offers Pause where it cannot keep the session: a run without a safe point or a conversation", () => {
+    mockIssuesApi.listPausedTasks.mockResolvedValue([]);
+    render(
+      <TasksLiveNowSection
+        companyId="company-1"
+        liveRuns={[
+          run({ id: "run-1", issueId: "issue-1", safePointPause: false }),
+          run({ id: "run-2", issueId: "issue-2", safePointPause: true }),
+        ]}
+        issues={[
+          issue({ id: "issue-1", identifier: "ZHA-1" }),
+          issue({ id: "issue-2", identifier: "ZHA-2", conversationAgentId: "agent-1" } as Partial<Issue>),
+        ]}
+      />,
+    );
+    const blocked = container.querySelector<HTMLButtonElement>("button[aria-label='Pause ZHA-1']")!;
+    expect(blocked.getAttribute("aria-disabled")).toBe("true");
+    expect(blocked.title).toBe("This run can’t stop at a safe point. Use Stop run in More.");
+    flushSync(() => blocked.click());
+    expect(mockIssuesApi.createTreeHold).not.toHaveBeenCalled();
+    expect(container.querySelector("button[aria-label='Pause ZHA-2']")).toBeNull();
+  });
+
+  it("shows a pausing task as Pausing with Stop now, and a paused task with no run in the Paused group with Resume", async () => {
+    mockHeartbeatsApi.cancel.mockResolvedValue(undefined);
+    mockIssuesApi.releaseTreeHold.mockResolvedValue({ id: "hold-2" });
+    mockIssuesApi.listPausedTasks.mockResolvedValue([
+      {
+        holdId: "hold-1", issueId: "issue-1", identifier: "ZHA-1", title: "Task", status: "in_progress", scope: "task",
+        assigneeAgentId: "agent-1", assigneeAgentName: "Builder", pausedAt: "2026-10-08T10:05:00.000Z", pausedByUserId: "user-1",
+        pausedByAgentId: null, reason: null, state: "pausing", liveRunId: "run-1", lastRun: null,
+      },
+      {
+        holdId: "hold-2", issueId: "issue-9", identifier: "ZHA-9", title: "Waiting task", status: "in_progress", scope: "task",
+        assigneeAgentId: "agent-2", assigneeAgentName: "Reviewer", pausedAt: "2026-10-08T09:00:00.000Z", pausedByUserId: "user-1",
+        pausedByAgentId: null, reason: null, state: "paused", liveRunId: null,
+        lastRun: { id: "run-9", status: "cancelled", finishedAt: "2026-10-08T09:00:30.000Z", safePoint: "reached" },
+      },
+    ]);
+    render(<TasksLiveNowSection companyId="company-1" liveRuns={[run({ safePointPause: true })]} issues={[issue({})]} />);
+
+    await waitFor(() => expect(container.querySelector("[data-live-now-group='paused']")).not.toBeNull());
+    const pausing = container.querySelector<HTMLElement>("[data-live-now-issue-id='issue-1']")!;
+    expect(pausing.dataset.liveHealth).toBe("pausing");
+    expect(pausing.querySelector<HTMLButtonElement>("button[aria-label='Pausing ZHA-1']")!.disabled).toBe(true);
+    const paused = container.querySelector<HTMLElement>("[data-live-now-group='paused'] [data-live-now-issue-id='issue-9']")!;
+    expect(paused.textContent).toContain("Paused");
+    expect(paused.textContent).toContain("Stopped after its current step");
+
+    openMoreMenu(pausing);
+    await waitFor(() => expect(menuItem("Stop now")).toBeDefined());
+    flushSync(() => menuItem("Stop now")!.click());
+    await waitFor(() => expect(mockHeartbeatsApi.cancel).toHaveBeenCalledWith("run-1"));
+    expect(document.body.querySelector("[role='alertdialog']")).toBeNull();
+
+    flushSync(() => paused.querySelector<HTMLButtonElement>("button[aria-label='Resume ZHA-9']")!.click());
+    await waitFor(() =>
+      expect(mockIssuesApi.releaseTreeHold).toHaveBeenCalledWith("issue-9", "hold-2", { reason: null, metadata: { wakeAgents: true } }),
+    );
+  });
+
   it("collapses to a strip of agent avatars that expands again on click", () => {
     render(
       <TasksLiveNowSection
@@ -693,6 +798,7 @@ describe("Live now groups, density, filters and board lanes", () => {
     expect([...container.querySelectorAll("[data-live-now-lane]")].map((el) => el.getAttribute("data-live-now-lane"))).toEqual([
       "attention",
       "working",
+      "paused",
     ]);
     expect(laneIds("attention")).toEqual(["stalled", "quiet"]);
     expect(laneIds("working")).toEqual(["working-1", "working-2"]);
