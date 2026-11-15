@@ -2118,6 +2118,24 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(await getExecutionBlocker(db, companyId, issueId)).toBeNull();
   });
 
+  it("keys a terminal predecessor by its native issue before its context snapshot", async () => {
+    const child = spawnAliveProcess();
+    childProcesses.add(child);
+    const contextIssueId = randomUUID();
+    const { runId, companyId } = await seedRunFixture({
+      agentStatus: "idle", runStatus: "interrupted", runErrorCode: "server_shutdown_interrupted", processPid: child.pid!,
+      includeIssue: false, contextSnapshot: { issueId: contextIssueId },
+    });
+    await db.update(heartbeatRuns).set({ resultJson: { conversationContinuation: "continue_conversation_v1" } }).where(eq(heartbeatRuns.id, runId));
+    expect(await getExecutionBlocker(db, companyId, contextIssueId)).toMatchObject({ runId, cause: "execution_owner_active" });
+    const nativeIssueId = randomUUID();
+    await db.update(heartbeatRuns).set({ nativeIssueId }).where(eq(heartbeatRuns.id, runId));
+    expect(await getExecutionBlocker(db, companyId, nativeIssueId)).toMatchObject({ runId, cause: "execution_owner_active" });
+    expect(await getExecutionBlocker(db, companyId, contextIssueId)).toBeNull();
+    child.kill("SIGTERM");
+    await waitForPidExit(child.pid!);
+  });
+
   it("waits for a terminal predecessor's environment lease to be released", async () => {
     const { companyId, issueId, runId } = await seedRunFixture({ agentStatus: "idle", runStatus: "interrupted" });
     await db.update(heartbeatRuns).set({ resultJson: { conversationContinuation: "continue_conversation_v1" } }).where(eq(heartbeatRuns.id, runId));
