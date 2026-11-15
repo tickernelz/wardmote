@@ -531,9 +531,9 @@ test.describe.serial("native chat adapter UI", () => {
           ),
         );
         await expect(
-          page.getByRole("button", { name: "Continue setup" }),
+          page.getByRole("button", { name: "Finish setup" }),
         ).toBeVisible();
-        await page.getByRole("button", { name: "Continue setup" }).click();
+        await page.getByRole("button", { name: "Finish setup" }).click();
         expect(new URL(page.url()).searchParams.get("reconnect")).toBeNull();
         await expect(
           page.getByRole("heading", { name: `Try Maya in ${provider.name}` }),
@@ -560,7 +560,7 @@ test.describe.serial("native chat adapter UI", () => {
         page.getByText(provider.accountLabel, { exact: true }),
       ).toBeVisible();
       await expect(
-        page.getByRole("button", { name: "Continue setup" }),
+        page.getByRole("button", { name: "Finish setup" }),
       ).toHaveCount(0);
       await expect(page.getByText("Change agent", { exact: true })).toHaveCount(
         0,
