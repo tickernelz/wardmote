@@ -51,6 +51,8 @@ function fixture(failures: Error[] = [], options: {
             if (name === "issues") return [{ status: "in_progress", count: 1 }];
             if (name === "approvals") return [{ count: 3 }];
             if (name === "cost_events") return [{ monthSpend: 125 }];
+            if (name === "heartbeat_runs") return [{ p50: 60, p95: 600 }];
+            if (name === "agent_wakeup_requests") return [{ count: 0, oldest: null }];
             throw new Error(`Unexpected dashboard read: ${name}`);
           }).then(resolve, reject);
         },
@@ -87,7 +89,9 @@ describe("dashboard read connection recovery", () => {
         pendingApprovals: 3,
       });
       expect(test.companyParameters).toEqual([[companyId], [companyId]]);
-      expect(test.reads).toEqual(["companies", "companies", "agents", "issues", "approvals", "cost_events"]);
+      expect(test.reads).toEqual([
+        "companies", "companies", "agents", "issues", "approvals", "cost_events", "heartbeat_runs", "agent_wakeup_requests",
+      ]);
       expect(test.execute).toHaveBeenCalledTimes(1);
       expect(overview).toHaveBeenCalledExactlyOnceWith(companyId);
     },
@@ -135,7 +139,7 @@ describe("dashboard read connection recovery", () => {
     expect(overview).toHaveBeenCalledTimes(1);
   });
 
-  const tables = ["companies", "agents", "issues", "approvals", "cost_events"];
+  const tables = ["companies", "agents", "issues", "approvals", "cost_events", "heartbeat_runs", "agent_wakeup_requests"];
   it.each(["agents", "issues", "approvals", "cost_events"])("retries only the failed %s read", async (table) => {
     const test = fixture([], { readFailures: { [table]: [disconnected()] } });
     await expect(test.service.summary(companyId)).resolves.toMatchObject({ companyId });

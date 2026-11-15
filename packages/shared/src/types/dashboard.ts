@@ -24,6 +24,13 @@ export interface DashboardRunActivityDay {
   failedByErrorCode: Record<string, number>;
 }
 
+export interface DashboardAgentFailures {
+  agentId: string;
+  agentName: string;
+  runs: number;
+  failed: number;
+}
+
 export interface DashboardSummary {
   companyId: string;
   agents: {
@@ -44,6 +51,7 @@ export interface DashboardSummary {
     monthUtilizationPercent: number;
   };
   pendingApprovals: number;
+  oldestPendingApprovalAt: string | null;
   budgets: {
     activeIncidents: number;
     pendingApprovals: number;
@@ -51,4 +59,10 @@ export interface DashboardSummary {
     pausedProjects: number;
   };
   runActivity: DashboardRunActivityDay[];
+  /** Duration of runs created in the run activity window that finished. */
+  runDurations: { p50Ms: number | null; p95Ms: number | null };
+  /** Agents with unrecovered failures in the run activity window, most failures first. */
+  agentFailures: DashboardAgentFailures[];
+  /** Wakes waiting for a run slot or for their task to be released; wakes for a done or cancelled task are left out. */
+  wakeQueue: { waiting: number; oldestWaitingAt: string | null };
 }

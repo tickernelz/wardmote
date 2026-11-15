@@ -1322,12 +1322,19 @@ export const storybookDashboardSummary: DashboardSummary = {
     monthUtilizationPercent: 27,
   },
   pendingApprovals: 2,
+  oldestPendingApprovalAt: "2026-04-19T08:00:00.000Z",
   budgets: {
     activeIncidents: 1,
     pendingApprovals: 1,
     pausedAgents: 0,
     pausedProjects: 1,
   },
+  runDurations: { p50Ms: 141_000, p95Ms: 2_740_000 },
+  agentFailures: [
+    { agentId: "agent-codex", agentName: "CodexCoder", runs: 48, failed: 3 },
+    { agentId: "agent-claude", agentName: "ClaudeReviewer", runs: 22, failed: 1 },
+  ],
+  wakeQueue: { waiting: 3, oldestWaitingAt: "2026-04-20T09:30:00.000Z" },
   runActivity: [
     { date: "2026-04-07", succeeded: 4, failed: 0, recovered: 0, other: 1, total: 5, failedByErrorCode: {} },
     { date: "2026-04-08", succeeded: 5, failed: 1, recovered: 0, other: 0, total: 6, failedByErrorCode: { provider_quota: 1 } },

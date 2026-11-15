@@ -12,6 +12,7 @@ import {
   issueAgeBucket,
   issueAgeBucketsCrossed,
   issueAgeSeparatorLabel,
+  loadStoredShowHiddenTasks,
 } from "./IssuesList";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { taskCollectionPreferencesStorageKey } from "../lib/task-collection-preferences";
@@ -2539,7 +2540,7 @@ describe("IssuesList", () => {
     });
   });
 
-  it("reports Show hidden tasks to the page that fetches them, and offers it nowhere else", async () => {
+  it("reports Show hidden tasks to the page that fetches them, keeps it for the next visit, and offers it nowhere else", async () => {
     const onShowHiddenTasksChange = vi.fn();
     const hiddenToggle = () => Array.from(document.body.querySelectorAll("label")).find(
       (label) => label.textContent?.includes("Show hidden tasks"),
@@ -2581,6 +2582,9 @@ describe("IssuesList", () => {
       await Promise.resolve();
     });
     await waitForAssertion(() => expect(onShowHiddenTasksChange).toHaveBeenLastCalledWith(true));
+    expect(loadStoredShowHiddenTasks("company-1", "wardmote:test-issues-hidden")).toBe(true);
+    expect(loadStoredShowHiddenTasks("company-2", "wardmote:test-issues-hidden")).toBe(false);
+    expect(loadStoredShowHiddenTasks("company-1", "wardmote:test-issues-plain")).toBe(false);
 
     act(() => {
       root.unmount();

@@ -362,6 +362,24 @@ function getIssueColumnsStorageKey(key: string): string {
   return `${key}:issue-columns`;
 }
 
+function issueCollectionPreferenceLocation(
+  companyId: string | null | undefined,
+  viewStateKey: string,
+): TaskCollectionPreferenceLocation {
+  const scopedKey = companyId ? `${viewStateKey}:${companyId}` : viewStateKey;
+  return {
+    companyId: companyId ?? "__unscoped__",
+    collectionKey: viewStateKey,
+    legacyViewStorageKey: scopedKey,
+    legacyColumnsStorageKey: getIssueColumnsStorageKey(scopedKey),
+  };
+}
+
+/** Whether the saved view of this task collection lists hidden tasks, so a page can fetch them on its first request. */
+export function loadStoredShowHiddenTasks(companyId: string | null | undefined, viewStateKey: string): boolean {
+  return loadIssueCollectionPreferences(issueCollectionPreferenceLocation(companyId, viewStateKey)).viewState.showHiddenTasks;
+}
+
 function loadIssueCollectionPreferences(
   location: TaskCollectionPreferenceLocation,
 ) {
@@ -913,12 +931,7 @@ function StreamlinedIssuesList({
 
   // Scope the storage key per company so folding/view state is independent across companies.
   const scopedKey = selectedCompanyId ? `${viewStateKey}:${selectedCompanyId}` : viewStateKey;
-  const preferenceLocation: TaskCollectionPreferenceLocation = {
-    companyId: selectedCompanyId ?? "__unscoped__",
-    collectionKey: viewStateKey,
-    legacyViewStorageKey: scopedKey,
-    legacyColumnsStorageKey: getIssueColumnsStorageKey(scopedKey),
-  };
+  const preferenceLocation = issueCollectionPreferenceLocation(selectedCompanyId, viewStateKey);
   const initialAssigneesKey = initialAssignees?.join("|") ?? "";
   const initialWorkspacesKey = initialWorkspaces?.join("|") ?? "";
   const initialStatusesKey = initialStatuses ? `set:${initialStatuses.join("|")}` : "";

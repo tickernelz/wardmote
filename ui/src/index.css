@@ -254,7 +254,6 @@
   --dashboard-list-leading-width: calc(var(--spacing) * 6);
   --dashboard-list-id-width: calc(var(--spacing) * 20);
   --dashboard-list-time-width: calc(var(--spacing) * 16);
-  --dashboard-task-list-columns: var(--dashboard-list-leading-width) minmax(0, 1fr) calc(var(--spacing) * 36) var(--dashboard-list-id-width) var(--dashboard-list-time-width);
   --dashboard-activity-list-columns: var(--dashboard-list-leading-width) minmax(0, 1fr) var(--dashboard-list-id-width) var(--dashboard-list-time-width);
   --status-task-backlog: #a8aeb2;
   --status-task-todo: #f59e0b;
@@ -1624,51 +1623,6 @@ select:where(:not([multiple]):not(.appearance-none)):where(:not([size]), [size="
 .dashboard-list-row {
   min-height: calc(var(--spacing) * 12);
   padding: calc(var(--spacing) * 3) calc(var(--spacing) * 4);
-}
-}
-
-/* Dashboard activity row entry motion */
-@keyframes dashboard-activity-enter {
-  0% {
-    opacity: 0;
-    transform: translateY(-14px) scale(0.985);
-    filter: blur(4px);
-  }
-  62% {
-    opacity: 1;
-    transform: translateY(2px) scale(1.002);
-    filter: blur(0);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: blur(0);
-  }
-}
-
-@keyframes dashboard-activity-highlight {
-  0% {
-    box-shadow: inset 2px 0 0 var(--accent);
-    background-color: color-mix(in oklab, var(--bg-3) 55%, transparent);
-  }
-  100% {
-    box-shadow: inset 0 0 0 transparent;
-    background-color: transparent;
-  }
-}
-
-@layer components {
-
-.activity-row-enter {
-  animation:
-    dashboard-activity-enter 520ms cubic-bezier(0.16, 1, 0.3, 1),
-    dashboard-activity-highlight 920ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .activity-row-enter {
-    animation: none;
-  }
 }
 }
 
@@ -4090,14 +4044,6 @@ span.wardmote-mention-chip[data-mention-kind="external-object"] {
 }
 .home-charts {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
-}
-.home-run-chart {
-  display: none;
-}
-@media (min-width: 1920px) {
-  .home-run-chart {
-    display: block;
-  }
 }
 }
 

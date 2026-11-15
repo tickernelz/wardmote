@@ -15,8 +15,6 @@ import {
 } from "lucide-react";
 import {
   ChartCard,
-  IssueStatusChart,
-  PriorityChart,
   RunActivityChart,
   SuccessRateChart,
 } from "@/components/ActivityCharts";
@@ -150,17 +148,6 @@ const activityRuns: HeartbeatRun[] = [
   makeHeartbeatRun({ id: "run-chart-8", status: "succeeded", createdAt: daysAgo(1, 16), startedAt: daysAgo(1, 16) }),
 ];
 
-const activityIssues = [
-  { priority: "high", status: "in_progress", createdAt: daysAgo(13) },
-  { priority: "critical", status: "blocked", createdAt: daysAgo(11) },
-  { priority: "medium", status: "todo", createdAt: daysAgo(9) },
-  { priority: "medium", status: "in_review", createdAt: daysAgo(9, 16) },
-  { priority: "low", status: "done", createdAt: daysAgo(6) },
-  { priority: "high", status: "todo", createdAt: daysAgo(4) },
-  { priority: "critical", status: "in_progress", createdAt: daysAgo(2) },
-  { priority: "medium", status: "done", createdAt: daysAgo(1) },
-];
-
 const kanbanIssues: Issue[] = [
   ...storybookIssues,
   createIssue({
@@ -202,7 +189,6 @@ const actionMap = new Map([
 
 function ActivityChartsMatrix({ empty = false }: { empty?: boolean }) {
   const runs = empty ? [] : activityRuns;
-  const issues = empty ? [] : activityIssues;
 
   return (
     <StoryShell>
@@ -213,12 +199,6 @@ function ActivityChartsMatrix({ empty = false }: { empty?: boolean }) {
           </ChartCard>
           <ChartCard title="Success rate" subtitle="Daily completion ratio">
             <SuccessRateChart runs={runs} />
-          </ChartCard>
-          <ChartCard title="Issue priority" subtitle="Created issues by urgency">
-            <PriorityChart issues={issues} />
-          </ChartCard>
-          <ChartCard title="Issue status" subtitle="Created issues by workflow state">
-            <IssueStatusChart issues={issues} />
           </ChartCard>
         </div>
       </Section>
