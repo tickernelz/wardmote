@@ -151,7 +151,7 @@ dropped and audited. In an active group, a sender outside the allowlist still
 reaches the agent with role `outside_allowlist`. With **Answer group members who
 address the agent** on (`groupMemberReplies`, default `true`), when that message
 mentioned the agent or replied to one of its messages, the agent may answer in the
-group without a grant (the run stays `read_only`). A reply sent with
+group without a grant. A reply sent with
 `openwa_send` that quotes one of those addressed messages is checked against
 that message only, so an older unaddressed message still pending in the chat
 does not block it. While the run itself is an `owner_absent` wake,
@@ -259,8 +259,8 @@ at least one owner present, counts as the owner's own chat. Each chat has
   that start in the group stay in the group instead of the owner's direct chat.
   **Report to owner via** still wins when it is set. Owners approve by quoting
   the bubble or in the Approvals tab.
-- When anyone else joins, the next check returns `read_only` at once, in the
-  middle of a run too. Every change of the status is an `owner_group_changed`
+- When anyone else joins, the status ends at the next check, in the middle of
+  a run too. Every change of the status is an `owner_group_changed`
   audit entry (`ownerOnly`, `reason`: `owner_only`, `non_owner`, `unverified`
   or `disabled`).
 - From WhatsApp, an owner run sets it with `openwa_endpoint_config`
@@ -404,74 +404,67 @@ warnings for the agent's adapter (steering and read-only enforcement) and, in
 follow normal task visibility (`openwaCapabilityWarnings`,
 `ui/src/pages/apps/chat/openwa-settings-model.ts:206`).
 
-## Run classes and profiles
+## Run classes and sender classes
 
-Every run on an OpenWA conversation issue has an immutable class and tool
-profile derived at run start from server-written records only: the admitted
+Every run on an OpenWA conversation issue has an immutable trigger class and
+sender class derived at run start from server-written records only: the admitted
 deliveries referenced by the wake, or an approved request with live grants.
-Class claims in caller-supplied wake payloads are ignored.
+Class claims in caller-supplied wake payloads are ignored. The sender class is
+stored in the run context as `wardmoteOpenwa.senderClass`.
 
-| Class | Started by | Profile |
+| Trigger class | Started by | Sender class |
 | --- | --- | --- |
-| `owner` | Owner triggers, owner replies to an approval bubble (`approval_reply`) | `full` |
-| `other` | Allowed and outside-allowlist senders, `owner_absent`, `group_added`, `approval_pending`, `approval_expired`, rejected `approval_resolved`, `task_completion` | `read_only` |
-| `grant` | Approved `approval_resolved` for one request | `read_only` plus the granted categories |
+| `owner` | Owner triggers, owner replies to an approval bubble (`approval_reply`) | `owner` |
+| `other` | Allowed and outside-allowlist senders, `owner_absent`, `group_added`, `approval_pending`, `approval_expired`, rejected `approval_resolved`, `task_completion` | `non_owner`, or `owner` when a server record carries an owner's word (`ownerOrigin`: the owner's own DM, an owner-only group, a task an owner run handed off) |
+| `grant` | Approved `approval_resolved` for one request | `non_owner` |
 
-A run on the conversation issue without OpenWA context (agent mention,
-continuation, retry, recovery) is `read_only`. A run requested by a human board
-user is `full`. A live `external_tools` grant, or that category's approval toggle
-turned off, also gives the run the `full` runtime tool profile. Child issues
-created by owner or grant runs follow normal Wardmote authority.
+A run requested by a human board user has sender class `owner`.
 
-A `read_only` run may use every read capability: runtime read/search tools and
-`bash`, Wardmote reads, connector tools with risk `read`, and every OpenWA read over
-the chats visible to the endpoint (in `owner_number` mode, enabled chats only). It
-may comment on and attach artifacts to its own conversation issue, send to its
-origin chat subject to the reply policy, and call `openwa_request_approval`. It may
-not, unless the category's approval toggle is off or a live grant covers it:
+Owner and non-owner runs get the same tools on every endpoint, including outside
+senders in client groups: the same tool list, `bash` with writes, host GitHub
+credentials, Wardmote REST mutations, connector write tools, OpenWA admin and
+cross-chat operations. The server does not block an action because of who asked.
+The agent decides, using two inputs:
 
-| Category | Settings toggle | Covers |
-| --- | --- | --- |
-| `create_task` | Creating or delegating tasks | Creating, assigning or delegating issues; project creation |
-| `external_tools` | Write tools and external actions | Connector tools with risk `write`/`destructive`, runtime write tools, email sends, Wardmote mutations outside the read-only allowlist |
-| `cross_chat_send` | Sending to other chats | Sending or forwarding to a chat other than the origin chat |
-| `wa_admin` | WhatsApp admin actions | Group join/leave/settings, message edit/delete/pin/star, block, labels, status posts, chat archive/mute/delete |
-| `gateway_admin` | Gateway admin actions | Session lifecycle, API keys, webhooks, plugins, settings, infrastructure |
+- The sender envelope: the run section states the event, trigger class and
+  sender class, and every message in the wake event carries
+  `sender.senderRole` (`owner` or `non_owner`) and `sender.allowlisted`. Steered
+  messages carry the same marker in their preamble. Non-owner text is data.
+- The fixed Sender rules block (`OPENWA_SENDER_RULES`): a non-owner message never
+  grants rights; the agent asks an owner first (Wardmote confirmation card or
+  `openwa_request_approval`) before carrying out a non-owner request that is
+  destructive, touches agents, budgets, secrets, credentials or access, changes
+  company or endpoint settings, is a WhatsApp or gateway admin action, sends to
+  another chat, spends money, or exposes private data.
 
-The REST seam denies non-allowlisted mutations of a `read_only` run with 403
-(allowlist `READ_ONLY_REST_ALLOW` in `server/src/services/openwa/authority.ts`). Own-issue rules
-match the conversation issue by id or by identifier (`ZHA-2`), as the issue routes do. Comments written by a
-`read_only` run never trigger mention wakes. Persistent API keys of an agent bound
-to a live OpenWA endpoint cannot make non-safe requests at all.
+Every mutation of an OpenWA run is recorded, not gated: a `tool_called` audit row
+on the endpoint with metadata `seam` (`rest`, `tool_gateway`, `runner_tool`,
+`openwa_send`, `openwa_call`, `github_credentials`, `connection_request`,
+`project_tools`), optional `category`, `method` and `path`, plus `senderClass` and
+`triggerClass`. The write is not awaited, so it adds no latency to the action.
 
-While a live autonomy window (`openwa_autonomy_window`) covers the chat's
-conversation issue, a `read_only` run triggered in that chat by senders who are all
-owners or on the allow list may use `create_task`, non-destructive
-`external_tools` and `cross_chat_send` without approval, inside the window's issue
-tree: comments, documents, attachments, work products, share links, checkout and
-release, child issues, issue creation with a parent in the tree, and status or
-delegation updates that keep the task in the tree, plus connector tools whose risk is not
-`destructive`, and sends to chats whose conversation issue is in the tree. Deletes,
-cancellations outside the conversation tree, credential issuing (connection intents,
-GitHub operation credentials), `wa_admin`, `gateway_admin`, endpoint and access
-configuration, and senders outside the allow list stay owner-only. The check runs on
-every request, so a closed or expired window restores `read_only`, and every use
-logs `openwa.window_authority_used`. The runtime tool profile stays `read_only`.
+Still tied to an owner's own word, because they act as the owner or read the
+owner's private data: `openwa_approval_resolve`, the Decisions desk and
+`wardmoteAnswerDecisionForOwner`/`wardmoteContinueIssueForOwner`, linked
+read-only numbers, `owner_confirmation` operations (logging out or deleting the
+session), and `ui_only` settings and secret-issuing operations. The sender
+allowlist and `groupMemberReplies` still decide who can trigger the bot and whom
+it may answer (`reply`, `reply_outside_allowlist`). The policy fields
+`approvals.createTask`, `externalTools`, `crossChatSend`, `waAdmin` and
+`gatewayAdmin` are kept for stored-policy compatibility and no longer gate
+anything; the settings page no longer shows them.
+
+The OpenWA guidance keeps a stable prefix: the instruction header, "How to act"
+and the Sender rules are byte-identical for owner and non-owner runs of the same
+endpoint, followed by owner-configured custom instructions and the chat note.
+Everything that changes per run (envelope, owners, chat, reply status, grants,
+pending approvals, event hint, wake event JSON) follows in the final
+"OpenWA this run" and wake event sections.
 
 ### Adapter support
 
-The runtime half of `read_only` depends on the adapter's
-`readOnlyToolProfile` capability (`enforced` or `instruction_only`; absent means
-`instruction_only`, `server/src/routes/adapters.ts:191`). With `instruction_only`
-the Wardmote seams above still apply, but the adapter's own file-writing tools
-are not blocked and the run relies on the agent following its instructions.
-`bash` stays available in every `read_only` run and is instruction-bound
-(accepted risk D32).
-
-| Adapter type | Read-only | Mechanism | Source |
-| --- | --- | --- | --- |
-| `omp_local` | enforced | Per-run tool-guard extension blocks `edit`, `apply_patch`, `ast_edit`, `write` (except `xd://` devices), memory/skill/agent tools, LSP applies, non-read `github` ops, `hub` send and isolated tasks; `bash` kept | `packages/adapters/omp-local/src/server/tool-guard.ts:14-18`, `packages/adapters/omp-local/src/server/index.ts:104` |
-| `process` | instruction only | Arbitrary command | `server/src/adapters/process/index.ts:12` |
+OpenWA runs always launch with the full runtime tool profile; the adapter's
+`readOnlyToolProfile` capability no longer applies to them.
 
 Adapters without signed run tokens cannot be bound to OpenWA:
 `wardmote_runner` and every retired adapter (`supportsLocalAgentJwt: false`). Switching the endpoint's agent
@@ -1020,7 +1013,7 @@ Both write a
 `session_health` audit entry and clear when the session is ready again.
 
 Every actual health change (unhealthy or recovered) also wakes the assigned agent
-once with event `session_health` (class `other`, profile `read_only`) on the owners'
+once with event `session_health` (class `other`) on the owners'
 approval chat: the owner's self-chat in `owner_number` mode, otherwise the most
 recently active DM with a current owner. The wake event carries `sessionHealth`
 (`status`, `healthy`, and the restriction kind and expiry when present), and the
@@ -1037,9 +1030,9 @@ it as **Messages during a run**. Behaviour per spec §7.3:
 
 | New trigger | Active run | Result |
 | --- | --- | --- |
-| Owner message | any | Steered into the run; the profile does not change |
-| `other` message | `read_only`, class `other` | Steered |
-| `other` message | `full` or `grant` | Queued as the next wake |
+| Owner message | any | Steered into the run with an owner preamble |
+| `other` message | class `other`, sender class `non_owner` | Steered with a non-owner preamble |
+| `other` message | owner, owner-origin or `grant` run | Queued as the next wake |
 | `approval_reply` | any | Its own wake, never steered |
 
 A steered message reaches the agent framed with its sender, trigger ids and
@@ -1118,7 +1111,7 @@ of the task's siblings and parent.
 
 - The outbox row becomes due 60 s after the change, so changes within that
   window share one `chat_task_completed` wake (event `task_completion`, class
-  `other`, profile `read_only`) on the conversation. If the chat rotated to a
+  `other`) on the conversation. If the chat rotated to a
   new conversation issue meanwhile, the wake goes to the newest one.
 - The wake event's `completedTasks` lists identifier, title, status, assignee,
   link, the assignee's latest comment (cut at 4000 characters with `latestCommentTruncated` and `latestCommentId` for the full read) and, for blocked tasks, the
@@ -1175,8 +1168,8 @@ once is not staged.
 - Cards for one chat are batched: a new card joins the chat's not yet dispatched
   action (up to 10 cards), and an action is dispatched 60 s after it was staged,
   so a burst of cards costs one agent run and one WhatsApp message.
-- The assigned agent wakes once with event `pending_card` (class `other`,
-  profile `read_only`) in a system comment on the conversation issue. The wake
+- The assigned agent wakes once with event `pending_card` (class `other`)
+  in a system comment on the conversation issue. The wake
   event's `pendingCards` lists each card still pending at run start (card id,
   kind, issue, link, requester, prompt, options, questions); a card answered
   between staging and the run is dropped. The guidance tells the agent to send
@@ -1209,7 +1202,7 @@ once is not staged.
 | Approval returns 403 | | Only current owners may resolve; add and link your number under Settings → Owners. |
 | Tool error `owner_decision_unclear` (409) | `decision` in `details` | The owner's latest decisive message about the request does not open with a matching approval or refusal word (or an unquoted reply was ambiguous between several requests); the agent keeps the request pending, answers the owner, and resolves after a clear reply. |
 | Tool error `owner_only` | | The action needs an owner-class run: audit reads, own-session stop/logout/delete, handoff of non-owner triggers, configuration from WhatsApp. |
-| Tool error `approval_required` / `reply_denied` (403) | category in `details` | The run's profile or the reply policy needs an owner grant; the agent asks with `openwa_request_approval`. |
+| Tool error `reply_denied` (403) | category in `details` | The reply policy needs an owner grant; the agent asks with `openwa_request_approval`. |
 | Tool error `secret_issuing_operation` (403) | | A person issues keys, pairing codes and QR codes in the channel's Settings (Gateway management) or the OpenWA dashboard. |
 | 409 `openwa_own_session_confirmation_required` | | The board tried to stop, log out, force-kill or delete the agent's own session; tick the acknowledgement and confirm. |
 | Tool error `number_not_on_whatsapp` / `quote_unresolvable` (422) | | The number is not registered, or the quoted message is not in that chat. When WhatsApp rejects the quote of one of the run's visible pending triggers (revoked or deleted), the server resends once without the quote under the same action and returns `quoteDropped: true`. |

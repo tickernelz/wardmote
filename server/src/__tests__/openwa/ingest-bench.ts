@@ -1176,7 +1176,7 @@ async function toolOverhead(db: Db, root: string, fixture: Fixture, options: Ben
           endpointId: fixture.endpointId,
           chatKey: jid(OWNER_PHONE),
           triggerClass: "owner",
-          profile: "full",
+          senderClass: "owner",
           grantIds: [],
           requesterPrincipalId: null,
           approvalRequestId: null,

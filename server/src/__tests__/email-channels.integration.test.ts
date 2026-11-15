@@ -1051,10 +1051,7 @@ describe("AgentMail durable email pipeline", () => {
     );
   });
 
-  it.each([
-    ["read_only", false],
-    ["full", true],
-  ] as const)("gates agentmail sends on the OpenWA run profile (%s)", async (profile, allowed) => {
+  it.each(["read_only", "full"] as const)("sends agentmail whatever the run's tool profile marker (%s)", async (profile) => {
     const f = await fixture();
     await f.receive(f.message());
     const [conversation] = await db
@@ -1093,8 +1090,7 @@ describe("AgentMail durable email pipeline", () => {
       ...binding, workMode: "standard", connectorAssignments: await resolveConnectorAssignments(db, binding),
     });
     const send = authority.execute({ tool: "agentmail_send", callId: randomUUID(), arguments: { request } });
-    if (allowed) await expect(send).resolves.toMatchObject({ outcome: "queued" });
-    else await expect(send).rejects.toMatchObject({ details: { code: "openwa_approval_required", category: "external_tools" } });
+    await expect(send).resolves.toMatchObject({ outcome: "queued" });
     await expect(
       authority.execute({ tool: "agentmail_read_thread", callId: randomUUID(), arguments: {} }),
     ).resolves.toBeTruthy();

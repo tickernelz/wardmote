@@ -309,7 +309,7 @@ describe("OpenWA delegated task reports (embedded Postgres + fake gateway)", () 
 
     const [run] = await t.wakeRuns();
     const turn = await t.startTurn(run!);
-    expect(turn.openwa).toMatchObject({ event: "task_completion", triggerClass: "other", profile: "read_only" });
+    expect(turn.openwa).toMatchObject({ event: "task_completion", triggerClass: "other", senderClass: "non_owner" });
     const tasks = turn.guidance!.wakeEvent.completedTasks!;
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ identifier: first.identifier, title: "Draft the supplier contract", status: "done", assignee: "Arif" });

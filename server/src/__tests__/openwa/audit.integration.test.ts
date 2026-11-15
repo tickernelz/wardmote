@@ -25,7 +25,6 @@ import {
 } from "@tickernelz/wardmote-db";
 import { CHAT_AUDIT_ENTRY_KINDS, type ChatAuditEntryKind } from "@tickernelz/wardmote-shared";
 import { accessService } from "../../services/access.js";
-import { assertOpenwaRunMay, restoreOpenwaGrant } from "../../services/openwa/authority.js";
 import { startEmbeddedPostgresTestDatabase } from "../helpers/embedded-postgres.js";
 import { describeEmbeddedPostgres } from "../helpers/route-test-harness.js";
 import { errorHandler } from "../../middleware/index.js";
@@ -495,32 +494,6 @@ describeEmbeddedPostgres("OpenWA audit and retention", () => {
     for (const row of openwa)
       expect(row).toMatchObject({ actorType: "user", actorId: t.companyOwner.userId, entityType: "chat_endpoint", entityId: created.id, details: { endpointId: created.id, provider: "openwa" } });
     expect(openwa.find((row) => row.action === "openwa.endpoint_updated")!.details).toMatchObject({ changedKeys: ["allowGroupChats"] });
-  });
-
-  it("logs openwa.grant_consumed when a grant run consumes a one_action grant", async () => {
-    const t = await seed();
-    const grant = await grantFixture(t, { expiresAt: new Date(Date.now() + DAY_MS) });
-    const runId = randomUUID();
-    const contextSnapshot = {
-      wardmoteToolProfile: "read_only",
-      wardmoteOpenwa: { endpointId: t.endpointId, chatKey: CHAT, triggerClass: "grant", profile: "read_only", grantIds: [grant.id] },
-    };
-    await db.insert(heartbeatRuns).values({ id: runId, companyId: t.companyId, agentId: t.agentId, status: "running", startedAt: new Date(), contextSnapshot });
-    const run = { id: runId, companyId: t.companyId, contextSnapshot };
-    expect(await assertOpenwaRunMay(db, run, "create_task")).toBe(grant.id);
-    const rows = await activity(t, "openwa.grant_consumed");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ actorType: "system", actorId: "openwa", runId, entityId: t.endpointId, details: { grantId: grant.id, category: "create_task", scope: "one_action" } });
-    await expect(assertOpenwaRunMay(db, run, "create_task")).rejects.toMatchObject({ status: 403 });
-    expect(await activity(t, "openwa.grant_consumed")).toHaveLength(1);
-
-    await restoreOpenwaGrant(db, { companyId: t.companyId, runId, grantId: grant.id });
-    await restoreOpenwaGrant(db, { companyId: t.companyId, runId, grantId: grant.id });
-    const restored = await activity(t, "openwa.grant_restored");
-    expect(restored).toHaveLength(1);
-    expect(restored[0]).toMatchObject({ runId, details: { grantId: grant.id, category: "create_task", reason: "rejected_before_effect" } });
-    expect(await assertOpenwaRunMay(db, run, "create_task")).toBe(grant.id);
-    expect(await activity(t, "openwa.grant_consumed")).toHaveLength(2);
   });
 
   it("expires live grants past expires_at in the scheduled job and logs one openwa.grant_expired per endpoint", async () => {

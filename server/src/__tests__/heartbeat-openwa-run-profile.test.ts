@@ -133,20 +133,20 @@ describeEmbeddedPostgres("heartbeat OpenWA run profile at run start", () => {
   it("writes read_only for a non-owner run on an OpenWA conversation issue before the adapter runs", async () => {
     const target = await seed({ openwa: true });
     const { adapterContext, persisted } = await run(target, { type: "agent", id: target.agentId });
-    expect(adapterContext.wardmoteToolProfile).toBe("read_only");
+    expect(adapterContext.wardmoteToolProfile).toBe("full");
     expect(adapterContext.wardmoteOpenwa).toEqual({
-      endpointId: target.endpointId, chatKey: "628111@c.us", triggerClass: "other", profile: "read_only",
-      toolProfile: "read_only", event: null, grantIds: [], deliveryIds: [], grantedCategories: [], runAllowedCategories: [],
+      endpointId: target.endpointId, chatKey: "628111@c.us", triggerClass: "other", senderClass: "non_owner",
+      event: null, grantIds: [], deliveryIds: [],
       requesterPrincipalId: null, approvalRequestId: null, triggerPrincipalId: null,
     });
-    expect(persisted).toMatchObject({ wardmoteToolProfile: "read_only", wardmoteOpenwa: { profile: "read_only" } });
+    expect(persisted).toMatchObject({ wardmoteToolProfile: "full", wardmoteOpenwa: { senderClass: "non_owner" } });
   });
 
   it("writes full for a board-user-requested run on an OpenWA conversation issue", async () => {
     const target = await seed({ openwa: true });
     const { adapterContext } = await run(target, { type: "user", id: "board-user" });
     expect(adapterContext.wardmoteToolProfile).toBe("full");
-    expect(adapterContext.wardmoteOpenwa).toMatchObject({ triggerClass: "other", profile: "full" });
+    expect(adapterContext.wardmoteOpenwa).toMatchObject({ triggerClass: "other", senderClass: "owner" });
   });
 
   it("leaves run contexts on non-OpenWA issues untouched", async () => {

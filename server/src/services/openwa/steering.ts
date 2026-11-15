@@ -12,9 +12,8 @@ import {
   NativeSessionSteeringError,
   steerNativeSession,
 } from "../native-runtime/native-session-executor.js";
-import { openwaRunCarriesGrants, readOpenwaRunContext, type OpenwaRunContext } from "./authority.js";
+import { openwaRunCarriesGrants, readOpenwaRunContext, type OpenwaRunContext, type OpenwaSenderClass } from "./authority.js";
 import { logOpenwaActivity } from "./audit.js";
-import { recordSteeredOwnerTriggers } from "./followups.js";
 import { openwaSteeredMedia, type OpenwaSteeredMedia } from "./guidance.js";
 import { markOpenwaLateTranscriptConsumed, type OpenwaLateTranscriptEvent } from "./late-transcripts.js";
 
@@ -51,7 +50,7 @@ export interface OpenwaInflightWake {
 
 export interface OpenwaInflightRun {
   triggerClass: OpenwaTriggerClass;
-  profile: "full" | "read_only";
+  senderClass: OpenwaSenderClass;
 }
 
 const steerers = new WeakMap<Db, OpenwaCommentSteerer>();
@@ -73,12 +72,12 @@ export function decideOpenwaInflight(input: {
   if (input.incoming.event === "approval_reply" || input.incoming.event === "approval_resolved") return "queue";
   if (input.incoming.triggerClass === "owner") return "steer";
   if (input.incoming.triggerClass === "other")
-    return input.run.triggerClass === "other" && input.run.profile === "read_only" ? "steer" : "queue";
+    return input.run.triggerClass === "other" && input.run.senderClass === "non_owner" ? "steer" : "queue";
   return "queue";
 }
 
 export function openwaRunGrantsAdmitSteer(
-  run: Pick<OpenwaRunContext, "profile" | "toolProfile" | "grantIds" | "grantedCategories" | "requesterPrincipalId">,
+  run: Pick<OpenwaRunContext, "grantIds" | "requesterPrincipalId">,
   incoming: OpenwaInflightWake,
   principalIds: readonly (string | null)[],
 ): boolean {
@@ -144,10 +143,7 @@ function frameFor(input: {
     const head = input.ownerNowActive
       ? "WhatsApp owner message (owner_now_active: an endpoint owner is now active in this chat)." + from + triggers + quote
       : "WhatsApp message from an endpoint owner." + from + triggers + quote;
-    const limit = input.run.profile === "read_only"
-      ? " This run stays read_only. If the request needs writes, call openwa_handoff with these trigger ids and a note; an owner run follows this one."
-      : "";
-    return (body) => head + limit + "\n\n" + body + files;
+    return (body) => head + "\n\n" + body + files;
   }
   const role = input.principalRole ?? "member";
   return (body) =>
@@ -261,17 +257,6 @@ export async function steerOpenwaTrigger(db: Db, input: OpenwaTriggerSteerInput)
   });
   if (outcome.deliveredAs === "steered")
     await appendOpenwaSteeredDeliveries(db, { companyId: input.companyId, runId: active.runId, deliveryIds: input.deliveryIds });
-  if (outcome.deliveredAs === "steered" && input.incoming.triggerClass === "owner" && active.openwa.profile === "read_only") {
-    await recordSteeredOwnerTriggers(db, {
-      companyId: input.companyId,
-      endpointId: input.endpointId,
-      conversationId: input.conversationId,
-      issueId: input.issueId,
-      runId: active.runId,
-      chatKey: active.openwa.chatKey,
-      deliveryIds: input.deliveryIds,
-    });
-  }
   return outcome;
 }
 

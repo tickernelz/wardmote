@@ -401,7 +401,7 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     expect(t.gateway.requests.filter((entry) => entry.path.includes("/contacts/check/")).length).toBe(2);
   });
 
-  it("lets a read_only run reply to its origin chat under the reply policy and gates other chats", async () => {
+  it("lets a non-owner run reply to its origin chat under the reply policy and send to other chats", async () => {
     const t = await setup();
     const c = await conversation(t, MEMBER);
     const pending = await trigger(t, c, { triggerClass: "other", role: "allowed" });
@@ -411,15 +411,12 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
       answeredTriggerIds: [pending.id],
     });
     const sends = t.gateway.sends.length;
-    const crossChat = await rejection(executeOpenwaTool(db, binding, "openwa_send", { chat: "+628444000222", text: "psst", idempotencyKey: randomUUID() }));
-    expect(crossChat.code).toBe("approval_required");
-    expect(crossChat.details).toMatchObject({ code: "approval_required", category: "cross_chat_send" });
-    const group = await rejection(executeOpenwaTool(db, binding, "openwa_send", { chat: GROUP, text: "psst", idempotencyKey: randomUUID() }));
-    expect(group.details).toMatchObject({ category: "cross_chat_send" });
-    expect(t.gateway.sends.length).toBe(sends);
+    await expect(executeOpenwaTool(db, binding, "openwa_send", { chat: "+628444000222", text: "psst", idempotencyKey: randomUUID() })).resolves.toMatchObject({ state: "delivered" });
+    await expect(executeOpenwaTool(db, binding, "openwa_send", { chat: GROUP, text: "psst", idempotencyKey: randomUUID() })).resolves.toMatchObject({ state: "delivered" });
+    expect(t.gateway.sends.length).toBe(sends + 2);
   });
 
-  it("marks owners in openwa_find and keeps owner DMs from an owner_absent run behind approval", async () => {
+  it("marks owners in openwa_find and lets an owner_absent run write to an owner DM", async () => {
     const t = await setup();
     const [endpoint] = await db.select().from(chatEndpoints).where(eq(chatEndpoints.id, t.endpointId));
     const [principal] = await db
@@ -442,8 +439,7 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     await expect(executeOpenwaTool(db, absent, "openwa_find", { lid: "105000000006444@lid" })).resolves.toMatchObject({ role: "owner" });
     t.gateway.lids.set("628555000999", "105000000009999@lid");
     expect(await executeOpenwaTool(db, absent, "openwa_find", { lid: "105000000009999@lid" })).not.toHaveProperty("role");
-    const ownerDm = await rejection(executeOpenwaTool(db, absent, "openwa_send", { chat: "+628444000222", text: "psst", idempotencyKey: randomUUID() }));
-    expect(ownerDm.code).toBe("approval_required");
+    await expect(executeOpenwaTool(db, absent, "openwa_send", { chat: "+628444000222", text: "psst", idempotencyKey: randomUUID() })).resolves.toMatchObject({ state: "delivered" });
   });
 
   it("answers an owner_absent outside_allowlist group member with one merged approval and a holding reply", async () => {
@@ -738,30 +734,6 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     expect(toGroup.code).toBe("approval_action_pending");
     expect(t.gateway.sends.some((send) => send.text === "posting it myself")).toBe(false);
     await expect(executeOpenwaTool(db, binding, "openwa_send", { text: "approved, posting now", idempotencyKey: randomUUID() })).resolves.toMatchObject({ state: "delivered" });
-  });
-
-  it("lets a cross_chat_send grant lift the gate exactly once", async () => {
-    const t = await setup();
-    const c = await conversation(t, MEMBER);
-    const [requestRow] = await db
-      .insert(chatOwnerApprovalRequests)
-      .values({ companyId: t.companyId, endpointId: t.endpointId, originChatKey: openwaChatKey(MEMBER), categories: ["cross_chat_send"], scope: "one_action", summary: "forward", proposedAction: "forward", status: "approved" })
-      .returning();
-    const [grant] = await db
-      .insert(chatOwnerGrants)
-      .values({ companyId: t.companyId, endpointId: t.endpointId, requestId: requestRow!.id, originChatKey: openwaChatKey(MEMBER), category: "cross_chat_send", scope: "one_action", approvedVia: "wardmote", expiresAt: new Date(Date.now() + 3_600_000) })
-      .returning();
-    const binding = await run(t, c, { triggerClass: "grant", grantIds: [grant!.id] });
-    t.gateway.failNextSend({ dropResponseAfterStore: true });
-    const approved = { chat: "+628444000222", text: "approved", idempotencyKey: randomUUID() };
-    await expect(executeOpenwaTool(db, binding, "openwa_send", approved)).resolves.toMatchObject({ state: "uncertain" });
-    const [consumed] = await db.select().from(chatOwnerGrants).where(eq(chatOwnerGrants.id, grant!.id));
-    expect(consumed).toMatchObject({ status: "consumed", consumedByRunId: binding.runId });
-    await db.update(chatOwnerGrants).set({ consumedByRunId: null }).where(eq(chatOwnerGrants.id, grant!.id));
-    await expect(executeOpenwaTool(db, binding, "openwa_send", approved)).resolves.toMatchObject({ state: "delivered" });
-    expect(t.gateway.sends.filter((send) => send.text === "approved")).toHaveLength(1);
-    const again = await rejection(executeOpenwaTool(db, binding, "openwa_send", { chat: "+628444000222", text: "again", idempotencyKey: randomUUID() }));
-    expect(again.code).toBe("approval_required");
   });
 
   it("denies origin replies the reply policy holds back and the outside_allowlist rule", async () => {
@@ -1369,8 +1341,8 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     await request(app).post(url(t.companyId, plain!.id)).send({ tool: "openwa_read_chat", arguments: {} }).expect(403);
     await request(app).post(url(t.companyId, c.issueId)).send({ tool: "slack_history", arguments: {} }).expect(403);
     await request(app).post(url(t.companyId, c.issueId)).send({ tool: "openwa_read_chat", arguments: { companyId: t.companyId } }).expect(400);
-    const denied = await request(app).post(url(t.companyId, c.issueId)).send({ tool: "openwa_send", arguments: { chat: "+628444000222", text: "x", idempotencyKey: randomUUID() } }).expect(403);
-    expect(denied.body).toMatchObject({ code: "approval_required", details: { category: "cross_chat_send" } });
+    const sent = await request(app).post(url(t.companyId, c.issueId)).send({ tool: "openwa_send", arguments: { chat: "+628444000222", text: "x", idempotencyKey: randomUUID() } }).expect(200);
+    expect(sent.body).toMatchObject({ state: "delivered" });
     actor = { type: "agent", source: "agent_key", companyId: t.companyId, agentId: t.agentId };
     await request(app).post(url(t.companyId, c.issueId)).send({ tool: "openwa_read_chat", arguments: {} }).expect(403);
     actor = { type: "board", source: "session", userId: t.userId, companyIds: [t.companyId] };
@@ -1476,13 +1448,12 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
       .send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "openwa_read_chat", arguments: {} } })
       .expect(200);
     expect(JSON.parse(called.body.result.content[0].text)).toMatchObject({ chatRef: c.chatRef });
-    const gated = await request(app)
+    const crossChat = await request(app)
       .post("/api/mcp/wardmote")
       .set("authorization", "Bearer token")
       .send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "openwa_send", arguments: { chat: "+628444000222", text: "x", idempotencyKey: randomUUID() } } })
       .expect(200);
-    expect(gated.body.result.isError).toBe(true);
-    expect(JSON.parse(gated.body.result.content[0].text)).toMatchObject({ error: "approval_required", category: "cross_chat_send" });
+    expect(crossChat.body.result.isError).not.toBe(true);
     actor = { ...actor, runId: plainRun.runId };
     expect((await list()).some((name) => name.startsWith("openwa_"))).toBe(false);
     actor = { type: "agent", source: "agent_key", companyId: t.companyId, agentId: t.agentId, runId: binding.runId };

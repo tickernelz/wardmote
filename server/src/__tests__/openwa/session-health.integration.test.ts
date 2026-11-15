@@ -295,11 +295,11 @@ describe("OpenWA session_health wakes (embedded Postgres + fake gateway)", () =>
     expect(downWake.wake.contextSnapshot).toMatchObject({ issueId: owner.issueId, source: "chat:openwa" });
     expect(downWake.wake.allowRunCoalescing).toBe(false);
     const downRun = await runContext(t, downWake);
-    expect(downRun.openwa).toMatchObject({ triggerClass: "other", profile: "full", ownerOrigin: "owner_chat", event: "session_health" });
+    expect(downRun.openwa).toMatchObject({ triggerClass: "other", senderClass: "owner", ownerOrigin: "owner_chat", event: "session_health" });
     expect(downRun.guidance.wakeEvent).toMatchObject({
       event: "session_health",
       triggerClass: "other",
-      profile: "full",
+      senderClass: "owner",
       ownerOrigin: "owner_chat",
       sessionHealth: { kind: "status", healthy: false, status: "disconnected", restriction: null },
     });
@@ -318,7 +318,7 @@ describe("OpenWA session_health wakes (embedded Postgres + fake gateway)", () =>
     expect(upWake.request.payload).toMatchObject({
       openwa: { event: "session_health", triggerClass: "other", sessionHealth: { kind: "status", healthy: true, status: "ready" } },
     });
-    expect((await runContext(t, upWake)).openwa).toMatchObject({ triggerClass: "other", profile: "full", ownerOrigin: "owner_chat" });
+    expect((await runContext(t, upWake)).openwa).toMatchObject({ triggerClass: "other", senderClass: "owner", ownerOrigin: "owner_chat" });
 
     t.gateway.emit("session.status", { sessionId: SESSION_ID, status: "ready" });
     await new Promise((resolve) => setTimeout(resolve, 400));

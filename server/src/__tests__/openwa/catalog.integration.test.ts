@@ -16,7 +16,6 @@ import {
   chatEndpointResources,
   chatEndpoints,
   chatOwnerApprovalRequests,
-  chatOwnerGrants,
   companies,
   companyMemberships,
   companySecretBindings,
@@ -115,9 +114,7 @@ function expectedOutcome(operation: OpenwaOperation, config: Config): string {
   if (operation.auth === "api_key" && !config.adminKey && (operation.requiresUnscopedKey || operation.requiredRole === "admin")) return "unavailable_without_admin_key";
   const owner = config.runClass === "owner";
   if (SELF_SESSION.has(operation.id)) return owner ? "self_session_requires_confirmation" : "owner_only";
-  if (owner || category === "read") return "dispatch";
-  if (category === "write" && operation.targetChatArg) return "dispatch";
-  return "approval_required";
+  return "dispatch";
 }
 
 describe("OpenWA catalog, describe and call (embedded Postgres + fake gateway)", () => {
@@ -355,7 +352,7 @@ describe("OpenWA catalog, describe and call (embedded Postgres + fake gateway)",
     expect(outcomes.filter((entry) => entry.actual !== entry.expected)).toEqual([]);
     expect(outcomes.filter((entry) => (entry.actual === "dispatch") !== (entry.forwarded === 1))).toEqual([]);
     expect(new Set(outcomes.map((entry) => entry.actual))).toEqual(
-      new Set(["dispatch", "approval_required", "gateway_admin_disabled", "unavailable_on_engine", "unavailable_without_admin_key", "secret_issuing_operation"]),
+      new Set(["dispatch", "gateway_admin_disabled", "unavailable_on_engine", "unavailable_without_admin_key", "secret_issuing_operation"]),
     );
   }, 120_000);
 
@@ -406,7 +403,7 @@ describe("OpenWA catalog, describe and call (embedded Postgres + fake gateway)",
     expect(readLevel.every((entry) => SAFE.has(OPENWA_OPERATIONS.find((op) => op.id === entry.operation)!.method))).toBe(true);
   });
 
-  it("AC12: at full with an admin key an owner run lists every session; an other run needs gateway_admin approval", async () => {
+  it("AC12: at full with an admin key owner and other runs alike list every session", async () => {
     const t = await setup({ policy: { gatewayAdminTools: "full" }, adminKey: true });
     t.gateway.overrides.push({ method: "GET", path: "/api/sessions", status: 200, body: [{ id: SESSION_ID, name: "ours" }, { id: randomUUID(), name: "another" }] });
     const c = await conversation(t, MEMBER);
@@ -415,13 +412,12 @@ describe("OpenWA catalog, describe and call (embedded Postgres + fake gateway)",
     expect((listed.result as unknown[]).length).toBe(2);
     expect(t.gateway.requests.filter((request) => request.path === "/api/sessions").map((request) => request.key)).toEqual(["admin"]);
     const other = await run(t, c, "other");
-    const denied = await rejection(call(other, { operation: "SessionController_findAll" }));
-    expect(denied.code).toBe("approval_required");
-    expect(denied.details).toMatchObject({ category: "gateway_admin" });
-    expect(t.gateway.requests.filter((request) => request.path === "/api/sessions")).toHaveLength(1);
+    const listedByOther = await call(other, { operation: "SessionController_findAll" });
+    expect((listedByOther.result as unknown[]).length).toBe(2);
+    expect(t.gateway.requests.filter((request) => request.path === "/api/sessions")).toHaveLength(2);
     const logged = await db.select().from(activityLog).where(and(eq(activityLog.companyId, t.companyId), eq(activityLog.action, "openwa.gateway_admin_called")));
-    expect(logged).toHaveLength(1);
-    expect(logged[0]).toMatchObject({
+    expect(logged).toHaveLength(2);
+    expect(logged.find((row) => row.runId === owner.runId)).toMatchObject({
       entityType: "chat_endpoint",
       entityId: t.endpointId,
       agentId: t.agentId,
@@ -480,92 +476,28 @@ describe("OpenWA catalog, describe and call (embedded Postgres + fake gateway)",
     expect(audit!.metadata).toMatchObject({ tool: "openwa_call", operation: "MessageController_sendText", errorCode: "retry_after", pacing: true });
   });
 
-  it("gates write operations to another chat as cross_chat_send and keeps origin writes on reply semantics with receipts", async () => {
+  it("dispatches writes to another chat for a non-owner run and keeps origin writes on reply semantics with receipts", async () => {
     const t = await setup();
     const c = await conversation(t, MEMBER);
     const other = await run(t, c, "other");
     const sendRoute = "/api/sessions/" + SESSION_ID + "/messages/send-text";
-    const cross = await rejection(call(other, { operation: "MessageController_sendText", args: { chatId: "openwa:" + SESSION_ID + ":" + OTHER, text: "psst" }, idempotencyKey: randomUUID() }));
-    expect(cross.code).toBe("approval_required");
-    expect(cross.details).toMatchObject({ category: "cross_chat_send" });
-    const forward = await rejection(call(other, { operation: "MessageController_forward", args: { fromChatId: MEMBER, toChatId: OTHER, messageId: "m1" }, idempotencyKey: randomUUID() }));
-    expect(forward.details).toMatchObject({ category: "cross_chat_send" });
-    const bulk = await rejection(call(other, { operation: "MessageController_sendBulk", args: { messages: [{ chatId: MEMBER, type: "text", content: { text: "a" } }, { chatId: OTHER, type: "text", content: { text: "b" } }] }, idempotencyKey: randomUUID() }));
-    expect(bulk.details).toMatchObject({ category: "cross_chat_send" });
-    expect(forwarded(t, "POST", sendRoute)).toBe(0);
+    const cross = await call(other, { operation: "MessageController_sendText", args: { chatId: "openwa:" + SESSION_ID + ":" + OTHER, text: "psst" }, idempotencyKey: randomUUID() });
+    expect(cross).toMatchObject({ state: "delivered" });
+    expect(forwarded(t, "POST", sendRoute)).toBe(1);
     const key = randomUUID();
     const sent = await call(other, { operation: "MessageController_sendText", args: { chatId: MEMBER, text: "origin" }, idempotencyKey: key });
     expect(sent).toMatchObject({ state: "delivered", messageIds: [expect.any(String)] });
     const replay = await call(other, { operation: "MessageController_sendText", args: { chatId: MEMBER, text: "origin" }, idempotencyKey: key });
     expect(replay).toMatchObject({ actionId: sent.actionId, replayed: true });
-    expect(forwarded(t, "POST", sendRoute)).toBe(1);
+    expect(forwarded(t, "POST", sendRoute)).toBe(2);
     const conflict = await rejection(call(other, { operation: "MessageController_sendText", args: { chatId: MEMBER, text: "changed" }, idempotencyKey: key }));
     expect(conflict.code).toBe("idempotency_conflict");
     await expect(call(other, { operation: "MessageController_react", args: { chatId: MEMBER, messageId: "m1", emoji: "x" }, idempotencyKey: randomUUID() })).resolves.toMatchObject({ state: "delivered" });
-    const admin = await rejection(call(other, { operation: "MessageController_pinMessage", args: { chatId: MEMBER, messageId: "m1" }, idempotencyKey: randomUUID() }));
-    expect(admin.details).toMatchObject({ category: "wa_admin" });
+    await expect(call(other, { operation: "MessageController_pinMessage", args: { chatId: MEMBER, messageId: "m1" }, idempotencyKey: randomUUID() })).resolves.toMatchObject({ state: "delivered" });
     const missingKey = await rejection(call(other, { operation: "MessageController_react", args: { chatId: MEMBER, messageId: "m1", emoji: "x" } }));
     expect(missingKey.code).toBe("invalid_arguments");
     const badArgs = await rejection(call(other, { operation: "MessageController_sendText", args: { chatId: MEMBER, text: "x", sessionId: "other" }, idempotencyKey: randomUUID() }));
     expect(badArgs.code).toBe("invalid_arguments");
-  });
-
-  it("lets a grant run retry or replay a gated write whose one_action grant it already consumed", async () => {
-    const t = await setup();
-    const c = await conversation(t, MEMBER);
-    const grantFor = async (category: "cross_chat_send" | "wa_admin") => {
-      const [request] = await db
-        .insert(chatOwnerApprovalRequests)
-        .values({ companyId: t.companyId, endpointId: t.endpointId, originChatKey: openwaChatKey(MEMBER), categories: [category], scope: "one_action", summary: category, proposedAction: category, status: "approved" })
-        .returning();
-      const [grant] = await db
-        .insert(chatOwnerGrants)
-        .values({ companyId: t.companyId, endpointId: t.endpointId, requestId: request!.id, originChatKey: openwaChatKey(MEMBER), category, scope: "one_action", approvedVia: "wardmote", expiresAt: new Date(Date.now() + 3_600_000) })
-        .returning();
-      return grant!.id;
-    };
-    const grantStatus = async (id: string) => (await db.select().from(chatOwnerGrants).where(eq(chatOwnerGrants.id, id)))[0]!.status;
-    const crossGrant = await grantFor("cross_chat_send");
-    const pinGrant = await grantFor("wa_admin");
-    const binding = await run(t, c, "grant", [crossGrant, pinGrant]);
-
-    const cross = { operation: "MessageController_sendText", args: { chatId: "openwa:" + SESSION_ID + ":" + OTHER, text: "approved forward" }, idempotencyKey: randomUUID() };
-    t.gateway.failNextSend({ dropResponseAfterStore: true });
-    await expect(call(binding, cross)).resolves.toMatchObject({ state: "uncertain" });
-    expect(await grantStatus(crossGrant)).toBe("consumed");
-    const reconciled = await call(binding, cross);
-    expect(reconciled).toMatchObject({ actionId: expect.any(String), state: "delivered" });
-    expect(t.gateway.sends.filter((send) => send.text === "approved forward")).toHaveLength(1);
-    await expect(call(binding, cross)).resolves.toMatchObject({ actionId: reconciled.actionId, replayed: true });
-    const revokedCross = { ...cross, args: { ...cross.args, text: "revoked forward" }, idempotencyKey: randomUUID() };
-    const secondCross = await grantFor("cross_chat_send");
-    const revokedBinding = await run(t, c, "grant", [secondCross]);
-    t.gateway.failNextSend({ dropResponseAfterStore: true });
-    await expect(call(revokedBinding, revokedCross)).resolves.toMatchObject({ state: "uncertain" });
-    expect(await grantStatus(secondCross)).toBe("consumed");
-    await db.update(chatOwnerGrants).set({ status: "revoked" }).where(eq(chatOwnerGrants.id, secondCross));
-    expect((await rejection(call(revokedBinding, revokedCross))).code).toBe("approval_required");
-    const fresh = await rejection(call(binding, { ...cross, idempotencyKey: randomUUID() }));
-    expect(fresh.code).toBe("approval_required");
-    expect(fresh.details).toMatchObject({ category: "cross_chat_send" });
-
-    const pinOperation = OPENWA_OPERATIONS.find((operation) => operation.id === "MessageController_pinMessage")!;
-    const pinArgs = { chatId: MEMBER, messageId: "m1" };
-    const pinRoute = renderedPath(pinOperation, pinArgs);
-    t.gateway.overrides.push({ method: pinOperation.method, path: pinRoute, status: 400, body: { message: "bad pin" } });
-    const failedKey = randomUUID();
-    expect((await rejection(call(binding, { operation: pinOperation.id, args: pinArgs, idempotencyKey: failedKey }))).code).not.toBe("approval_required");
-    expect(await grantStatus(pinGrant)).toBe("live");
-    const [failedAction] = await db.select().from(chatActions).where(sql`${chatActions.payload}->>'grantId' = ${pinGrant}`);
-    expect(failedAction).toBeUndefined();
-    t.gateway.overrides.splice(0);
-    const pin = { operation: pinOperation.id, args: pinArgs, idempotencyKey: randomUUID() };
-    const pinned = await call(binding, pin);
-    expect(pinned).toMatchObject({ state: "delivered" });
-    expect(await grantStatus(pinGrant)).toBe("consumed");
-    await expect(call(binding, pin)).resolves.toMatchObject({ actionId: pinned.actionId, replayed: true });
-    expect(forwarded(t, pinOperation.method, pinRoute)).toBe(2);
-    expect((await rejection(call(binding, { ...pin, idempotencyKey: randomUUID() }))).details).toMatchObject({ category: "wa_admin" });
   });
 
   it("requires an owner run plus a Wardmote confirmation before touching the endpoint's own session", async () => {
@@ -813,7 +745,7 @@ describe("OpenWA catalog, describe and call (embedded Postgres + fake gateway)",
     expect(history.result).toEqual([{ id: "m1", body: "order", order: { orderId: "o1", token: orderToken } }]);
 
     const audits = await db.select().from(chatAuditEntries).where(eq(chatAuditEntries.endpointId, t.endpointId));
-    expect(audits.filter((entry) => entry.kind === "tool_called")).toHaveLength(4);
+    expect(audits.filter((entry) => entry.kind === "tool_called" && (entry.metadata as Record<string, unknown>).tool !== undefined)).toHaveLength(4);
     expect(plaintext(audits)).toEqual([]);
   });
 });

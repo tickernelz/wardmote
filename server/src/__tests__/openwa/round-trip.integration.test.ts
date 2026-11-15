@@ -311,7 +311,7 @@ describe("OpenWA round trip (embedded Postgres + fake gateway)", () => {
     expect(wake.request.payload).toMatchObject({ openwa: { event: "message", triggerClass: "owner", deliveryIds: [wake.delivery.id] } });
 
     const run = await runStart(t, wake);
-    expect(run.wakeEvent).toMatchObject({ event: "message", triggerClass: "owner", profile: "full", chat: { type: "dm" } });
+    expect(run.wakeEvent).toMatchObject({ event: "message", triggerClass: "owner", senderClass: "owner", chat: { type: "dm" } });
     expect(run.wakeEvent.messages).toEqual([
       expect.objectContaining({ id: wake.row.waMessageId, triggerId: wake.delivery.id, text: "tolong cek status deploy", media: [], location: null, contact: null }),
     ]);

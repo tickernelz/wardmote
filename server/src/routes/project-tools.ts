@@ -4,7 +4,6 @@ import { projectToolContext } from "../services/project-tool-context.js";
 import { callProjectTool, projectToolDefinitions } from "../services/project-tools.js";
 import { assertCompanyAccess } from "./authz.js";
 import { forbidden } from "../errors.js";
-import { assertOpenwaRunMay } from "../services/openwa/authority.js";
 
 /** Mounted after actor middleware; connection-scoped tokens cannot authenticate here. */
 export function projectToolRoutes(db: Db) {
@@ -21,7 +20,6 @@ export function projectToolRoutes(db: Db) {
     if (method !== "tools/call") return res.json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
     try {
       if (!definitions.some((tool: { name?: string }) => tool.name === params?.name)) throw forbidden("Tool is unavailable in this mode");
-      if (params.name === "create_project" || params.name === "create_task") await assertOpenwaRunMay(db, context.run, "create_task", { consume: false });
       const apiUrl = process.env.WARDMOTE_API_URL;
       if (!apiUrl) throw new Error("Wardmote API origin is unavailable");
       const result = await callProjectTool({

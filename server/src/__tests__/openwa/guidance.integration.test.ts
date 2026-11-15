@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { promises as fs } from "node:fs";
@@ -29,7 +29,6 @@ import {
   toolApplications,
   toolConnections,
 } from "@tickernelz/wardmote-db";
-import { OPENWA_APPROVAL_CATEGORIES, type OpenwaApprovalCategory } from "@tickernelz/wardmote-shared";
 import { selectWardmoteTaskMarkdown } from "@tickernelz/wardmote-adapter-utils/server-utils";
 import {
   getEmbeddedPostgresTestSupport,
@@ -37,11 +36,11 @@ import {
 } from "../helpers/embedded-postgres.js";
 import { buildWardmoteTaskMarkdown, heartbeatService } from "../../services/heartbeat.ts";
 import { registerServerAdapter, unregisterServerAdapter } from "../../adapters/index.ts";
-import { assertOpenwaRunMay } from "../../services/openwa/authority.ts";
 import { createDurableChatWakeupRequest } from "../../services/durable-chat-wakeup.ts";
 import { dispatchOpenwaApprovalWake, OPENWA_APPROVAL_WAKE_ACTION_KIND, registerOpenwaApprovalWakeRuntime } from "../../services/openwa/approvals.ts";
 import {
   OPENWA_GUIDANCE_VERSION,
+  OPENWA_SENDER_RULES,
   OPENWA_WAKE_CONTEXT_KEY,
   OPENWA_WAKE_MAX_MESSAGES,
   OPENWA_WAKE_MAX_TEXT,
@@ -366,13 +365,7 @@ describeEmbeddedPostgres("OpenWA guidance at run start", () => {
     return { requestId: request!.id, grantId: grant!.id };
   }
 
-  async function gateAllows(runId: string, category: OpenwaApprovalCategory) {
-    const [run] = await db.select({ id: heartbeatRuns.id, companyId: heartbeatRuns.companyId, contextSnapshot: heartbeatRuns.contextSnapshot })
-      .from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
-    return assertOpenwaRunMay(db, run!, category, { consume: false }).then(() => true, () => false);
-  }
-
-  it("states owner and read_only policy facts differently in both markdown variants", async () => {
+  it("keeps the guidance byte-identical for owner and non-owner runs up to the run section, in both markdown variants", async () => {
     const seed = await seedOpenwa();
     const ownerDelivery = await seedDelivery(seed, { text: "Please create a task for the invoice", role: "owner" });
     const owner = await wakeOpenwa(seed, { triggerClass: "owner", deliveryIds: [ownerDelivery.id] });
@@ -380,7 +373,7 @@ describeEmbeddedPostgres("OpenWA guidance at run start", () => {
     const other = await wakeOpenwa(seed, { triggerClass: "other", deliveryIds: [otherDelivery.id] });
 
     expect(owner.context.wardmoteToolProfile).toBe("full");
-    expect(other.context.wardmoteToolProfile).toBe("read_only");
+    expect(other.context.wardmoteToolProfile).toBe("full");
     for (const result of [owner, other]) {
       for (const markdown of [result.full, result.compact]) {
         expect(markdown).toContain("## WhatsApp (OpenWA) guidance v" + OPENWA_GUIDANCE_VERSION);
@@ -404,23 +397,29 @@ describeEmbeddedPostgres("OpenWA guidance at run start", () => {
         { ...result.context, wardmoteWake: { reason: "issue_commented", commentIds: [randomUUID()] } },
         { resumedSession: true },
       );
-      expect(resumed).toContain("profile `" + result.wake.profile + "`");
+      expect(resumed).toContain("sender class `" + result.wake.senderClass + "`");
       expect(resumed).not.toContain("Issue description:");
     }
-    expect(owner.full).toContain("trigger class `owner`, profile `full`");
-    expect(owner.full).toContain("Allowed without approval in this run: `create_task`, `external_tools`, `cross_chat_send`, `wa_admin`.");
-    expect(owner.full).toContain("Requires owner approval in this run: none.");
-    expect(owner.full).not.toContain("only for read-only commands");
-    expect(owner.full).toContain("use `openwa_endpoint_config`");
+    const runSection = "## OpenWA this run";
+    const stablePrefix = (markdown: string) => markdown.slice(markdown.indexOf("## WhatsApp (OpenWA) guidance"), markdown.indexOf(runSection));
+    const digest = (markdown: string) => createHash("sha256").update(stablePrefix(markdown)).digest("hex");
+    expect(stablePrefix(owner.full).length).toBeGreaterThan(3000);
+    expect(digest(owner.full)).toBe(digest(other.full));
+    expect(digest(owner.compact)).toBe(digest(other.compact));
+    expect(stablePrefix(owner.full)).toContain(OPENWA_SENDER_RULES);
+    expect(stablePrefix(owner.full)).not.toContain("Halo");
+    expect(owner.full).toContain("trigger class `owner`, sender class `owner`");
+    expect(owner.full.slice(owner.full.indexOf(runSection))).toContain("use `openwa_endpoint_config`");
     expect(other.full).not.toContain("openwa_endpoint_config");
-    expect(other.full).toContain("trigger class `other`, profile `read_only`");
-    expect(other.full).toContain("Allowed without approval in this run: none.");
-    expect(other.full).toContain("Requires owner approval in this run: `create_task`, `external_tools`, `cross_chat_send`, `wa_admin`.");
-    expect(other.full).toContain("Use `bash` only for read-only commands");
-    expect(owner.wake).toMatchObject({ event: "message", triggerClass: "owner", profile: "full", chat: { type: "dm", activation: "on", name: "Member Budi" } });
-    expect(other.wake.policy).toMatchObject({ replyAllowed: true, allowedCategories: [], approvalRequired: ["create_task", "external_tools", "cross_chat_send", "wa_admin"] });
+    expect(other.full).toContain("trigger class `other`, sender class `non_owner`");
+    for (const markdown of [owner.full, other.full]) {
+      expect(markdown).not.toContain("read_only");
+      expect(markdown).not.toContain("Requires owner approval in this run");
+    }
+    expect(owner.wake).toMatchObject({ event: "message", triggerClass: "owner", senderClass: "owner", chat: { type: "dm", activation: "on", name: "Member Budi" } });
+    expect(other.wake).toMatchObject({ senderClass: "non_owner", policy: { replyAllowed: true } });
     expect(other.wake.messages.map((message) => message.text)).toEqual(["Halo, ada update?"]);
-    expect(other.wake.messages[0]).toMatchObject({ triggerId: otherDelivery.id, id: otherDelivery.waMessageId, sender: { role: "allowed", name: "Member Budi" } });
+    expect(other.wake.messages[0]).toMatchObject({ triggerId: otherDelivery.id, id: otherDelivery.waMessageId, sender: { role: "allowed", senderRole: "non_owner", allowlisted: true, name: "Member Budi" } });
   });
 
   it("names linked read-only numbers in owner runs only", async () => {
@@ -523,7 +522,7 @@ describeEmbeddedPostgres("OpenWA guidance at run start", () => {
     expect(mentioned.wake.chat.type).toBe("group");
     expect(mentioned.wake.policy).toMatchObject({ replyAllowed: true, replyRequires: [] });
     expect(mentioned.full).toContain("Replying in this chat: allowed for this run.");
-    expect(mentioned.wake.profile).toBe("read_only");
+    expect(mentioned.wake.senderClass).toBe("non_owner");
     const unaddressed = await wakeOpenwa(seed, {
       triggerClass: "other",
       deliveryIds: [(await seedDelivery(seed, { text: "invoice due", role: "outside_allowlist", rules: ["keywords"] })).id],
@@ -576,46 +575,8 @@ describeEmbeddedPostgres("OpenWA guidance at run start", () => {
     for (const markdown of [other.full, other.compact, owner.full, owner.compact]) {
       expect(markdown).toContain("directly by name. Never enumerate tools to discover them (no `tools.list`, catalog or search call)");
     }
-    expect(other.full).toContain("you are not acting for an owner and the profile is `read_only`");
-    expect(owner.full).toContain("you act for an owner with profile `full`");
-  });
-
-  it("never claims a capability the run's gate denies", async () => {
-    const seed = await seedOpenwa({ policy: { gatewayAdminTools: "read" } });
-    const ownerRun = await wakeOpenwa(seed, { triggerClass: "owner", deliveryIds: [(await seedDelivery(seed, { text: "do it", role: "owner" })).id] });
-    const otherRun = await wakeOpenwa(seed, { triggerClass: "other", deliveryIds: [(await seedDelivery(seed, { text: "hi" })).id] });
-    const { requestId, grantId } = await grantFor(seed, "create_task");
-    const grantRun = await wakeOpenwa(seed, {
-      triggerClass: "grant", deliveryIds: [], event: "approval_resolved", grantIds: [grantId], approvalRequestId: requestId,
-      requesterPrincipalId: seed.peerPrincipalId,
-    });
-    expect(grantRun.wake.policy.grants.map((grant) => grant.id)).toEqual([grantId]);
-    expect(grantRun.wake.policy.allowedCategories).toEqual(["create_task"]);
-    expect(grantRun.wake.approvalRequestId).toBe(requestId);
-    expect(grantRun.full).toContain("`create_task` (grant `" + grantId + "`");
-    expect(ownerRun.wake.policy.allowedCategories).toContain("gateway_admin");
-    for (const run of [ownerRun, otherRun, grantRun]) {
-      for (const category of OPENWA_APPROVAL_CATEGORIES) {
-        const gate = await gateAllows(run.runId, category);
-        if (run.wake.policy.allowedCategories.includes(category)) {
-          expect({ profile: run.wake.profile, category, gate }).toEqual({ profile: run.wake.profile, category, gate: true });
-        } else {
-          expect(run.wake.policy.approvalRequired.includes(category) || run.wake.policy.unavailable.includes(category)).toBe(true);
-          if (run.wake.profile === "read_only") expect({ category, gate }).toEqual({ category, gate: false });
-        }
-      }
-    }
-  });
-
-  it("lists a category whose approval toggle is off as allowed, matching the gate", async () => {
-    const seed = await seedOpenwa({ policy: { approvals: { createTask: false } } });
-    const run = await wakeOpenwa(seed, { triggerClass: "other", deliveryIds: [(await seedDelivery(seed, { text: "please open a task" })).id] });
-    expect(run.wake.profile).toBe("read_only");
-    expect(run.wake.policy.allowedCategories).toEqual(["create_task"]);
-    expect(run.wake.policy.approvalRequired).toEqual(["external_tools", "cross_chat_send", "wa_admin"]);
-    expect(run.full).toContain("Allowed without approval in this run: `create_task`.");
-    await expect(gateAllows(run.runId, "create_task")).resolves.toBe(true);
-    await expect(gateAllows(run.runId, "external_tools")).resolves.toBe(false);
+    expect(other.full).toContain("sender class `non_owner`");
+    expect(owner.full).toContain("sender class `owner`");
   });
 
   it("applies edited custom instructions and chat note on the next wake without new issues", async () => {
@@ -695,7 +656,7 @@ describeEmbeddedPostgres("OpenWA guidance at run start", () => {
     expect(withMedia.contact).toEqual({ name: "Rina", phones: ["+62xxx...6777"] });
     expect(result.wake.lastOutputSuppressed).toBe(true);
     expect(result.full).toContain("Your previous final output in this chat was not published");
-    expect(result.wake.sender).toEqual({ name: "Member Budi", phoneMasked: "+62xxx...2333", role: "allowed" });
+    expect(result.wake.sender).toEqual({ name: "Member Budi", phoneMasked: "+62xxx...2333", role: "allowed", senderRole: "non_owner", allowlisted: true });
     expect(result.wake.chat.id).toBe("+62xxx...2333");
     expect(result.wake.messages[0]!.mentions).toEqual(['owner:"Dina Owner"']);
     expect(result.full.length).toBeLessThan(80_000);

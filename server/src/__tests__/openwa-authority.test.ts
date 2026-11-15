@@ -9,6 +9,7 @@ import {
   agents,
   authUsers,
   chatActions,
+  chatAuditEntries,
   chatCompletionDeliveries,
   chatConversations,
   chatDeliveries,
@@ -18,7 +19,6 @@ import {
   chatIdentityLinks,
   chatOwnerApprovalRequests,
   chatOwnerGrants,
-  issueAutonomyWindows,
   chatTaskHandoffs,
   companies,
   companyMemberships,
@@ -48,15 +48,8 @@ import { scheduleOpenwaFollowupForRun } from "../services/openwa/followups.js";
 import { openwaTaskChatOrigin } from "../services/chat-completion-delivery.js";
 import {
   OPENWA_RUN_CONTEXT_KEY,
-  OpenwaApprovalRequiredError,
   applyOpenwaRunContext,
-  assertOpenwaRunMay,
   isOpenwaConversationIssue,
-  isOpenwaConversationTreeIssue,
-  openwaAllowedCategories,
-  openwaGrantScope,
-  openwaHostGitHubAllowed,
-  openwaReadOnlyRestDecision,
   openwaRunCarriesGrants,
   resolveOpenwaRunContext,
   type OpenwaRunContext,
@@ -79,150 +72,10 @@ const CHAT_KEY = "628111222333@c.us";
 
 type Seed = Awaited<ReturnType<typeof seedCompany>>;
 
-describe("openwaReadOnlyRestDecision", () => {
-  const own = "11111111-1111-4111-8111-111111111111";
-  const other = "22222222-2222-4222-8222-222222222222";
-  it.each([
-    ["GET", `/api/companies/c/issues`, undefined],
-    ["HEAD", `/api/issues/${other}`, undefined],
-    ["OPTIONS", `/api/companies/c/projects`, undefined],
-    ["POST", `/api/issues/${own}/comments`, { body: "hi" }],
-    ["POST", `/api/companies/c/issues/${own}/attachments`, undefined],
-    ["POST", `/api/issues/${own}/work-products`, {}],
-    ["PUT", `/api/issues/${own}/documents/plan`, {}],
-    ["POST", `/api/issues/${own}/checkout`, {}],
-    ["POST", `/api/issues/${own}/release`, {}],
-    ["PATCH", `/api/issues/${own}`, { status: "done", comment: "Finished" }],
-    ["POST", `/api/issues/${own}/share-link`, {}],
-    ["POST", "/api/mcp/wardmote", {}],
-    ["POST", "/api/tool-gateway/tools/call", {}],
-    ["POST", "/api/companies/c/email/send", {}],
-    ["POST", `/api/companies/c/openwa/tasks/${own}/tools`, {}],
-  ])("allows %s %s", (method, path, body) => {
-    expect(openwaReadOnlyRestDecision({ method, path, ownIssueId: own, body })).toEqual({ allowed: true });
-  });
-
-  it.each([
-    ["POST", "/api/companies/c/issues", {}, "create_task"],
-    ["POST", `/api/issues/${own}/children`, {}, "create_task"],
-    ["POST", "/api/companies/c/projects", {}, "create_task"],
-    ["PATCH", `/api/issues/${own}`, { assigneeAgentId: other }, "create_task"],
-    ["PATCH", `/api/issues/${other}`, { assigneeUserId: "u" }, "create_task"],
-    ["PATCH", `/api/issues/${own}`, { title: "renamed" }, "external_tools"],
-    ["POST", `/api/issues/${other}/comments`, { body: "hi" }, "external_tools"],
-    ["PUT", `/api/issues/${other}/documents/plan`, {}, "external_tools"],
-    ["DELETE", `/api/issues/${own}`, undefined, "external_tools"],
-    ["POST", "/api/agents/me/secret-proposals", {}, "external_tools"],
-    ["POST", "/api/companies/c/routines", {}, "external_tools"],
-    ["POST", `/api/issues/${other}/checkout`, {}, "external_tools"],
-    ["POST", `/api/issues/${other}/share-link`, {}, "external_tools"],
-    ["DELETE", `/api/issues/${own}/share-link`, undefined, "external_tools"],
-  ])("denies %s %s", (method, path, body, category) => {
-    expect(openwaReadOnlyRestDecision({ method, path, ownIssueId: own, body, treeIssueKeys: new Set() })).toEqual({ allowed: false, category });
-  });
-
-  it("asks the caller to resolve conversation-tree membership for tree writes and keeps checkout and release own-only", () => {
-    for (const [method, path, body] of [
-      ["POST", `/api/issues/${other}/comments`, { body: "hi" }],
-      ["POST", `/api/companies/c/issues/${other}/attachments`, undefined],
-      ["POST", `/api/issues/${other}/work-products`, {}],
-      ["PUT", `/api/issues/${other}/documents/plan`, {}],
-      ["POST", `/api/issues/${other}/share-link`, {}],
-      ["PATCH", `/api/issues/${other}`, { status: "done" }],
-    ] as const) {
-      expect(openwaReadOnlyRestDecision({ method, path, ownIssueId: own, body })).toEqual({ allowed: "treeIssue", issueKey: other });
-      expect(openwaReadOnlyRestDecision({ method, path, ownIssueId: own, body, treeIssueKeys: new Set([other]) })).toEqual({ allowed: true });
-      expect(openwaReadOnlyRestDecision({ method, path, ownIssueId: own, body, treeIssueKeys: new Set() }))
-        .toEqual({ allowed: false, category: "external_tools" });
-      expect(openwaReadOnlyRestDecision({ method, path, ownIssueId: null, body })).toEqual({ allowed: false, category: "external_tools" });
-    }
-    const tree = new Set([other]);
-    for (const verb of ["checkout", "release"]) {
-      expect(openwaReadOnlyRestDecision({ method: "POST", path: `/api/issues/${other}/${verb}`, ownIssueId: own, body: {}, treeIssueKeys: tree }))
-        .toEqual({ allowed: false, category: "external_tools" });
-    }
-    expect(openwaReadOnlyRestDecision({ method: "PATCH", path: `/api/issues/${other}`, ownIssueId: own, body: { assigneeAgentId: own }, treeIssueKeys: tree }))
-      .toEqual({ allowed: false, category: "create_task" });
-    expect(openwaReadOnlyRestDecision({ method: "PATCH", path: `/api/issues/${other}`, ownIssueId: own, body: { title: "renamed" }, treeIssueKeys: tree }))
-      .toEqual({ allowed: false, category: "external_tools" });
-  });
-
-  it("matches paths case-insensitively like the Express router", () => {
-    const upperOwn = own.toUpperCase();
-    for (const [method, path, body] of [
-      ["POST", "/API/Companies/c/ISSUES", {}],
-      ["POST", `/Api/issues/${own}/children`, {}],
-      ["POST", `/API/ISSUES/${upperOwn}/CHILDREN/`, {}],
-      ["PATCH", `/API/Issues/${upperOwn}`, { assigneeAgentId: other }],
-    ] as const) {
-      expect(openwaReadOnlyRestDecision({ method, path, ownIssueId: own, body })).toEqual({ allowed: false, category: "create_task" });
-    }
-    expect(openwaReadOnlyRestDecision({ method: "POST", path: `/API/Issues/${upperOwn}/Comments`, ownIssueId: own, body: {} }))
-      .toEqual({ allowed: true });
-    expect(openwaReadOnlyRestDecision({ method: "POST", path: `/Api/Issues/${own}/Comments`, ownIssueId: upperOwn, body: {} }))
-      .toEqual({ allowed: true });
-    expect(openwaReadOnlyRestDecision({ method: "POST", path: `/API/Issues/${other}/Comments`, ownIssueId: own, body: {}, treeIssueKeys: new Set() }))
-      .toEqual({ allowed: false, category: "external_tools" });
-    expect(openwaReadOnlyRestDecision({ method: "POST", path: "/API/Companies/c/Routines", ownIssueId: own, body: {} }))
-      .toEqual({ allowed: false, category: "external_tools" });
-  });
-
-  it("accepts the run's own issue by identifier and never another issue's identifier", () => {
-    for (const path of ["/api/issues/ZHA-2/comments", "/api/issues/zha-2/comments", "/api/issues/ZHA-2"]) {
-      const body = path.endsWith("comments") ? { body: "hi" } : { status: "in_progress" };
-      expect(openwaReadOnlyRestDecision({ method: path.endsWith("comments") ? "POST" : "PATCH", path, ownIssueId: own, ownIssueIdentifier: "ZHA-2", body })).toEqual({ allowed: true });
-    }
-    expect(openwaReadOnlyRestDecision({ method: "POST", path: "/api/issues/ZHA-3/comments", ownIssueId: own, ownIssueIdentifier: "ZHA-2", body: {}, treeIssueKeys: new Set() }))
-      .toEqual({ allowed: false, category: "external_tools" });
-    expect(openwaReadOnlyRestDecision({ method: "POST", path: "/api/issues/ZHA-2/checkout", ownIssueId: own, body: {} }))
-      .toEqual({ allowed: false, category: "external_tools" });
-  });
-
-  it("checks work products against the run's own issue", () => {
-    const path = "/api/work-products/33333333-3333-4333-8333-333333333333";
-    expect(openwaReadOnlyRestDecision({ method: "PATCH", path, ownIssueId: own })).toMatchObject({ allowed: "workProduct" });
-    expect(openwaReadOnlyRestDecision({ method: "PATCH", path, ownIssueId: own, workProductIssueId: own })).toEqual({ allowed: true });
-    expect(openwaReadOnlyRestDecision({ method: "PATCH", path, ownIssueId: own, workProductIssueId: other }))
-      .toEqual({ allowed: "treeIssue", issueKey: other });
-    expect(openwaReadOnlyRestDecision({ method: "PATCH", path, ownIssueId: own, workProductIssueId: other, treeIssueKeys: new Set([other]) }))
-      .toEqual({ allowed: true });
-    expect(openwaReadOnlyRestDecision({ method: "PATCH", path, ownIssueId: own, workProductIssueId: other, treeIssueKeys: new Set() }))
-      .toEqual({ allowed: false, category: "external_tools" });
-    expect(openwaReadOnlyRestDecision({ method: "PATCH", path, ownIssueId: own, workProductIssueId: null }))
-      .toEqual({ allowed: false, category: "external_tools" });
-  });
-
-  it("allows the dispatcher routes whose inner seams decide", () => {
-    for (const [method, path] of [
-      ["POST", "/api/plugins/tools/execute"],
-      ["POST", `/api/companies/c/slack/tasks/${own}/tools`],
-      ["PUT", "/api/companies/c/slack/endpoints/e/search"],
-      ["POST", "/api/mcp/project-tools"],
-    ] as const) {
-      expect(openwaReadOnlyRestDecision({ method, path, ownIssueId: own, body: {} })).toEqual({ allowed: true });
-    }
-  });
-});
-
-describe("openwaAllowedCategories", () => {
-  const approvals = { createTask: true, externalTools: true, crossChatSend: true, waAdmin: true, gatewayAdmin: true, reminderMinutes: 30, maxReminders: 3, grantTtlHours: 24 };
-  it("allows a category in read_only when its approval toggle is off", () => {
-    expect(openwaAllowedCategories({ approvals }, "read_only", [], "read")).toEqual({
-      allowed: [], approvalRequired: ["create_task", "external_tools", "cross_chat_send", "wa_admin", "gateway_admin"], unavailable: [],
-    });
-    expect(openwaAllowedCategories({ approvals: { ...approvals, createTask: false } }, "read_only", ["external_tools"], "off")).toEqual({
-      allowed: ["create_task", "external_tools"], approvalRequired: ["cross_chat_send", "wa_admin"], unavailable: ["gateway_admin"],
-    });
-  });
-});
-
 describe("openwaRunCarriesGrants", () => {
-  const run = { profile: "read_only" as const, toolProfile: "read_only" as const, grantIds: [] as string[], grantedCategories: [] as OpenwaRunContext["grantedCategories"] };
-  it("counts only grant rows and consumed grant categories, not a full tool profile from an approval toggle", () => {
-    expect(openwaRunCarriesGrants(run)).toBe(false);
-    expect(openwaRunCarriesGrants({ ...run, toolProfile: "full" })).toBe(false);
-    expect(openwaRunCarriesGrants({ ...run, grantIds: ["grant-1"] })).toBe(true);
-    expect(openwaRunCarriesGrants({ ...run, grantedCategories: ["external_tools"] })).toBe(true);
+  it("counts grant rows only", () => {
+    expect(openwaRunCarriesGrants({ grantIds: [] })).toBe(false);
+    expect(openwaRunCarriesGrants({ grantIds: ["grant-1"] })).toBe(true);
   });
 });
 
@@ -299,24 +152,20 @@ async function seedGrant(
 }
 
 function openwaContext(seed: Seed, input: Partial<OpenwaRunContext>): OpenwaRunContext {
-  const profile = input.profile ?? "read_only";
   return {
-    endpointId: seed.endpointId, chatKey: CHAT_KEY, triggerClass: "other", profile,
-    toolProfile: profile, event: null, grantIds: [], deliveryIds: [],
-    runAllowedCategories: profile === "full" ? ["create_task", "external_tools", "cross_chat_send", "wa_admin"] : [],
-    grantedCategories: [], requesterPrincipalId: null, approvalRequestId: null, triggerPrincipalId: null, ...input,
+    endpointId: seed.endpointId, chatKey: CHAT_KEY, triggerClass: "other", senderClass: "non_owner", event: null, grantIds: [], deliveryIds: [],
+    requesterPrincipalId: null, approvalRequestId: null, triggerPrincipalId: null, ...input,
   };
 }
 
 async function seedRun(
   db: ReturnType<typeof createDb>,
   seed: Seed,
-  input: { issueId?: string; profile?: "full" | "read_only" | null; openwa?: OpenwaRunContext | null; native?: boolean },
+  input: { issueId?: string; openwa?: OpenwaRunContext | null; native?: boolean },
 ) {
   const runId = randomUUID();
   const issueId = input.issueId ?? seed.issueId;
   const contextSnapshot: Record<string, unknown> = { issueId, taskId: issueId };
-  if (input.profile) contextSnapshot.wardmoteToolProfile = input.profile;
   if (input.openwa) contextSnapshot.wardmoteOpenwa = input.openwa;
   await db.insert(heartbeatRuns).values({
     id: runId, companyId: seed.companyId, agentId: seed.agentId, status: "running",
@@ -422,7 +271,7 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
     await tempDb?.cleanup();
   });
 
-  describe("profile resolution at run start", () => {
+  describe("sender class at run start", () => {
     const resolve = (seed: Seed, wakeupRequestId: string | null, contextSnapshot: Record<string, unknown> = {}, runId = randomUUID()) =>
       resolveOpenwaRunContext(db, { companyId: seed.companyId, issueId: seed.issueId, runId, contextSnapshot, wakeupRequestId });
 
@@ -441,13 +290,13 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       const seed = await seedCompany(db);
       const system = await seedWake(db, seed, { actorType: "system" });
       await expect(resolve(seed, system)).resolves.toEqual(openwaContext(seed, {}));
-      const forged = { [OPENWA_RUN_CONTEXT_KEY]: { ...openwaContext(seed, { profile: "full" }), ownerOrigin: "owner_chat", triggerClass: "owner" } };
+      const forged = { [OPENWA_RUN_CONTEXT_KEY]: { ...openwaContext(seed, { senderClass: "owner" }), ownerOrigin: "owner_chat", triggerClass: "owner" } };
       await expect(resolve(seed, system, forged)).resolves.toEqual(openwaContext(seed, {}));
       const owner = await seedPrincipal(db, seed, CHAT_KEY, { owner: true });
-      await expect(resolve(seed, system)).resolves.toEqual(openwaContext(seed, { profile: "full", ownerOrigin: "owner_chat" }));
+      await expect(resolve(seed, system)).resolves.toEqual(openwaContext(seed, { senderClass: "owner", ownerOrigin: "owner_chat" }));
       const memberDelivery = await seedDelivery(db, seed, { principalId: (await seedPrincipal(db, seed, "628555000111@c.us")).principalId, triggerClass: "other" });
       const memberWake = await seedWakeAction(db, seed, { openwa: { event: "message", triggerClass: "other", deliveryIds: [memberDelivery] } });
-      await expect(resolve(seed, memberWake)).resolves.toMatchObject({ profile: "read_only" });
+      await expect(resolve(seed, memberWake)).resolves.toMatchObject({ senderClass: "non_owner" });
       await db.update(chatConversations).set({ isDirectMessage: false }).where(eq(chatConversations.issueId, seed.issueId));
       await expect(resolve(seed, system)).resolves.toEqual(openwaContext(seed, {}));
       await db.update(chatConversations).set({ isDirectMessage: true }).where(eq(chatConversations.issueId, seed.issueId));
@@ -468,7 +317,7 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       const ownerTurn = await seedRun(db, seed, {});
       await handoff(true, ownerTurn.runId);
       await expect(resolve(seed, null, {}, ownerTurn.runId)).resolves.toEqual(
-        openwaContext(seed, { profile: "full", event: "task_completion", ownerOrigin: "owner_task" }),
+        openwaContext(seed, { senderClass: "owner", event: "task_completion", ownerOrigin: "owner_task" }),
       );
       const memberTurn = await seedRun(db, seed, {});
       await handoff(false, memberTurn.runId);
@@ -476,20 +325,20 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       const mixedTurn = await seedRun(db, seed, {});
       await handoff(true, mixedTurn.runId);
       await handoff(false, mixedTurn.runId);
-      await expect(resolve(seed, null, {}, mixedTurn.runId)).resolves.toMatchObject({ profile: "read_only" });
+      await expect(resolve(seed, null, {}, mixedTurn.runId)).resolves.toMatchObject({ senderClass: "non_owner" });
     });
 
     it("is full only for a board user wake without chat provenance", async () => {
       const seed = await seedCompany(db);
       const board = await seedWake(db, seed, { actorType: "user", actorId: BOARD_USER });
-      await expect(resolve(seed, board)).resolves.toEqual(openwaContext(seed, { profile: "full" }));
-      await expect(resolve(seed, board, { source: "chat:openwa" })).resolves.toMatchObject({ profile: "read_only" });
-      await expect(resolve(seed, board, { chatFailedRunRetry: { version: 1 } })).resolves.toMatchObject({ profile: "read_only" });
+      await expect(resolve(seed, board)).resolves.toEqual(openwaContext(seed, { senderClass: "owner" }));
+      await expect(resolve(seed, board, { source: "chat:openwa" })).resolves.toMatchObject({ senderClass: "non_owner" });
+      await expect(resolve(seed, board, { chatFailedRunRetry: { version: 1 } })).resolves.toMatchObject({ senderClass: "non_owner" });
       const inbound = await seedWake(db, seed, { actorType: "user", actorId: BOARD_USER, idempotencyKey: "chat-inbound:" + randomUUID() });
-      await expect(resolve(seed, inbound)).resolves.toMatchObject({ profile: "read_only" });
+      await expect(resolve(seed, inbound)).resolves.toMatchObject({ senderClass: "non_owner" });
       const action = await seedWakeAction(db, seed, { openwa: null });
       await db.update(agentWakeupRequests).set({ requestedByActorType: "user", requestedByActorId: BOARD_USER }).where(eq(agentWakeupRequests.id, action));
-      await expect(resolve(seed, action)).resolves.toMatchObject({ profile: "read_only" });
+      await expect(resolve(seed, action)).resolves.toMatchObject({ senderClass: "non_owner" });
     });
 
     it("classes a board wake by the endpoint's owner user as owner and any other board user as other", async () => {
@@ -499,12 +348,12 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       const otherComment = await seedWake(db, seed, { actorType: "user", actorId: "openwa-other-board-user" });
 
       await expect(resolve(seed, ownerComment)).resolves.toEqual(
-        openwaContext(seed, { triggerClass: "owner", profile: "full", triggerPrincipalId: owner.principalId }),
+        openwaContext(seed, { triggerClass: "owner", senderClass: "owner", triggerPrincipalId: owner.principalId }),
       );
-      await expect(resolve(seed, otherComment)).resolves.toEqual(openwaContext(seed, { profile: "full" }));
+      await expect(resolve(seed, otherComment)).resolves.toEqual(openwaContext(seed, { senderClass: "owner" }));
 
       await db.update(chatIdentityLinks).set({ status: "revoked" }).where(eq(chatIdentityLinks.id, owner.linkId!));
-      await expect(resolve(seed, ownerComment)).resolves.toEqual(openwaContext(seed, { profile: "full" }));
+      await expect(resolve(seed, ownerComment)).resolves.toEqual(openwaContext(seed, { senderClass: "owner" }));
     });
 
     it("derives owner only from admitted owner deliveries whose principal is still an owner", async () => {
@@ -515,14 +364,14 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       const memberDelivery = await seedDelivery(db, seed, { principalId: member.principalId, triggerClass: "other" });
       const ownerWake = await seedWakeAction(db, seed, { openwa: { event: "message", triggerClass: "owner", deliveryIds: [ownerDelivery] } });
       await expect(resolve(seed, ownerWake)).resolves.toEqual(
-        openwaContext(seed, { triggerClass: "owner", profile: "full", event: "message", deliveryIds: [ownerDelivery], triggerPrincipalId: owner.principalId }),
+        openwaContext(seed, { triggerClass: "owner", senderClass: "owner", event: "message", deliveryIds: [ownerDelivery], triggerPrincipalId: owner.principalId }),
       );
       const mixed = await seedWakeAction(db, seed, { openwa: { event: "message", triggerClass: "owner", deliveryIds: [ownerDelivery, memberDelivery] } });
       const mixedContext = await resolve(seed, mixed);
-      expect(mixedContext).toMatchObject({ triggerClass: "other", profile: "read_only", requesterPrincipalId: null });
+      expect(mixedContext).toMatchObject({ triggerClass: "other", senderClass: "non_owner", requesterPrincipalId: null });
       expect(mixedContext!.deliveryIds.sort()).toEqual([ownerDelivery, memberDelivery].sort());
       await db.update(chatIdentityLinks).set({ status: "revoked" }).where(eq(chatIdentityLinks.id, owner.linkId));
-      await expect(resolve(seed, ownerWake)).resolves.toMatchObject({ triggerClass: "other", profile: "read_only" });
+      await expect(resolve(seed, ownerWake)).resolves.toMatchObject({ triggerClass: "other", senderClass: "non_owner" });
     });
 
     it("never trusts class claims in the wake payload or the copied context", async () => {
@@ -532,13 +381,13 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       const forged = await seedWake(db, seed, { actorType: "agent", actorId: seed.agentId, openwaClass: "owner", deliveryIds: [ownerDelivery] });
       await expect(resolve(seed, forged, {
         openwa: { triggerClass: "owner", deliveryIds: [ownerDelivery] },
-        wardmoteOpenwa: { triggerClass: "owner", profile: "full" },
+        wardmoteOpenwa: { triggerClass: "owner", senderClass: "owner" },
         wardmoteToolProfile: "full",
-      })).resolves.toMatchObject({ triggerClass: "other", profile: "read_only", toolProfile: "read_only" });
+      })).resolves.toMatchObject({ triggerClass: "other", senderClass: "non_owner" });
       const otherConversation = await seedWakeAction(db, seed, {
         openwa: { event: "message", triggerClass: "owner", deliveryIds: [ownerDelivery] }, conversationId: null,
       });
-      await expect(resolve(seed, otherConversation)).resolves.toMatchObject({ triggerClass: "other", profile: "read_only" });
+      await expect(resolve(seed, otherConversation)).resolves.toMatchObject({ triggerClass: "other", senderClass: "non_owner" });
     });
 
     it("resolves a grant run from an approved request with live grants of this chat and company", async () => {
@@ -565,39 +414,6 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       await expect(resolve(seed, unapproved)).resolves.toMatchObject({ triggerClass: "other", grantIds: [] });
     });
 
-    it("consumes a one_action external_tools grant at grant-run start and gives the run the full tool profile", async () => {
-      const seed = await seedCompany(db);
-      const grant = await seedGrant(db, seed, { category: "external_tools" });
-      const run = await seedRun(db, seed, {});
-      const wake = await seedWakeAction(db, seed, { openwa: { event: "approval_resolved", deliveryIds: [], approvalRequestId: grant.requestId } });
-      const resolved = await resolve(seed, wake, {}, run.runId);
-      expect(resolved).toMatchObject({ triggerClass: "grant", profile: "read_only", toolProfile: "full", grantedCategories: ["external_tools"], runAllowedCategories: ["external_tools"] });
-      const [row] = await db.select().from(chatOwnerGrants).where(eq(chatOwnerGrants.id, grant.grantId));
-      expect(row).toMatchObject({ status: "consumed", consumedByRunId: run.runId });
-      await expect(resolve(seed, wake, {}, run.runId)).resolves.toMatchObject({ toolProfile: "full" });
-      await expect(resolve(seed, wake, {}, (await seedRun(db, seed, {})).runId)).resolves.toMatchObject({ triggerClass: "other", toolProfile: "read_only" });
-      const context: Record<string, unknown> = {};
-      applyOpenwaRunContext(context, resolved);
-      expect(context.wardmoteToolProfile).toBe("full");
-      await expect(assertOpenwaRunMay(db, { id: run.runId, companyId: seed.companyId, contextSnapshot: context }, "external_tools")).resolves.toBeNull();
-      await expect(assertOpenwaRunMay(db, { id: run.runId, companyId: seed.companyId, contextSnapshot: context }, "create_task"))
-        .rejects.toBeInstanceOf(OpenwaApprovalRequiredError);
-    });
-
-    it("gives an other run its single requester's live requester-scope grants and the full tool profile when externalTools approval is off", async () => {
-      const seed = await seedCompany(db);
-      const member = await seedPrincipal(db, seed, CHAT_KEY);
-      const delivery = await seedDelivery(db, seed, { principalId: member.principalId, triggerClass: "other" });
-      const reusable = await seedGrant(db, seed, { category: "create_task", scope: "requester", requesterPrincipalId: member.principalId });
-      const someoneElse = await seedGrant(db, seed, { category: "create_task", scope: "requester", requesterPrincipalId: (await seedPrincipal(db, seed, "628777@c.us")).principalId });
-      const wake = await seedWakeAction(db, seed, { openwa: { event: "message", triggerClass: "other", deliveryIds: [delivery] } });
-      const resolved = await resolve(seed, wake);
-      expect(resolved).toMatchObject({ triggerClass: "other", requesterPrincipalId: member.principalId, grantIds: [reusable.grantId], toolProfile: "read_only" });
-      expect(resolved!.grantIds).not.toContain(someoneElse.grantId);
-      await db.update(chatEndpoints).set({ policy: { approvals: { externalTools: false } } }).where(eq(chatEndpoints.id, seed.endpointId));
-      await expect(resolve(seed, wake)).resolves.toMatchObject({ profile: "read_only", toolProfile: "full", runAllowedCategories: ["external_tools"] });
-    });
-
     it("drops requester grants when any delivery merged into the run belongs to another principal or cannot be verified", async () => {
       const seed = await seedCompany(db);
       const member = await seedPrincipal(db, seed, CHAT_KEY);
@@ -610,8 +426,8 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       const otherChat = await seedDelivery(db, seed, { principalId: member.principalId, triggerClass: "other", chatKey: "628555000999@c.us" });
       const grant = await seedGrant(db, seed, { category: "external_tools", scope: "requester", requesterPrincipalId: member.principalId });
       const wake = await seedWakeAction(db, seed, { openwa: { event: "message", triggerClass: "other", deliveryIds: [own] } });
-      const granted = { requesterPrincipalId: member.principalId, grantIds: [grant.grantId], toolProfile: "full" };
-      const denied = { triggerClass: "other", profile: "read_only", toolProfile: "read_only", requesterPrincipalId: null, grantIds: [], grantedCategories: [] };
+      const granted = { requesterPrincipalId: member.principalId, grantIds: [grant.grantId] };
+      const denied = { triggerClass: "other", senderClass: "non_owner", requesterPrincipalId: null, grantIds: [] };
       await expect(resolve(seed, wake)).resolves.toMatchObject(granted);
       await expect(resolve(seed, wake, { openwa: { deliveryIds: [own, ownLater] } })).resolves.toMatchObject(granted);
       await expect(resolve(seed, wake, { openwa: { deliveryIds: [own, ownerDelivery] } })).resolves.toMatchObject(granted);
@@ -655,13 +471,13 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
 
       const ownerWake = await seedWakeAction(db, seed, { openwa: { event: "message", triggerClass: "owner", deliveryIds: [ownerDelivery] } });
       await expect(resolve(seed, ownerWake, { openwa: { deliveryIds: [ownerDelivery, foreign] } })).resolves.toMatchObject({
-        triggerClass: "owner", profile: "full", toolProfile: "full", grantIds: [], requesterPrincipalId: null, triggerPrincipalId: owner.principalId,
+        triggerClass: "owner", senderClass: "owner", grantIds: [], requesterPrincipalId: null, triggerPrincipalId: owner.principalId,
       });
       const oneAction = await seedGrant(db, seed, { category: "external_tools", requesterPrincipalId: member.principalId });
       const grantWake = await seedWakeAction(db, seed, { openwa: { event: "approval_resolved", triggerClass: "grant", deliveryIds: [], approvalRequestId: oneAction.requestId } });
       const run = await seedRun(db, seed, {});
       await expect(resolve(seed, grantWake, { openwa: { deliveryIds: [foreign] } }, run.runId)).resolves.toMatchObject({
-        triggerClass: "grant", requesterPrincipalId: member.principalId, grantedCategories: ["external_tools"], toolProfile: "full",
+        triggerClass: "grant", requesterPrincipalId: member.principalId,
       });
     });
 
@@ -700,71 +516,16 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       expect(await bindingQueries(plainIssue)).toEqual({ resolved: null, queries: 1 });
       expect(await bindingQueries(plainIssue)).toEqual({ resolved: null, queries: 0 });
       const openwa = await bindingQueries(seed.issueId);
-      expect(openwa.resolved).toMatchObject({ endpointId: seed.endpointId, profile: "read_only" });
+      expect(openwa.resolved).toMatchObject({ endpointId: seed.endpointId, senderClass: "non_owner" });
     });
   });
 
-  describe("assertOpenwaRunMay", () => {
-    it("allows full runs and denies read_only runs with a typed category", async () => {
-      const seed = await seedCompany(db);
-      const full = await seedRun(db, seed, { profile: "full", openwa: openwaContext(seed, { triggerClass: "owner", profile: "full" }) });
-      await expect(assertOpenwaRunMay(db, { id: full.runId, companyId: seed.companyId, contextSnapshot: full.contextSnapshot }, "create_task")).resolves.toBeNull();
-      const readOnly = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, {}) });
-      const error = await assertOpenwaRunMay(db, { id: readOnly.runId, companyId: seed.companyId, contextSnapshot: readOnly.contextSnapshot }, "external_tools").catch((err) => err);
-      expect(error).toBeInstanceOf(OpenwaApprovalRequiredError);
-      expect(error).toMatchObject({ status: 403, details: { code: "openwa_approval_required", category: "external_tools" } });
-    });
-
-    it("fails closed for a run on an OpenWA issue whose context has no profile", async () => {
-      const seed = await seedCompany(db);
-      const run = await seedRun(db, seed, {});
-      await expect(assertOpenwaRunMay(db, { id: run.runId, companyId: seed.companyId, contextSnapshot: run.contextSnapshot }, "create_task"))
-        .rejects.toBeInstanceOf(OpenwaApprovalRequiredError);
-      const plain = await seedRun(db, seed, { issueId: await seedPlainIssue(db, seed) });
-      await expect(assertOpenwaRunMay(db, { id: plain.runId, companyId: seed.companyId, contextSnapshot: plain.contextSnapshot }, "create_task"))
-        .resolves.toBeNull();
-    });
-
-    it("consumes a one_action grant exactly once under concurrency and keeps requester grants", async () => {
-      const seed = await seedCompany(db);
-      const once = await seedGrant(db, seed, { category: "create_task" });
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "grant", grantIds: [once.grantId] }) });
-      const target = { id: run.runId, companyId: seed.companyId, contextSnapshot: run.contextSnapshot };
-      await expect(assertOpenwaRunMay(db, target, "external_tools")).rejects.toBeInstanceOf(OpenwaApprovalRequiredError);
-      const outcomes = await Promise.allSettled([1, 2, 3, 4].map(() => assertOpenwaRunMay(db, target, "create_task")));
-      expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
-      expect(outcomes.filter((outcome) => outcome.status === "rejected" && outcome.reason instanceof OpenwaApprovalRequiredError)).toHaveLength(3);
-      const [row] = await db.select().from(chatOwnerGrants).where(eq(chatOwnerGrants.id, once.grantId));
-      expect(row).toMatchObject({ status: "consumed", consumedByRunId: run.runId });
-      await expect(assertOpenwaRunMay(db, target, "create_task", { consume: false })).rejects.toBeInstanceOf(OpenwaApprovalRequiredError);
-      await expect(openwaGrantScope({ companyId: seed.companyId, runId: run.runId, grantId: once.grantId }, () =>
-        assertOpenwaRunMay(db, target, "create_task", { consume: false }))).resolves.toBeNull();
-      await expect(openwaGrantScope({ companyId: seed.companyId, runId: run.runId }, () =>
-        assertOpenwaRunMay(db, target, "create_task"))).rejects.toBeInstanceOf(OpenwaApprovalRequiredError);
-
-      const requester = await seedGrant(db, seed, { category: "external_tools", scope: "requester" });
-      const reusable = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "grant", grantIds: [requester.grantId] }) });
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        await expect(assertOpenwaRunMay(db, { id: reusable.runId, companyId: seed.companyId, contextSnapshot: reusable.contextSnapshot }, "external_tools")).resolves.toBeNull();
-      }
-    });
-
-    it("allows a category whose approval toggle is off in read_only and narrows when it is turned back on", async () => {
-      const seed = await seedCompany(db);
-      await db.update(chatEndpoints).set({ policy: { approvals: { createTask: false } } }).where(eq(chatEndpoints.id, seed.endpointId));
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { runAllowedCategories: ["create_task"] }) });
-      const target = { id: run.runId, companyId: seed.companyId, contextSnapshot: run.contextSnapshot };
-      await expect(assertOpenwaRunMay(db, target, "create_task")).resolves.toBeNull();
-      await expect(assertOpenwaRunMay(db, target, "external_tools")).rejects.toBeInstanceOf(OpenwaApprovalRequiredError);
-      await db.update(chatEndpoints).set({ policy: {} }).where(eq(chatEndpoints.id, seed.endpointId));
-      await expect(assertOpenwaRunMay(db, target, "create_task")).rejects.toBeInstanceOf(OpenwaApprovalRequiredError);
-    });
-
+  describe("task chat origin", () => {
     it("reads a task's chat origin from the handoff record and the creating run, nearest first and company scoped", async () => {
       const seed = await seedCompany(db);
       const member = await seedPrincipal(db, seed, CHAT_KEY);
       const delivery = await seedDelivery(db, seed, { principalId: member.principalId, triggerClass: "other" });
-      const creator = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { deliveryIds: [delivery] }) });
+      const creator = await seedRun(db, seed, { openwa: openwaContext(seed, { deliveryIds: [delivery] }) });
       const child = randomUUID();
       const grandchild = randomUUID();
       await db.insert(issues).values([
@@ -783,30 +544,6 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       await expect(openwaTaskChatOrigin(db, { companyId: foreign.companyId, issueIds: [child] })).resolves.toBeNull();
     });
 
-    it("keeps the four hard floors for a read_only member run while create_task and cross_chat_send follow their toggles", async () => {
-      const seed = await seedCompany(db);
-      await db.update(chatEndpoints).set({ policy: { approvals: { createTask: false, crossChatSend: false } } }).where(eq(chatEndpoints.id, seed.endpointId));
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { runAllowedCategories: ["create_task", "cross_chat_send"] }) });
-      const target = { id: run.runId, companyId: seed.companyId, contextSnapshot: run.contextSnapshot };
-      await expect(assertOpenwaRunMay(db, target, "create_task")).resolves.toBeNull();
-      await expect(assertOpenwaRunMay(db, target, "cross_chat_send")).resolves.toBeNull();
-      for (const floor of ["external_tools", "wa_admin", "gateway_admin"] as const)
-        await expect(assertOpenwaRunMay(db, target, floor)).rejects.toMatchObject({ status: 403, category: floor });
-    });
-
-    it("never lets another company's run read or consume this endpoint's grants", async () => {
-      const seed = await seedCompany(db);
-      const foreign = await seedCompany(db);
-      const grant = await seedGrant(db, seed, { category: "create_task" });
-      const foreignRun = await seedRun(db, foreign, {
-        profile: "read_only",
-        openwa: { ...openwaContext(seed, { triggerClass: "grant", grantIds: [grant.grantId] }) },
-      });
-      await expect(assertOpenwaRunMay(db, { id: foreignRun.runId, companyId: foreign.companyId, contextSnapshot: foreignRun.contextSnapshot }, "create_task"))
-        .rejects.toBeInstanceOf(OpenwaApprovalRequiredError);
-      const [row] = await db.select().from(chatOwnerGrants).where(eq(chatOwnerGrants.id, grant.grantId));
-      expect(row).toMatchObject({ status: "live", consumedByRunId: null });
-    });
   });
 
   describe("JWT REST seam", () => {
@@ -821,166 +558,44 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       server.use(errorHandler);
       return server;
     }
-    async function grantStatus(grantId: string) {
-      const [row] = await db.select({ status: chatOwnerGrants.status }).from(chatOwnerGrants).where(eq(chatOwnerGrants.id, grantId));
-      return row!.status;
-    }
     function jwt(seed: Seed, runId: string) {
       return createLocalAgentJwt(seed.agentId, seed.companyId, "process", runId, BOARD_USER)!;
     }
 
-    it("denies read_only mutations outside the allowlist and allows the run's own lifecycle writes", async () => {
+    it("lets every run class mutate and audits each mutation with its sender class, never a safe read", async () => {
       const seed = await seedCompany(db);
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, {}) });
-      const token = jwt(seed, run.runId);
-      const create = await request(app()).post(`/api/companies/${seed.companyId}/issues`).set("Authorization", `Bearer ${token}`).send({ title: "x" });
-      expect(create.status).toBe(403);
-      expect(create.body).toMatchObject({ code: "openwa_approval_required", details: { category: "create_task" } });
-      const secret = await request(app()).post("/api/agents/me/secret-proposals").set("Authorization", `Bearer ${token}`).send({});
-      expect(secret.status).toBe(403);
-      expect(secret.body).toMatchObject({ code: "openwa_approval_required", details: { category: "external_tools" } });
-      const comment = await request(app()).post(`/api/issues/${seed.issueId}/comments`).set("Authorization", `Bearer ${token}`).send({ body: "hi" });
-      expect(comment.status).toBe(201);
-      const [own] = await db.select({ identifier: issues.identifier }).from(issues).where(eq(issues.id, seed.issueId));
-      const byIdentifier = await request(app()).post(`/api/issues/${own!.identifier}/comments`).set("Authorization", `Bearer ${token}`).send({ body: "by identifier" });
-      expect(byIdentifier.status).toBe(201);
-      const otherIssue = await seedPlainIssue(db, seed);
-      await db.update(issues).set({ identifier: own!.identifier!.replace(/-1$/, "-2"), issueNumber: 2 }).where(eq(issues.id, otherIssue));
-      const foreign = await request(app()).post(`/api/issues/${own!.identifier!.replace(/-1$/, "-2")}/comments`).set("Authorization", `Bearer ${token}`).send({ body: "x" });
-      expect(foreign.status).toBe(403);
-      expect(foreign.body).toMatchObject({ code: "openwa_approval_required", details: { category: "external_tools" } });
-      const read = await request(app()).get(`/api/companies/${seed.companyId}/issues`).set("Authorization", `Bearer ${token}`);
-      expect(read.status).toBe(200);
-    });
-
-    it("lets a read_only member run write to its conversation's descendants only and grants nothing external", async () => {
-      const seed = await seedCompany(db);
-      const [own] = await db.select({ identifier: issues.identifier }).from(issues).where(eq(issues.id, seed.issueId));
-      const prefix = own!.identifier!.replace(/-1$/, "");
-      const child = randomUUID();
-      const grandchild = randomUUID();
+      const member = await seedRun(db, seed, { openwa: openwaContext(seed, {}) });
+      const owner = await seedRun(db, seed, { openwa: openwaContext(seed, { triggerClass: "owner", senderClass: "owner" }) });
+      const unmarked = await seedRun(db, seed, {});
       const outside = await seedPlainIssue(db, seed);
-      const outsideChild = randomUUID();
-      await db.insert(issues).values([
-        { id: child, companyId: seed.companyId, parentId: seed.issueId, issueNumber: 2, identifier: `${prefix}-2`, title: "Delegated", status: "todo" },
-        { id: grandchild, companyId: seed.companyId, parentId: child, issueNumber: 3, identifier: `${prefix}-3`, title: "Sub-delegated", status: "todo" },
-        { id: outsideChild, companyId: seed.companyId, parentId: outside, issueNumber: 4, identifier: `${prefix}-4`, title: "Elsewhere", status: "todo" },
-      ]);
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "other" }) });
-      const auth = { Authorization: `Bearer ${jwt(seed, run.runId)}` };
-      const allowed = [
-        await request(app()).post(`/api/issues/${child}/comments`).set(auth).send({ body: "gate ok" }),
-        await request(app()).post(`/api/issues/${prefix}-3/comments`).set(auth).send({ body: "by identifier" }),
-        await request(app()).post(`/api/issues/${child}/share-link`).set(auth).send({}),
-        await request(app()).post(`/api/issues/${seed.issueId}/share-link`).set(auth).send({}),
-        await request(app()).post(`/api/companies/${seed.companyId}/issues/${grandchild}/attachments`).set(auth).send({}),
-        await request(app()).put(`/api/issues/${grandchild}/documents/plan`).set(auth).send({}),
-        await request(app()).patch(`/api/issues/${child}`).set(auth).send({ status: "cancelled", comment: "duplicate" }),
+      const auth = (runId: string) => ({ Authorization: "Bearer " + jwt(seed, runId) });
+      const writes = [
+        await request(app()).post("/api/companies/" + seed.companyId + "/issues").set(auth(member.runId)).send({ title: "x" }),
+        await request(app()).delete("/api/issues/" + outside).set(auth(member.runId)).send(),
+        await request(app()).post("/api/agents/me/secret-proposals").set(auth(member.runId)).send({}),
+        await request(app()).patch("/api/issues/" + outside).set(auth(owner.runId)).send({ visibility: "private" }),
+        await request(app()).post("/api/companies/" + seed.companyId + "/issues").set(auth(unmarked.runId)).send({ title: "y" }),
       ];
-      expect(allowed.map((res) => res.status)).toEqual([201, 201, 201, 201, 201, 200, 200]);
-      const denied = [
-        [await request(app()).post(`/api/issues/${outside}/comments`).set(auth).send({ body: "x" }), "external_tools"],
-        [await request(app()).post(`/api/issues/${prefix}-4/comments`).set(auth).send({ body: "x" }), "external_tools"],
-        [await request(app()).post(`/api/issues/${outsideChild}/share-link`).set(auth).send({}), "external_tools"],
-        [await request(app()).post(`/api/companies/${seed.companyId}/issues/${outside}/attachments`).set(auth).send({}), "external_tools"],
-        [await request(app()).post(`/api/issues/${child}/checkout`).set(auth).send({}), "external_tools"],
-        [await request(app()).patch(`/api/issues/${child}`).set(auth).send({ title: "renamed" }), "external_tools"],
-        [await request(app()).patch(`/api/issues/${child}`).set(auth).send({ parentId: outside }), "create_task"],
-        [await request(app()).post(`/api/issues/${child}/children`).set(auth).send({ title: "x" }), "create_task"],
-        [await request(app()).post("/api/agents/me/secret-proposals").set(auth).send({}), "external_tools"],
-      ] as const;
-      for (const [res, category] of denied) {
-        expect(res.status).toBe(403);
-        expect(res.body).toMatchObject({ code: "openwa_approval_required", details: { category } });
+      expect(writes.map((res) => res.status)).toEqual([201, 200, 201, 200, 201]);
+      expect((await request(app()).get("/api/companies/" + seed.companyId + "/issues").set(auth(member.runId))).status).toBe(200);
+      let rows: Array<{ runId: string | null; metadata: Record<string, unknown> }> = [];
+      for (let attempt = 0; attempt < 100 && rows.length < 4; attempt++) {
+        if (attempt) await new Promise((resolve) => setTimeout(resolve, 20));
+        rows = await db.select({ runId: chatAuditEntries.runId, metadata: chatAuditEntries.metadata }).from(chatAuditEntries)
+          .where(and(eq(chatAuditEntries.endpointId, seed.endpointId), eq(chatAuditEntries.kind, "tool_called")));
       }
-      const runRow = { id: run.runId, companyId: seed.companyId, contextSnapshot: run.contextSnapshot };
-      for (const category of ["external_tools", "create_task", "cross_chat_send"] as const)
-        await expect(assertOpenwaRunMay(db, runRow, category)).rejects.toMatchObject({ status: 403, category });
-    });
-
-    it("lifts non-destructive categories for an allow-listed member run inside a live autonomy window's tree, and drops them when the window closes", async () => {
-      const seed = await seedCompany(db);
-      const root = await seedPlainIssue(db, seed);
-      const sibling = randomUUID();
-      await db.insert(issues).values({ id: sibling, companyId: seed.companyId, parentId: root, title: "Window sibling", status: "todo" });
-      await db.update(issues).set({ parentId: root }).where(eq(issues.id, seed.issueId));
-      const outside = await seedPlainIssue(db, seed);
-      const member = await seedPrincipal(db, seed, "628666000999@c.us");
-      const deliveryId = await seedDelivery(db, seed, { principalId: member.principalId, triggerClass: "other" });
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "other", deliveryIds: [deliveryId] }) });
-      const runRow = { id: run.runId, companyId: seed.companyId, contextSnapshot: run.contextSnapshot };
-      const auth = { Authorization: `Bearer ${jwt(seed, run.runId)}` };
-
-      const before = await request(app()).post(`/api/issues/${sibling}/share-link`).set(auth).send({});
-      expect(before.status).toBe(403);
-      expect(before.body).toMatchObject({ code: "openwa_approval_required", details: { category: "external_tools" } });
-      await expect(assertOpenwaRunMay(db, runRow, "external_tools")).rejects.toMatchObject({ status: 403 });
-
-      const [window] = await db.insert(issueAutonomyWindows).values({
-        companyId: seed.companyId, rootIssueId: root, grantedByUserId: BOARD_USER, grantedVia: "whatsapp", expiresAt: new Date(Date.now() + 3_600_000),
-      }).returning();
-      const lifted = [
-        await request(app()).post(`/api/issues/${sibling}/share-link`).set(auth).send({}),
-        await request(app()).post(`/api/issues/${sibling}/children`).set(auth).send({ title: "child" }),
-        await request(app()).post(`/api/issues/${sibling}/comments`).set(auth).send({ body: "progress" }),
-        await request(app()).post(`/api/companies/${seed.companyId}/issues`).set(auth).send({ title: "child", parentId: sibling }),
-      ];
-      expect(lifted.map((res) => res.status)).toEqual([201, 201, 201, 201]);
-      await expect(assertOpenwaRunMay(db, runRow, "external_tools")).resolves.toBeNull();
-      await expect(assertOpenwaRunMay(db, runRow, "create_task")).resolves.toBeNull();
-      await expect(assertOpenwaRunMay(db, runRow, "cross_chat_send", { windowIssueIds: [sibling] })).resolves.toBeNull();
-
-      const stillDenied = [
-        await request(app()).post(`/api/issues/${outside}/share-link`).set(auth).send({}),
-        await request(app()).delete(`/api/issues/${sibling}`).set(auth).send({}),
-        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ status: "cancelled" }),
-        await request(app()).post(`/api/companies/${seed.companyId}/issues`).set(auth).send({ title: "top level" }),
-        await request(app()).post(`/api/companies/${seed.companyId}/issues`).set(auth).send({ title: "elsewhere", parentId: outside }),
-        await request(app()).post("/api/agents/me/secret-proposals").set(auth).send({}),
-        await request(app()).post(`/api/issues/${sibling}/access-grants`).set(auth).send({}),
-        await request(app()).post(`/api/issues/${sibling}/low-trust/promotions`).set(auth).send({}),
-        await request(app()).post(`/api/issues/${sibling}/interactions/${randomUUID()}/accept`).set(auth).send({}),
-        await request(app()).patch(`/api/issues/${sibling}/model-override`).set(auth).send({}),
-        await request(app()).post(`/api/issues/${sibling}/admin/force-release`).set(auth).send({}),
-        await request(app()).post(`/api/issues/${sibling}/continue-for-owner`).set(auth).send({}),
-        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ parentId: null }),
-        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ title: "renamed" }),
-        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ projectId: randomUUID() }),
-      ];
-      expect(stillDenied.map((res) => res.status)).toEqual(Array(15).fill(403));
-      const delegated = await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ assigneeAgentId: seed.agentId, status: "todo" });
-      expect(delegated.status).toBe(200);
-      await expect(assertOpenwaRunMay(db, runRow, "cross_chat_send", { windowIssueIds: [outside] })).rejects.toMatchObject({ status: 403 });
-      await expect(assertOpenwaRunMay(db, runRow, "cross_chat_send")).rejects.toMatchObject({ status: 403 });
-      await expect(assertOpenwaRunMay(db, runRow, "wa_admin")).rejects.toMatchObject({ status: 403 });
-      await expect(assertOpenwaRunMay(db, runRow, "external_tools", { destructive: true })).rejects.toMatchObject({ status: 403 });
-      await expect(assertOpenwaRunMay(db, runRow, "external_tools", { window: false })).rejects.toMatchObject({ status: 403 });
-
-      const stranger = await seedPrincipal(db, seed, "628777000999@c.us");
-      const strangerDelivery = await seedDelivery(db, seed, { principalId: stranger.principalId, triggerClass: "other" });
-      await db.update(chatDeliveries).set({ principalRole: "outside_allowlist" }).where(eq(chatDeliveries.id, strangerDelivery));
-      const strangerRun = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "other", deliveryIds: [strangerDelivery] }) });
-      const strangerShare = await request(app()).post(`/api/issues/${sibling}/share-link`).set({ Authorization: `Bearer ${jwt(seed, strangerRun.runId)}` }).send({});
-      expect(strangerShare.status).toBe(403);
-
-      await db.update(issueAutonomyWindows).set({ status: "revoked", closedAt: new Date() }).where(eq(issueAutonomyWindows.id, window!.id));
-      const after = await request(app()).post(`/api/issues/${sibling}/share-link`).set(auth).send({});
-      expect(after.status).toBe(403);
-      await expect(assertOpenwaRunMay(db, runRow, "external_tools")).rejects.toMatchObject({ status: 403 });
-    });
-
-    it("never treats another company's issue as part of the conversation tree", async () => {
-      const seed = await seedCompany(db);
-      const foreign = await seedCompany(db);
-      expect(await isOpenwaConversationTreeIssue(db, { companyId: seed.companyId, rootIssueId: seed.issueId, issueKey: foreign.issueId })).toBe(false);
-      expect(await isOpenwaConversationTreeIssue(db, { companyId: foreign.companyId, rootIssueId: seed.issueId, issueKey: seed.issueId })).toBe(false);
-      expect(await isOpenwaConversationTreeIssue(db, { companyId: seed.companyId, rootIssueId: seed.issueId, issueKey: seed.issueId })).toBe(true);
-      expect(await isOpenwaConversationTreeIssue(db, { companyId: seed.companyId, rootIssueId: seed.issueId, issueKey: "not-an-issue" })).toBe(false);
+      expect(rows).toHaveLength(4);
+      expect(rows).toEqual(expect.arrayContaining([
+        { runId: member.runId, metadata: { seam: "rest", method: "POST", path: "/api/companies/" + seed.companyId + "/issues", senderClass: "non_owner", triggerClass: "other" } },
+        { runId: member.runId, metadata: { seam: "rest", method: "DELETE", path: "/api/issues/" + outside, senderClass: "non_owner", triggerClass: "other" } },
+        { runId: member.runId, metadata: { seam: "rest", method: "POST", path: "/api/agents/me/secret-proposals", senderClass: "non_owner", triggerClass: "other" } },
+        { runId: owner.runId, metadata: { seam: "rest", method: "PATCH", path: "/api/issues/" + outside, senderClass: "owner", triggerClass: "owner" } },
+      ]));
     });
 
     it("allows full runs and runs on non-OpenWA issues", async () => {
       const seed = await seedCompany(db);
-      const full = await seedRun(db, seed, { profile: "full", openwa: openwaContext(seed, { triggerClass: "owner", profile: "full" }) });
+      const full = await seedRun(db, seed, { openwa: openwaContext(seed, { triggerClass: "owner", senderClass: "owner" }) });
       const fullRes = await request(app()).post(`/api/companies/${seed.companyId}/issues`).set("Authorization", `Bearer ${jwt(seed, full.runId)}`).send({ title: "x" });
       expect(fullRes.status).toBe(201);
       const plain = await seedRun(db, seed, { issueId: await seedPlainIssue(db, seed) });
@@ -988,73 +603,10 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       expect(plainRes.status).toBe(201);
     });
 
-    it("fails closed for an OpenWA conversation run without OpenWA context", async () => {
-      const seed = await seedCompany(db);
-      const run = await seedRun(db, seed, {});
-      const res = await request(app()).post(`/api/companies/${seed.companyId}/issues`).set("Authorization", `Bearer ${jwt(seed, run.runId)}`).send({ title: "x" });
-      expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ code: "openwa_approval_required", details: { category: "create_task" } });
-    });
-
-    it("lets a grant run with a live one_action create_task grant create exactly one issue", async () => {
-      const seed = await seedCompany(db);
-      const grant = await seedGrant(db, seed, { category: "create_task" });
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "grant", grantIds: [grant.grantId] }) });
-      const token = jwt(seed, run.runId);
-      const first = await request(app()).post(`/api/companies/${seed.companyId}/issues`).set("Authorization", `Bearer ${token}`).send({ title: "child" });
-      expect(first.status).toBe(201);
-      const second = await request(app()).post(`/api/companies/${seed.companyId}/issues`).set("Authorization", `Bearer ${token}`).send({ title: "child 2" });
-      expect(second.status).toBe(403);
-      expect(second.body).toMatchObject({ code: "openwa_approval_required", details: { category: "create_task" } });
-    });
-
-    it("lets read_only runs reach dispatcher routes whose inner seams decide", async () => {
-      const seed = await seedCompany(db);
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, {}) });
-      const token = jwt(seed, run.runId);
-      for (const [method, path] of [
-        ["post", "/api/plugins/tools/execute"],
-        ["post", `/api/companies/${seed.companyId}/slack/tasks/${seed.issueId}/tools`],
-        ["put", `/api/companies/${seed.companyId}/slack/endpoints/${randomUUID()}/search`],
-        ["post", "/api/mcp/project-tools"],
-      ] as const) {
-        const res = await request(app())[method](path).set("Authorization", `Bearer ${token}`).send({});
-        expect({ path, status: res.status }).toEqual({ path, status: method === "post" ? 201 : 200 });
-      }
-    });
-
-    it("consumes one grant per request even when an inner seam re-checks the same category", async () => {
-      const seed = await seedCompany(db);
-      const first = await seedGrant(db, seed, { category: "create_task" });
-      const second = await seedGrant(db, seed, { category: "create_task" });
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "grant", grantIds: [first.grantId, second.grantId] }) });
-      const target = { id: run.runId, companyId: seed.companyId, contextSnapshot: run.contextSnapshot };
-      const inner = app(async (_req, res) => {
-        await assertOpenwaRunMay(db, target, "create_task");
-        res.status(201).json({ created: true });
-      });
-      const res = await request(inner).post(`/api/companies/${seed.companyId}/issues`).set("Authorization", `Bearer ${jwt(seed, run.runId)}`).send({ title: "x" });
-      expect(res.status).toBe(201);
-      const statuses = [await grantStatus(first.grantId), await grantStatus(second.grantId)].sort();
-      expect(statuses).toEqual(["consumed", "live"]);
-    });
-
-    it("restores a consumed grant only when the request is rejected before its effect", async () => {
-      const seed = await seedCompany(db);
-      for (const [status, expected] of [[422, "live"], [403, "live"], [500, "consumed"], [201, "consumed"]] as const) {
-        const grant = await seedGrant(db, seed, { category: "create_task" });
-        const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "grant", grantIds: [grant.grantId] }) });
-        const res = await request(app((_req, res) => { res.status(status).json({}); }))
-          .post(`/api/companies/${seed.companyId}/issues`).set("Authorization", `Bearer ${jwt(seed, run.runId)}`).send({ title: "x" });
-        expect(res.status).toBe(status);
-        expect({ status, grant: await grantStatus(grant.grantId) }).toEqual({ status, grant: expected });
-      }
-    });
-
-    it("adds no database query to the JWT path of a non-OpenWA run", async () => {
+    it("adds no database query to the JWT path of a run without OpenWA context", async () => {
       const seed = await seedCompany(db);
       const plainIssue = await seedPlainIssue(db, seed);
-      const marked = await seedRun(db, seed, { issueId: plainIssue, profile: "full" });
+      const marked = await seedRun(db, seed, { issueId: plainIssue });
       const unmarked = await seedRun(db, seed, { issueId: await seedPlainIssue(db, seed) });
       const counted = loggedDb();
       const server = app(undefined, counted.db);
@@ -1068,9 +620,9 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       const read = await measure(marked.runId, "get");
       const write = await measure(marked.runId, "post");
       expect(write).toEqual(read);
-      const legacy = await measure(unmarked.runId, "post");
-      expect(legacy.length).toBe(read.length + 1);
-      expect(legacy.some((query) => query.includes('"chat_conversations"'))).toBe(true);
+      const conversationRun = await seedRun(db, seed, {});
+      expect(await measure(unmarked.runId, "post")).toEqual(read);
+      expect(await measure(conversationRun.runId, "post")).toEqual(read);
     });
   });
 
@@ -1172,16 +724,16 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       return server;
     }
 
-    it("denies GitHub credential export in a read_only run and reaches the resolver in a full run", async () => {
+    it("reaches the GitHub credential resolver in member and owner runs", async () => {
       const seed = await seedCompany(db);
-      const readOnly = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, {}) });
+      const readOnly = await seedRun(db, seed, { openwa: openwaContext(seed, {}) });
       const denied = await request(app()).post("/runtime-tools/github/credentials").set(
         "x-wardmote-github-capability",
         createRuntimeToolsToken({ agentId: seed.agentId, companyId: seed.companyId, runId: readOnly.runId, responsibleUserId: BOARD_USER, scope: "github_credentials" })!.token,
       ).send({});
-      expect(denied.status).toBe(403);
-      expect(denied.body).toMatchObject({ code: "openwa_approval_required", details: { category: "external_tools" } });
-      const full = await seedRun(db, seed, { profile: "full", openwa: openwaContext(seed, { triggerClass: "owner", profile: "full" }) });
+      expect(denied.body.code).not.toBe("openwa_approval_required");
+      expect(denied.body.error).toBe("This run predates managed GitHub credentials");
+      const full = await seedRun(db, seed, { openwa: openwaContext(seed, { triggerClass: "owner", senderClass: "owner" }) });
       const reached = await request(app()).post("/runtime-tools/github/credentials").set(
         "x-wardmote-github-capability",
         createRuntimeToolsToken({ agentId: seed.agentId, companyId: seed.companyId, runId: full.runId, responsibleUserId: BOARD_USER, scope: "github_credentials" })!.token,
@@ -1192,7 +744,7 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
 
     it("adds no heartbeat_runs read of its own to a GitHub credential export", async () => {
       const seed = await seedCompany(db);
-      const full = await seedRun(db, seed, { profile: "full", openwa: openwaContext(seed, { triggerClass: "owner", profile: "full" }) });
+      const full = await seedRun(db, seed, { openwa: openwaContext(seed, { triggerClass: "owner", senderClass: "owner" }) });
       const counted = loggedDb();
       const server = express();
       server.use(express.json());
@@ -1206,17 +758,13 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       expect(counted.queries.slice(before).filter((query) => query.includes('from "heartbeat_runs"')).length).toBe(2);
     });
 
-    it("denies connection_request in a read_only run and passes the gate in a full run", async () => {
+    it("lets a member run request a connection without owner approval", async () => {
       const seed = await seedCompany(db);
       const service = connectionIntentService(db);
-      const readOnly = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, {}) });
-      const claims = (runId: string) => ({ sub: seed.agentId, company_id: seed.companyId, run_id: runId, responsible_user_id: BOARD_USER });
-      await expect(service.request(claims(readOnly.runId), "github")).rejects.toMatchObject({
-        details: { code: "openwa_approval_required", category: "external_tools" },
-      });
-      const full = await seedRun(db, seed, { profile: "full", openwa: openwaContext(seed, { triggerClass: "owner", profile: "full" }) });
-      const outcome = await service.request(claims(full.runId), "github").catch((err) => err);
-      expect(outcome).not.toBeInstanceOf(OpenwaApprovalRequiredError);
+      const member = await seedRun(db, seed, { openwa: openwaContext(seed, {}) });
+      const claims = { sub: seed.agentId, company_id: seed.companyId, run_id: member.runId, responsible_user_id: BOARD_USER };
+      const outcome = await service.request(claims, "github").catch((err: { details?: { code?: string } }) => err);
+      expect(outcome?.details?.code).not.toBe("openwa_approval_required");
     });
   });
 
@@ -1229,71 +777,12 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
     }
     const createTask = (key: string) => ({ tool: "create_task", callId: key, arguments: { idempotencyKey: key, title: `Child ${key}` } });
 
-    it("denies create_task and reassign_task in a read_only run and allows create_task in a full run", async () => {
+    it("lets a member run create and reassign tasks like an owner run", async () => {
       const seed = await seedCompany(db);
-      const readOnly = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, {}), native: true });
-      await expect(authority(seed, readOnly.runId).execute(createTask("ro-1"))).rejects.toMatchObject({
-        details: { code: "openwa_approval_required", category: "create_task" },
-      });
-      await expect(authority(seed, readOnly.runId).execute({
-        tool: "reassign_task", callId: "ro-reassign",
-        arguments: { idempotencyKey: "ro-reassign", taskId: randomUUID(), assigneeActorId: seed.agentId, expectedAssigneeActorId: null, expectedStatusVersion: 0, reason: "move" },
-      })).rejects.toMatchObject({ details: { code: "openwa_approval_required", category: "create_task" } });
-      const full = await seedRun(db, seed, { profile: "full", openwa: openwaContext(seed, { triggerClass: "owner", profile: "full" }), native: true });
-      await expect(authority(seed, full.runId).execute(createTask("full-1"))).resolves.toMatchObject({
+      const member = await seedRun(db, seed, { openwa: openwaContext(seed, {}), native: true });
+      await expect(authority(seed, member.runId).execute(createTask("member-1"))).resolves.toMatchObject({
         disposition: "applied", task: { parentId: seed.issueId },
       });
-    });
-
-    it("consumes a reassign_task grant in the prepare phase and restores it when the commit phase fails", async () => {
-      const seed = await seedCompany(db);
-      const grant = await seedGrant(db, seed, { category: "create_task" });
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "grant", grantIds: [grant.grantId] }), native: true });
-      const otherAgentId = randomUUID();
-      await db.insert(agents).values({
-        id: otherAgentId, companyId: seed.companyId, name: "Other agent", role: "engineer", status: "idle",
-        adapterType: "wardmote_runner", adapterConfig: {}, runtimeConfig: {}, permissions: {},
-      });
-      const targetId = randomUUID();
-      const otherRunId = randomUUID();
-      await db.insert(heartbeatRuns).values({
-        id: otherRunId, companyId: seed.companyId, agentId: otherAgentId, status: "running",
-        invocationSource: "assignment", triggerDetail: "system", contextSnapshot: { issueId: targetId },
-      });
-      await db.insert(issues).values({
-        id: targetId, companyId: seed.companyId, title: "Target", status: "todo", assigneeAgentId: otherAgentId,
-        executionRunId: otherRunId, responsibleUserId: BOARD_USER,
-      });
-      const stops: string[] = [];
-      const tool = new WardmoteRunnerToolAuthority(db, {
-        companyId: seed.companyId, agentId: seed.agentId, issueId: seed.issueId, runId: run.runId, workMode: "standard",
-        enqueueWakeup: async () => null,
-        stopTaskForReassignment: async () => {
-          const [row] = await db.select({ status: chatOwnerGrants.status }).from(chatOwnerGrants).where(eq(chatOwnerGrants.id, grant.grantId));
-          stops.push(row!.status);
-          throw new Error("stop failed");
-        },
-      });
-      await expect(tool.execute({
-        tool: "reassign_task", callId: "grant-reassign",
-        arguments: { idempotencyKey: "grant-reassign", taskId: targetId, assigneeActorId: seed.agentId, expectedAssigneeActorId: otherAgentId, expectedStatusVersion: 0, reason: "move" },
-      })).rejects.toThrow("stop failed");
-      expect(stops).toEqual(["consumed"]);
-      const [row] = await db.select({ status: chatOwnerGrants.status, consumedByRunId: chatOwnerGrants.consumedByRunId }).from(chatOwnerGrants).where(eq(chatOwnerGrants.id, grant.grantId));
-      expect(row).toEqual({ status: "live", consumedByRunId: null });
-    });
-
-    it("lets a one_action create_task grant create exactly one child task", async () => {
-      const seed = await seedCompany(db);
-      const grant = await seedGrant(db, seed, { category: "create_task" });
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "grant", grantIds: [grant.grantId] }), native: true });
-      await expect(authority(seed, run.runId).execute(createTask("grant-1"))).resolves.toMatchObject({ disposition: "applied" });
-      await expect(authority(seed, run.runId).execute(createTask("grant-1"))).resolves.toMatchObject({ disposition: "applied" });
-      await expect(authority(seed, run.runId).execute(createTask("grant-2"))).rejects.toMatchObject({
-        details: { code: "openwa_approval_required", category: "create_task" },
-      });
-      const children = await db.select().from(issues).where(and(eq(issues.companyId, seed.companyId), eq(issues.parentId, seed.issueId)));
-      expect(children).toHaveLength(1);
     });
   });
 
@@ -1302,15 +791,12 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       type: "agent" as const, source: "agent_jwt" as const, agentId: seed.agentId, companyId: seed.companyId, runId,
     });
 
-    it("denies project creation context in a read_only run and allows it in a full run", async () => {
+    it("allows project creation context in member and owner runs", async () => {
       const seed = await seedCompany(db);
-      const readOnly = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, {}) });
-      await expect(projectToolContext(db, actor(seed, readOnly.runId), true)).rejects.toMatchObject({
-        details: { code: "openwa_approval_required", category: "create_task" },
-      });
-      await expect(projectToolContext(db, actor(seed, readOnly.runId), false)).resolves.toMatchObject({ issue: { id: seed.issueId } });
-      const full = await seedRun(db, seed, { profile: "full", openwa: openwaContext(seed, { triggerClass: "owner", profile: "full" }) });
-      await expect(projectToolContext(db, actor(seed, full.runId), true)).resolves.toMatchObject({ issue: { id: seed.issueId } });
+      for (const openwa of [openwaContext(seed, {}), openwaContext(seed, { triggerClass: "owner", senderClass: "owner" })]) {
+        const run = await seedRun(db, seed, { openwa });
+        await expect(projectToolContext(db, actor(seed, run.runId), true)).resolves.toMatchObject({ issue: { id: seed.issueId } });
+      }
     });
   });
 
@@ -1325,27 +811,21 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       return { gateway, session };
     }
 
-    it("denies write tools in a read_only run with openwa_approval_required", async () => {
+    it("applies the normal policy decision to member and owner runs alike", async () => {
       const seed = await seedCompany(db);
-      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, {}) });
-      const { gateway, session } = await gatewayFor(seed, run.runId);
-      await expect(gateway.executeTool({
-        sessionToken: session.token, tool: "mcp-remote-fixture:update_note", parameters: { noteId: "n1", body: "x" },
-      })).rejects.toMatchObject({ status: 403, reasonCode: "openwa_approval_required", details: { category: "external_tools" } });
-    });
-
-    it("keeps the normal policy decision in a full run", async () => {
-      const seed = await seedCompany(db);
-      const run = await seedRun(db, seed, { profile: "full", openwa: openwaContext(seed, { triggerClass: "owner", profile: "full" }) });
-      const { gateway, session } = await gatewayFor(seed, run.runId);
-      await expect(gateway.executeTool({
-        sessionToken: session.token, tool: "mcp-remote-fixture:update_note", parameters: { noteId: "n1", body: "x" },
-      })).rejects.toMatchObject({ reasonCode: "approval_required" });
+      for (const openwa of [openwaContext(seed, {}), openwaContext(seed, { triggerClass: "owner", senderClass: "owner" })]) {
+        const run = await seedRun(db, seed, { openwa });
+        const { gateway, session } = await gatewayFor(seed, run.runId);
+        await expect(gateway.executeTool({
+          sessionToken: session.token, tool: "mcp-remote-fixture:update_note", parameters: { noteId: "n1", body: "x" },
+        })).rejects.toMatchObject({ reasonCode: "approval_required" });
+        await db.delete(toolPolicies).where(eq(toolPolicies.companyId, seed.companyId));
+      }
     });
 
     it("adds no heartbeat_runs read per write-tool call for a non-OpenWA run", async () => {
       const seed = await seedCompany(db);
-      const run = await seedRun(db, seed, { issueId: await seedPlainIssue(db, seed), profile: "full" });
+      const run = await seedRun(db, seed, { issueId: await seedPlainIssue(db, seed), senderClass: "owner" });
       await db.insert(toolPolicies).values({
         companyId: seed.companyId, name: "Review note writes", policyType: "require_approval",
         selectors: { toolName: "mcp-remote-fixture:update_note" },
@@ -1367,13 +847,4 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
     });
   });
 
-  describe("host GitHub credentials at run start", () => {
-    it("keeps host credentials only for full tool profiles", () => {
-      const seed = { endpointId: randomUUID() } as Seed;
-      expect(openwaHostGitHubAllowed(null)).toBe(true);
-      expect(openwaHostGitHubAllowed(openwaContext(seed, { triggerClass: "owner", profile: "full" }))).toBe(true);
-      expect(openwaHostGitHubAllowed(openwaContext(seed, {}))).toBe(false);
-      expect(openwaHostGitHubAllowed(openwaContext(seed, { toolProfile: "full" }))).toBe(true);
-    });
-  });
 });

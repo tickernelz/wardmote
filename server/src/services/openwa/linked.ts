@@ -443,9 +443,9 @@ export function openwaLinkedService(db: Db, deps: OpenwaLinkedServiceDeps) {
 
 export type OpenwaLinkedService = ReturnType<typeof openwaLinkedService>;
 
-/** Owner-only gate for linked-number tools: an owner-triggered run on this endpoint with the full profile. */
+/** Owner-only gate for linked-number tools: an owner-triggered run on this endpoint. */
 export function assertOpenwaLinkedOwnerRun(ctx: ToolContext): void {
-  if (ctx.openwa?.triggerClass !== "owner" || ctx.openwa.endpointId !== ctx.endpoint.id || ctx.openwa.profile !== "full")
+  if (ctx.openwa?.triggerClass !== "owner" || ctx.openwa.endpointId !== ctx.endpoint.id)
     throw new OpenwaToolError(403, "owner_only", "Only owner-triggered runs may read linked numbers");
 }
 

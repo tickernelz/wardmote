@@ -40,17 +40,12 @@ import { parseOpenwaThreadId } from "./adapter.js";
 import { openwaApprovalResolveTool, openwaApprovalWithdrawTool, openwaRequestApprovalTool } from "./approvals.js";
 import { logOpenwaActivity, recordOpenwaAudit } from "./audit.js";
 import {
-  OpenwaApprovalRequiredError,
-  assertOpenwaRunMay,
   isOpenwaConversationTreeIssue,
-  openwaHeldGrantValid,
+  noteOpenwaRunAction,
   openwaLiveWindowRoot,
-  openwaMemberWindowRoot,
-  openwaRunProfile,
   readOpenwaRunContext,
-  restoreOpenwaGrant,
   type OpenwaRunContext,
-  type OpenwaRunProfile,
+  type OpenwaSenderClass,
 } from "./authority.js";
 import { OPENWA_DOCUMENT_CAPTION_LIMIT, formatOpenwaPublication, markdownToWhatsapp } from "./format.js";
 import {
@@ -79,7 +74,6 @@ import {
   openwaWriteHashMatches,
   openwaWriteReplay,
   runOpenwaWrite,
-  setOpenwaWriteGrant,
   type OpenwaPlannedSend,
   type OpenwaWriteScope,
 } from "./tool-writes.js";
@@ -104,7 +98,6 @@ const CHAT_REF = /^openwa:([A-Za-z0-9-]{1,64}):(.+)$/;
 const E164 = /^\+?([1-9]\d{6,14})$/;
 
 export type OpenwaToolErrorCode =
-  | "approval_required"
   | "approval_not_authorized"
   | "owner_decision_unclear"
   | "approval_action_pending"
@@ -333,7 +326,7 @@ export interface ToolContext {
   policy: OpenwaEndpointPolicy;
   run: { id: string; companyId: string; contextSnapshot: Record<string, unknown>; visibleBefore: Date };
   openwa: OpenwaRunContext | null;
-  profile: OpenwaRunProfile;
+  senderClass: OpenwaSenderClass;
   runClass: OpenwaTriggerClass | null;
   completion: boolean;
   sessionId: string;
@@ -381,8 +374,8 @@ async function resolveContext(db: Db, binding: OpenwaToolBinding): Promise<ToolC
   const sessionId = (endpoint.providerAccountId ?? "").slice((endpoint.providerAccountId ?? "").lastIndexOf("#") + 1);
   if (thread.sessionId !== sessionId) throw forbidden("The conversation belongs to another OpenWA session");
   const runRecord = { id: run.id, companyId: run.companyId, contextSnapshot: snapshot, visibleBefore: run.startedAt ?? run.createdAt };
-  const profile = await openwaRunProfile(db, runRecord);
   const runClass: OpenwaTriggerClass | null = found.conversationIssueId === binding.issueId ? (openwa?.triggerClass ?? "other") : null;
+  const senderClass: OpenwaSenderClass = openwa?.senderClass ?? (runClass === null ? "owner" : "non_owner");
   const completion = runClass !== null && (await isOpenwaCompletionTurn(db, { companyId: binding.companyId, runId: run.id, issueId: binding.issueId }));
   const originKey = openwaChatKey(thread.chatId);
   let handle: Promise<OpenwaToolRuntimeHandle> | null = null;
@@ -394,7 +387,7 @@ async function resolveContext(db: Db, binding: OpenwaToolBinding): Promise<ToolC
     policy: openwaEndpointPolicySchema.parse(endpoint.policy),
     run: runRecord,
     openwa,
-    profile,
+    senderClass,
     runClass,
     completion,
     sessionId,
@@ -692,7 +685,7 @@ export async function replyRequirementGaps(
   ownerAbsentExempt = true,
   quotedMessageId: string | null = null,
 ): Promise<Array<{ category: OpenwaGrantCategory; reason: string }>> {
-  if (ctx.profile === "full" || !ctx.runClass || ctx.completion) return [];
+  if (ctx.senderClass === "owner" || !ctx.runClass || ctx.completion) return [];
   const resource = ctx.conversation.resourceId
     ? await ctx.db
         .select({ settings: chatEndpointResources.settings, metadata: chatEndpointResources.metadata, availability: chatEndpointResources.availability })
@@ -773,30 +766,11 @@ async function assertNotApprovalOrigin(ctx: ToolContext, target: Target): Promis
     });
 }
 
-async function assertSendAllowed(ctx: ToolContext, target: Target, heldGrant: string | null, quote: string | null): Promise<string | null> {
+async function assertSendAllowed(ctx: ToolContext, target: Target, quote: string | null): Promise<void> {
   await assertNotApprovalOrigin(ctx, target);
   if (!target.isOrigin && !(ctx.completion && target.ownerReport)) {
-    if (heldGrant && (await openwaHeldGrantValid(ctx.db, { companyId: ctx.endpoint.companyId, grantId: heldGrant }))) return null;
-    try {
-      const targetConversations = await ctx.db
-        .select({ issueId: chatConversations.issueId })
-        .from(chatConversations)
-        .where(and(
-          eq(chatConversations.companyId, ctx.endpoint.companyId),
-          eq(chatConversations.endpointId, ctx.endpoint.id),
-          eq(chatConversations.externalConversationId, chatRef(ctx, target.chatId)),
-        ));
-      return await assertOpenwaRunMay(ctx.db, ctx.run, "cross_chat_send", {
-        windowIssueIds: targetConversations.map((conversation) => conversation.issueId),
-      });
-    } catch (error) {
-      if (error instanceof OpenwaApprovalRequiredError)
-        throw new OpenwaToolError(403, "approval_required", "Sending to a chat other than the origin chat needs owner approval", {
-          category: "cross_chat_send",
-          hint: "Ask an endpoint owner with openwa_request_approval, then continue in the approved run.",
-        });
-      throw error;
-    }
+    noteOpenwaRunAction(ctx.db, ctx.run, { seam: "openwa_send", category: "cross_chat_send" });
+    return;
   }
   const failure = await replyRequirementFailure(ctx, quote);
   if (failure)
@@ -804,7 +778,6 @@ async function assertSendAllowed(ctx: ToolContext, target: Target, heldGrant: st
       category: failure.category,
       hint: "Ask an endpoint owner with openwa_request_approval, or stay silent.",
     });
-  return null;
 }
 
 async function attachmentIssueSendable(ctx: ToolContext, issueId: string): Promise<boolean> {
@@ -817,9 +790,7 @@ async function attachmentIssueSendable(ctx: ToolContext, issueId: string): Promi
     .limit(1);
   if (!issue || issue.visibility === "private") return false;
   if (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: ctx.conversation.issueId, issueKey: issueId })) return true;
-  const windowRoot = ctx.profile === "full"
-    ? await openwaLiveWindowRoot(ctx.db, companyId, ctx.conversation.issueId)
-    : await openwaMemberWindowRoot(ctx.db, ctx.run);
+  const windowRoot = await openwaLiveWindowRoot(ctx.db, companyId, ctx.conversation.issueId);
   return windowRoot !== null && (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: windowRoot, issueKey: issueId }));
 }
 
@@ -1089,7 +1060,7 @@ async function precheckNumber(ctx: ToolContext, target: Target): Promise<Target>
 
 export async function consumeReplyGrants(ctx: ToolContext): Promise<void> {
   const grantIds = ctx.openwa?.grantIds ?? [];
-  if (ctx.profile === "full" || !grantIds.length) return;
+  if (ctx.senderClass === "owner" || !grantIds.length) return;
   await ctx.db.transaction(async (tx) => {
     const consumed = (await tx.execute(sql`
       update chat_owner_grants set status = 'consumed', consumed_at = now(), consumed_by_run_id = ${ctx.run.id}, updated_at = now()
@@ -1145,20 +1116,12 @@ async function openwaSend(ctx: ToolContext, args: Args): Promise<Record<string, 
     throw error;
   }
   ctx.audit.chatKey = target.chatKey;
-  const heldGrant = typeof action.payload.grantId === "string" ? action.payload.grantId : null;
   const quote = ctx.completion || target.ownerReport ? null : await resolveQuote(ctx, target, args.quoteMessageId);
-  const consumedGrant = await assertSendAllowed(ctx, target, heldGrant, quote);
-  if (consumedGrant) await setOpenwaWriteGrant(ctx.db, action.id, consumedGrant);
-  const releaseGrant = async () => {
-    if (!consumedGrant) return;
-    await restoreOpenwaGrant(ctx.db, { companyId: ctx.endpoint.companyId, runId: ctx.run.id, grantId: consumedGrant });
-    await setOpenwaWriteGrant(ctx.db, action.id, null);
-  };
+  await assertSendAllowed(ctx, target, quote);
   let planned: Awaited<ReturnType<typeof planSends>>;
   try {
     planned = await planSends(ctx, args, target, quote);
   } catch (error) {
-    await releaseGrant();
     await releaseReport(false);
     throw error;
   }
@@ -1174,10 +1137,8 @@ async function openwaSend(ctx: ToolContext, args: Args): Promise<Record<string, 
     }
   }
   if (outcome.state === "failed") {
-    if (outcome.delivered === 0) {
-      await releaseGrant();
-      await releaseReport(false);
-    } else await releaseReport(true);
+    if (outcome.delivered === 0) await releaseReport(false);
+    else await releaseReport(true);
     const mapped = toolErrorFromGateway(outcome.error, Boolean(quote) && !quoteDropped);
     if (mapped instanceof HttpError) mapped.details = { ...record(mapped.details), actionId: action.id, state: "failed" };
     throw mapped;

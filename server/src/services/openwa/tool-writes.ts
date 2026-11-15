@@ -214,18 +214,6 @@ export async function runOpenwaWrite(
   return { state: "delivered", messageIds };
 }
 
-export async function setOpenwaWriteGrant(db: Db, actionId: string, grantId: string | null) {
-  await db
-    .update(chatActions)
-    .set({
-      payload: grantId
-        ? sql`${chatActions.payload} || ${JSON.stringify({ grantId })}::jsonb`
-        : sql`${chatActions.payload} - 'grantId'`,
-      updatedAt: new Date(),
-    })
-    .where(eq(chatActions.id, actionId));
-}
-
 export async function finishOpenwaWrite(db: Db, action: ActionRow, receipt: Record<string, unknown>) {
   const [current] = await db.select({ result: chatActions.result }).from(chatActions).where(eq(chatActions.id, action.id));
   await db
