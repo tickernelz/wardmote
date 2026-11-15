@@ -106,7 +106,12 @@ gateway unreachable 503 ("do not replace the API key or other credentials
 because of this error"), malformed upstream 502. A failed reconnect keeps the
 previous credential binding. **Reconnect** verifies the same gateway session and
 API key, then recovers missed messages; leave the key blank to reuse the saved
-keys. Reconnecting to a different gateway or session returns 409
+keys. A channel that already finished setup and reconnects from `active` or from
+`attention` (for example after the WhatsApp session dropped) with the same session
+and operator key returns to `active`; a new operator key sends it back to the owner
+test. While a channel is `verifying`, messages from non-owners are dropped and each
+one writes a `trigger_filtered` audit entry; the connection header shows **Finish
+setup**. Reconnecting to a different gateway or session returns 409
 `chat_bot_identity_changed` and needs a new channel. **Disconnect** archives the
 channel and removes its saved API keys; the gateway session, its WhatsApp login
 and its chat history remain on the gateway.
@@ -434,10 +439,23 @@ not, unless the category's approval toggle is off or a live grant covers it:
 | `gateway_admin` | Gateway admin actions | Session lifecycle, API keys, webhooks, plugins, settings, infrastructure |
 
 The REST seam denies non-allowlisted mutations of a `read_only` run with 403
-(allowlist `READ_ONLY_REST_ALLOW` at `server/src/services/openwa/authority.ts:822`). Own-issue rules
+(allowlist `READ_ONLY_REST_ALLOW` in `server/src/services/openwa/authority.ts`). Own-issue rules
 match the conversation issue by id or by identifier (`ZHA-2`), as the issue routes do. Comments written by a
 `read_only` run never trigger mention wakes. Persistent API keys of an agent bound
 to a live OpenWA endpoint cannot make non-safe requests at all.
+
+While a live autonomy window (`openwa_autonomy_window`) covers the chat's
+conversation issue, a `read_only` run triggered in that chat by senders who are all
+owners or on the allow list may use `create_task`, non-destructive
+`external_tools` and `cross_chat_send` without approval, inside the window's issue
+tree: REST writes to issues in the tree (share links, comments, documents, child
+issues, issue creation with a parent in the tree), connector tools whose risk is not
+`destructive`, and sends to chats whose conversation issue is in the tree. Deletes,
+cancellations outside the conversation tree, credential issuing (connection intents,
+GitHub operation credentials), `wa_admin`, `gateway_admin`, endpoint and access
+configuration, and senders outside the allow list stay owner-only. The check runs on
+every request, so a closed or expired window restores `read_only`, and every use
+logs `openwa.window_authority_used`. The runtime tool profile stays `read_only`.
 
 ### Adapter support
 
@@ -596,7 +614,7 @@ Every call is audited as `tool_called`.
 
 | Tool | Risk | Purpose |
 | --- | --- | --- |
-| `openwa_send` | write | Send text, image, video, audio, voice note, document, sticker, location, contact or poll to a chat (default origin chat). Markdown text; media from a task attachment; `mentions`; `quoteMessageId`; required `idempotencyKey`. New numbers are checked first. |
+| `openwa_send` | write | Send text, image, video, audio, voice note, document, sticker, location, contact or poll to a chat (default origin chat). Markdown text; media from an attachment of the run's task, the chat's descendant tasks, or a live autonomy window's issue tree; `mentions`; `quoteMessageId`; required `idempotencyKey`. New numbers are checked first. |
 | `openwa_read_chat` | read | Page chat history, newest first, from the stored source (cursor) or live (`deep` reaches 2000 messages). |
 | `openwa_get_media` | read | Store one message's media as a task attachment; returns attachment id, mime, size, `localPath` (absolute file inside the storage root, local-disk storage only) or `contentPath` (attachment API path) and transcript when available (cut to fit 16 KB with `transcriptTruncated`). |
 | `openwa_find` | read | Find contacts and chats by name or number, check a number, or resolve a LID (exactly one of `query`, `phone`, `lid`); query results page with `cursor`. |
@@ -975,7 +993,7 @@ entries: `openwa.endpoint_created`, `openwa.endpoint_updated`, `openwa.owner_add
 `openwa.approval_requested`, `openwa.approval_resolved`, `openwa.approval_cancelled`,
 `openwa.approval_expired`, `openwa.approval_withdrawn`,
 `openwa.grant_created`, `openwa.grant_consumed`, `openwa.grant_revoked`,
-`openwa.grant_expired`, `openwa.gateway_admin_called`, `openwa.linked_session_added`,
+`openwa.grant_expired`, `openwa.window_authority_used`, `openwa.gateway_admin_called`, `openwa.linked_session_added`,
 `openwa.linked_session_chats_changed`, `openwa.linked_session_removed` and
 `openwa.burst_folded`.
 
