@@ -22,7 +22,7 @@ import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon } from "./PriorityIcon";
 import { SHOW_TASK_PRIORITY_UI } from "../lib/ui-flags";
 import { Identity } from "./Identity";
-import type { Issue, IssueStatus } from "@tickernelz/wardmote-shared";
+import type { Issue, IssueStatus, PausedTaskState } from "@tickernelz/wardmote-shared";
 import { AlertTriangle, PauseCircle } from "lucide-react";
 import { isSuccessfulRunHandoffRequired } from "../lib/successful-run-handoff";
 import { collectSubtreeLiveCounts } from "../lib/liveIssueIds";
@@ -155,7 +155,7 @@ interface KanbanBoardProps {
   agents?: Agent[];
   liveIssueIds?: Set<string>;
   liveRunsByIssueId?: ReadonlyMap<string, readonly LiveRunForIssue[]>;
-  pausedIssueIds?: ReadonlySet<string>;
+  pauseStateByIssueId?: ReadonlyMap<string, PausedTaskState>;
   compactCards?: boolean;
   collapsedStatuses?: string[];
   initialVisibleCount?: number;
@@ -171,7 +171,7 @@ function KanbanColumn({
   agents,
   liveIssueIds,
   liveRunsByIssueId,
-  pausedIssueIds,
+  pauseStateByIssueId,
   subtreeLiveCounts,
   compactCards = false,
   collapsed = false,
@@ -184,7 +184,7 @@ function KanbanColumn({
   agents?: Agent[];
   liveIssueIds?: Set<string>;
   liveRunsByIssueId?: ReadonlyMap<string, readonly LiveRunForIssue[]>;
-  pausedIssueIds?: ReadonlySet<string>;
+  pauseStateByIssueId?: ReadonlyMap<string, PausedTaskState>;
   subtreeLiveCounts?: ReadonlyMap<string, number>;
   compactCards?: boolean;
   collapsed?: boolean;
@@ -252,7 +252,7 @@ function KanbanColumn({
               agents={agents}
               isLive={liveIssueIds?.has(issue.id)}
               liveRuns={liveRunsByIssueId?.get(issue.id)}
-              paused={pausedIssueIds?.has(issue.id)}
+              pauseState={pauseStateByIssueId?.get(issue.id)}
               subtreeLiveCount={subtreeLiveCounts?.get(issue.id) ?? 0}
               compact={compactCards}
               className={tone.card}
@@ -285,7 +285,7 @@ function KanbanCard({
   agents,
   isLive,
   liveRuns,
-  paused = false,
+  pauseState,
   subtreeLiveCount = 0,
   isOverlay,
   compact = false,
@@ -295,7 +295,7 @@ function KanbanCard({
   agents?: Agent[];
   isLive?: boolean;
   liveRuns?: readonly LiveRunForIssue[];
-  paused?: boolean;
+  pauseState?: PausedTaskState;
   subtreeLiveCount?: number;
   isOverlay?: boolean;
   compact?: boolean;
@@ -357,7 +357,7 @@ function KanbanCard({
               Next step
             </Badge>
           ) : null}
-          {paused ? <KanbanPausedMarker pausing={Boolean(isLive)} /> : isLive && <KanbanLiveMarker runs={liveRuns} />}
+          {pauseState ? <KanbanPausedMarker state={pauseState} /> : isLive && <KanbanLiveMarker runs={liveRuns} />}
           {!isLive && subtreeLiveCount > 0 && (
             <Badge variant="outline"
               className="border-line px-1.5 text-(length:--text-nano) text-ink-3"
@@ -416,15 +416,21 @@ function KanbanLiveMarker({ runs }: { runs?: readonly LiveRunForIssue[] }) {
   );
 }
 
-function KanbanPausedMarker({ pausing }: { pausing: boolean }) {
+const PAUSE_MARKER_LABEL: Record<PausedTaskState, string> = {
+  pausing: "Pausing",
+  paused: "Paused",
+  pause_failed: "Pause failed",
+};
+
+function KanbanPausedMarker({ state }: { state: PausedTaskState }) {
   return (
     <span
-      data-live-marker={pausing ? "pausing" : "paused"}
-      data-live-health={pausing ? "pausing" : "paused"}
+      data-live-marker={state}
+      data-live-health={state}
       className="inline-flex shrink-0 items-center gap-1 text-(length:--text-nano) font-medium text-ink-2"
     >
       <PauseCircle aria-hidden="true" className="live-now-health-icon h-3 w-3" />
-      {pausing ? "Pausing" : "Paused"}
+      {PAUSE_MARKER_LABEL[state]}
     </span>
   );
 }
@@ -438,7 +444,7 @@ export function KanbanBoard({
   agents,
   liveIssueIds,
   liveRunsByIssueId,
-  pausedIssueIds,
+  pauseStateByIssueId,
   compactCards = false,
   collapsedStatuses = [],
   initialVisibleCount = KANBAN_COLUMN_INITIAL_VISIBLE_LIMIT,
@@ -523,7 +529,7 @@ export function KanbanBoard({
             agents={agents}
             liveIssueIds={liveIssueIds}
             liveRunsByIssueId={liveRunsByIssueId}
-            pausedIssueIds={pausedIssueIds}
+            pauseStateByIssueId={pauseStateByIssueId}
             subtreeLiveCounts={subtreeLiveCounts}
             compactCards={compactCards}
             // Compact mode (any lane explicitly collapsed) also collapses

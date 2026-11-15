@@ -1445,8 +1445,8 @@ function StreamlinedIssuesList({
     return new Map(buildLiveNowEntries(liveRuns, statusById).map((entry) => [entry.issueId, entry.runs]));
   }, [liveRuns, sourceIssues, viewState.viewMode]);
   const boardPausedTasks = usePausedTasks(selectedCompanyId, viewState.viewMode === "board");
-  const boardPausedIssueIds = useMemo(
-    () => new Set(boardPausedTasks.map((task) => task.issueId)),
+  const boardPauseStateByIssueId = useMemo(
+    () => new Map(boardPausedTasks.map((task) => [task.issueId, task.state])),
     [boardPausedTasks],
   );
   const boardHighVolume = viewState.viewMode === "board" && filtered.length > KANBAN_BOARD_HIGH_VOLUME_THRESHOLD;
@@ -2431,7 +2431,7 @@ function StreamlinedIssuesList({
           agents={agents}
           liveIssueIds={liveIssueIds}
           liveRunsByIssueId={boardLiveRunsByIssueId}
-          pausedIssueIds={boardPausedIssueIds}
+          pauseStateByIssueId={boardPauseStateByIssueId}
           compactCards={boardCompactCards}
           collapsedStatuses={boardCollapsedStatuses}
           initialVisibleCount={viewState.boardColumnPageSize}

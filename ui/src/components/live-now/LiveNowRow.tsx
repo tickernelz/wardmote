@@ -173,7 +173,6 @@ export function LiveNowMoreMenu({
   onSteer,
   onStop,
   stopNow = false,
-  onPause,
   onPauseSubtree,
   className,
 }: {
@@ -185,7 +184,6 @@ export function LiveNowMoreMenu({
   onSteer?: () => void;
   onStop: () => void;
   stopNow?: boolean;
-  onPause?: () => void;
   onPauseSubtree?: () => void;
   className?: string;
 }) {
@@ -220,12 +218,6 @@ export function LiveNowMoreMenu({
           <DropdownMenuItem onSelect={onSteer}>
             <MessageSquare aria-hidden="true" />
             Steer {primary.agentName}
-          </DropdownMenuItem>
-        ) : null}
-        {onPause ? (
-          <DropdownMenuItem className="sm:hidden" onSelect={onPause}>
-            <Pause aria-hidden="true" />
-            Pause
           </DropdownMenuItem>
         ) : null}
         {onPauseSubtree ? (
@@ -623,11 +615,7 @@ export function LiveNowRow({
             comfortable && "border-t border-line pt-2 sm:border-t-0 sm:pt-0",
           )}
         >
-          <LiveNowPauseButton
-            actions={actions}
-            iconOnly={!comfortable}
-            className={!comfortable && !actions.pauseFailed ? "hidden sm:inline-flex" : undefined}
-          />
+          <LiveNowPauseButton actions={actions} iconOnly={!comfortable} />
           <Button
             type="button"
             variant="secondary"
@@ -660,7 +648,6 @@ export function LiveNowRow({
             onSteer={toggleComposer}
             stopNow={actions.pausing}
             onStop={actions.pausing ? actions.stopNow : () => actions.setConfirmingStop(true)}
-            onPause={!comfortable && actions.pausable && !actions.pauseBlockedReason ? () => actions.pause("task") : undefined}
             onPauseSubtree={actions.pausable && !actions.pauseBlockedReason ? () => actions.pause("subtree") : undefined}
             className={comfortable ? "ml-auto sm:ml-0" : undefined}
           />
