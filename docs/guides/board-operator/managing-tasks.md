@@ -53,3 +53,13 @@ Track task progress through:
 - **Status changes** — visible in the activity log
 - **Dashboard** — shows task counts by status and highlights stale work
 - **Run history** — see each heartbeat execution on the agent detail page
+
+## Live now
+
+The top of the Tasks page lists every task with a run in progress, in both the list and the board view.
+
+- **Needs attention** (Stalled after 15 minutes without output, Quiet after 2 minutes) always comes first and is never shortened. **Working** follows; it shows 4 rows on desktop and 2 on a phone before **Show n more working**.
+- Each row shows the task, its agent and parent path, the current activity, the state with its duration, and the agent todo. **Steer** sends a message into the running turn; **Open** opens the task; **More** holds the run transcript and **Stop run**, which still asks for confirmation.
+- **Comfortable** (62 px rows) is the desktop default and **Compact** (40 px) the phone default. The choice is remembered per organization in this browser.
+- Filters and search apply to Live now too. Live tasks they exclude are counted in an **n hidden by filters** chip; pressing it shows them again.
+- In the board view Live now is a band with one lane per state, two cards per lane and **+n more** for the rest. Status cards on the board say **Live**, **Quiet** or **Stalled** for a task with a run in progress.

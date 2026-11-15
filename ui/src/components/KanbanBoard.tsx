@@ -26,6 +26,9 @@ import type { Issue, IssueStatus } from "@tickernelz/wardmote-shared";
 import { AlertTriangle } from "lucide-react";
 import { isSuccessfulRunHandoffRequired } from "../lib/successful-run-handoff";
 import { collectSubtreeLiveCounts } from "../lib/liveIssueIds";
+import type { LiveRunForIssue } from "../api/heartbeats";
+import { classifyLiveNowHealth, mostSevereSignal } from "./live-now/live-now-health";
+import { useLiveNowClock } from "./live-now/useLiveNowModel";
 import { cn } from "../lib/utils";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -151,6 +154,7 @@ interface KanbanBoardProps {
   issues: Issue[];
   agents?: Agent[];
   liveIssueIds?: Set<string>;
+  liveRunsByIssueId?: ReadonlyMap<string, readonly LiveRunForIssue[]>;
   compactCards?: boolean;
   collapsedStatuses?: string[];
   initialVisibleCount?: number;
@@ -165,6 +169,7 @@ function KanbanColumn({
   issues,
   agents,
   liveIssueIds,
+  liveRunsByIssueId,
   subtreeLiveCounts,
   compactCards = false,
   collapsed = false,
@@ -176,6 +181,7 @@ function KanbanColumn({
   issues: Issue[];
   agents?: Agent[];
   liveIssueIds?: Set<string>;
+  liveRunsByIssueId?: ReadonlyMap<string, readonly LiveRunForIssue[]>;
   subtreeLiveCounts?: ReadonlyMap<string, number>;
   compactCards?: boolean;
   collapsed?: boolean;
@@ -242,6 +248,7 @@ function KanbanColumn({
               issue={issue}
               agents={agents}
               isLive={liveIssueIds?.has(issue.id)}
+              liveRuns={liveRunsByIssueId?.get(issue.id)}
               subtreeLiveCount={subtreeLiveCounts?.get(issue.id) ?? 0}
               compact={compactCards}
               className={tone.card}
@@ -273,6 +280,7 @@ function KanbanCard({
   issue,
   agents,
   isLive,
+  liveRuns,
   subtreeLiveCount = 0,
   isOverlay,
   compact = false,
@@ -281,6 +289,7 @@ function KanbanCard({
   issue: Issue;
   agents?: Agent[];
   isLive?: boolean;
+  liveRuns?: readonly LiveRunForIssue[];
   subtreeLiveCount?: number;
   isOverlay?: boolean;
   compact?: boolean;
@@ -342,15 +351,7 @@ function KanbanCard({
               Next step
             </Badge>
           ) : null}
-          {isLive && (
-            <span className="inline-flex shrink-0 items-center gap-1 text-(length:--text-nano) font-medium text-blue-600 dark:text-blue-400">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
-              </span>
-              {compact ? "Live" : null}
-            </span>
-          )}
+          {isLive && <KanbanLiveMarker runs={liveRuns} />}
           {!isLive && subtreeLiveCount > 0 && (
             <Badge variant="outline"
               className="border-line px-1.5 text-(length:--text-nano) text-ink-3"
@@ -381,12 +382,43 @@ function KanbanCard({
   );
 }
 
+function KanbanLiveMarker({ runs }: { runs?: readonly LiveRunForIssue[] }) {
+  const now = useLiveNowClock(runs ?? NO_RUNS);
+  const health = runs && runs.length > 0
+    ? mostSevereSignal(runs.map((run) => classifyLiveNowHealth(run, now))).health
+    : "active";
+  const label = health === "stalled" ? "Stalled" : health === "quiet" ? "Quiet" : "Live";
+  return (
+    <span
+      data-live-marker={label.toLowerCase()}
+      data-live-health={health}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 text-(length:--text-nano) font-medium",
+        label === "Live" ? "text-blue-600 dark:text-blue-400" : "text-ink-2",
+      )}
+    >
+      {label === "Live" ? (
+        <span aria-hidden="true" className="relative flex h-2 w-2">
+          <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 motion-reduce:animate-none" />
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+        </span>
+      ) : (
+        <span aria-hidden="true" className="live-now-health-dot h-2 w-2 rounded-full" />
+      )}
+      {label}
+    </span>
+  );
+}
+
+const NO_RUNS: readonly LiveRunForIssue[] = [];
+
 /* ── Main Board ── */
 
 export function KanbanBoard({
   issues,
   agents,
   liveIssueIds,
+  liveRunsByIssueId,
   compactCards = false,
   collapsedStatuses = [],
   initialVisibleCount = KANBAN_COLUMN_INITIAL_VISIBLE_LIMIT,
@@ -470,6 +502,7 @@ export function KanbanBoard({
             issues={columnIssues[status] ?? []}
             agents={agents}
             liveIssueIds={liveIssueIds}
+            liveRunsByIssueId={liveRunsByIssueId}
             subtreeLiveCounts={subtreeLiveCounts}
             compactCards={compactCards}
             // Compact mode (any lane explicitly collapsed) also collapses

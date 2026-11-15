@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import type { Issue, IssueStatus } from "@tickernelz/wardmote-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LiveRunForIssue } from "../api/heartbeats";
 import { getKanbanColumnTone, KanbanBoard, resolveKanbanTargetStatus } from "./KanbanBoard";
 
 vi.mock("@/lib/router", () => ({
@@ -220,6 +221,42 @@ describe("KanbanBoard", () => {
     expect(container.textContent).toContain("Issue 1");
     expect(container.textContent).toContain("Codex");
     expect(container.textContent).toContain("Live");
+  });
+
+  it("names the live state on status cards, so a stalled run reads Stalled and not Live", () => {
+    const now = Date.now();
+    const liveRun = (id: string, issueId: string, lastEventAgoMs: number): LiveRunForIssue => ({
+      id,
+      issueId,
+      status: "running",
+      invocationSource: "assignment",
+      triggerDetail: null,
+      startedAt: new Date(now - 40 * 60_000).toISOString(),
+      finishedAt: null,
+      createdAt: new Date(now - 40 * 60_000).toISOString(),
+      agentId: "agent-1",
+      agentName: "Codex",
+      adapterType: "process",
+      currentToolName: "bash",
+      currentStatusMessage: "Running bash",
+      lastEventAt: new Date(now - lastEventAgoMs).toISOString(),
+    });
+    const issues = [createIssue(1, "in_progress"), createIssue(2, "in_progress"), createIssue(3, "in_progress")];
+    const { container } = renderBoard({
+      issues,
+      liveIssueIds: new Set(["issue-in_progress-1", "issue-in_progress-2"]),
+      liveRunsByIssueId: new Map([
+        ["issue-in_progress-1", [liveRun("run-1", "issue-in_progress-1", 5_000)]],
+        ["issue-in_progress-2", [liveRun("run-2", "issue-in_progress-2", 20 * 60_000)]],
+      ]),
+    });
+
+    const markerOf = (identifier: string) =>
+      [...container.querySelectorAll("a")].find((link) => link.textContent?.includes(identifier))
+        ?.querySelector("[data-live-marker]")?.textContent ?? null;
+    expect(markerOf("PAP-1")).toBe("Live");
+    expect(markerOf("PAP-2")).toBe("Stalled");
+    expect(markerOf("PAP-3")).toBeNull();
   });
 
   it("resolves drop targets from status rails and cards", () => {

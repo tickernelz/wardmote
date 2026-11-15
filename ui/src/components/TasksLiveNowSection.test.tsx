@@ -9,11 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LiveRunForIssue } from "../api/heartbeats";
 import {
   TasksLiveNowSection,
-  buildLiveNowEntries,
   liveNowCollapsedStorageKey,
+  liveNowDensityStorageKey,
   useAboveViewportResizeCompensation,
 } from "./TasksLiveNowSection";
 import { classifyLiveNowHealth, countLiveNowHealth } from "./live-now/live-now-health";
+import { buildLiveNowEntries } from "./live-now/useLiveNowModel";
 
 const mockIssuesApi = vi.hoisted(() => ({ get: vi.fn(), addComment: vi.fn() }));
 const mockHeartbeatsApi = vi.hoisted(() => ({ cancel: vi.fn() }));
@@ -97,6 +98,15 @@ function liveRows() {
   return [...container.querySelectorAll<HTMLElement>("[data-live-now-issue-id]")];
 }
 
+function openMoreMenu(row: HTMLElement) {
+  const trigger = row.querySelector<HTMLButtonElement>("button[aria-label^='More actions for']")!;
+  flushSync(() => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+}
+
+function menuItem(text: string) {
+  return [...document.body.querySelectorAll<HTMLElement>("[role='menuitem']")].find((item) => item.textContent?.includes(text));
+}
+
 beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -137,7 +147,10 @@ describe("buildLiveNowEntries", () => {
 });
 
 describe("TasksLiveNowSection", () => {
+  const comfortable = () => localStorage.setItem(liveNowDensityStorageKey("company-1"), "comfortable");
+
   it("shows a live task from an unloaded page with its parent path from the detail ancestors", async () => {
+    comfortable();
     mockIssuesApi.get.mockResolvedValue(issue({
       id: "issue-9",
       identifier: "ZHA-723",
@@ -174,6 +187,7 @@ describe("TasksLiveNowSection", () => {
   });
 
   it("builds the parent path from loaded tasks and caps it at three ancestors", () => {
+    comfortable();
     const loaded = [
       issue({ id: "p1", identifier: "ZHA-1", parentId: null }),
       issue({ id: "p2", identifier: "ZHA-2", parentId: "p1" }),
@@ -190,6 +204,7 @@ describe("TasksLiveNowSection", () => {
   });
 
   it("renders one row listing every agent when two runs share a task", () => {
+    comfortable();
     render(
       <TasksLiveNowSection
         companyId="company-1"
@@ -329,7 +344,7 @@ describe("Live now cards", () => {
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  it("shows the agent, health, current tool and latest snippet, with stalled tasks first", () => {
+  it("shows the agent, health and current tool, keeps the latest snippet in the tooltip, and puts stalled tasks first", () => {
     render(
       <TasksLiveNowSection
         companyId="company-1"
@@ -350,8 +365,12 @@ describe("Live now cards", () => {
     expect(active.querySelector("[data-slot='tasks-live-now-health']")?.textContent).toBe("Working");
     expect(active.querySelector("[data-slot='tasks-live-now-status']")?.textContent).toContain("Running bash");
     expect(active.querySelector("[data-slot='tasks-live-now-status'] svg")).not.toBeNull();
-    expect(active.querySelector("[data-slot='tasks-live-now-snippet']")?.textContent).toBe("Rebasing before the push.");
-    expect(container.querySelector("[data-slot='tasks-live-now-summary']")?.textContent).toContain("1 stalled");
+    expect(active.querySelector("[data-slot='tasks-live-now-status']")?.getAttribute("title")).toContain("Rebasing before the push.");
+    expect(container.querySelector("[data-slot='tasks-live-now-groups']")?.textContent).toContain("Needs attention 1");
+    expect([...container.querySelectorAll("[data-live-now-group]")].map((group) => group.getAttribute("data-live-now-group"))).toEqual([
+      "attention",
+      "working",
+    ]);
   });
 
   it("shows a model fallback badge only for a run on a fallback model", async () => {
@@ -438,14 +457,15 @@ describe("Live now cards", () => {
     );
   });
 
-  it("links to the task and to the live run transcript", () => {
+  it("links to the task from the row and to the live run transcript from the More menu", async () => {
     render(<TasksLiveNowSection companyId="company-1" liveRuns={[run({})]} issues={[issue({})]} />);
 
     const row = liveRows()[0]!;
     expect(row.querySelector("a[aria-label='Open ZHA-1']")?.getAttribute("href")).toBe("/issues/ZHA-1");
-    expect(row.querySelector("a[aria-label='Run transcript for Builder']")?.getAttribute("href")).toBe(
-      "/agents/agent-1/runs/run-1",
-    );
+    openMoreMenu(row);
+    await waitFor(() => expect(menuItem("Run transcript")).toBeDefined());
+    expect(menuItem("Run transcript")!.getAttribute("href")).toBe("/agents/agent-1/runs/run-1");
+    expect(menuItem("Open task")!.getAttribute("href")).toBe("/issues/ZHA-1");
   });
 
   it("steers the running turn from the card composer", async () => {
@@ -475,11 +495,20 @@ describe("Live now cards", () => {
     expect(liveRows()[0]!.querySelector("[role='status']")?.textContent).toBe("Steered into Builder's turn");
   });
 
-  it("asks for confirmation before stopping the run", async () => {
+  it("offers Stop only in the More menu and asks for the same confirmation before stopping the run", async () => {
     mockHeartbeatsApi.cancel.mockResolvedValue(undefined);
     render(<TasksLiveNowSection companyId="company-1" liveRuns={[run({})]} issues={[issue({})]} />);
 
-    flushSync(() => liveRows()[0]!.querySelector<HTMLButtonElement>("button[aria-label=\"Stop Builder's run on ZHA-1\"]")!.click());
+    const stopFromMenu = async () => {
+      openMoreMenu(liveRows()[0]!);
+      await waitFor(() => expect(menuItem("Stop run")).toBeDefined());
+      const item = menuItem("Stop run")!;
+      expect(item.getAttribute("aria-label")).toBe("Stop Builder's run on ZHA-1");
+      flushSync(() => item.click());
+    };
+
+    expect(liveRows()[0]!.querySelector("button[aria-label=\"Stop Builder's run on ZHA-1\"]")).toBeNull();
+    await stopFromMenu();
     await waitFor(() => expect(document.body.querySelector("[role='alertdialog']")).not.toBeNull());
     expect(mockHeartbeatsApi.cancel).not.toHaveBeenCalled();
 
@@ -489,7 +518,7 @@ describe("Live now cards", () => {
     await waitFor(() => expect(document.body.querySelector("[role='alertdialog']")).toBeNull());
     expect(mockHeartbeatsApi.cancel).not.toHaveBeenCalled();
 
-    flushSync(() => liveRows()[0]!.querySelector<HTMLButtonElement>("button[aria-label=\"Stop Builder's run on ZHA-1\"]")!.click());
+    await stopFromMenu();
     await waitFor(() => expect(document.body.querySelector("[role='alertdialog']")).not.toBeNull());
     const confirm = [...document.body.querySelectorAll<HTMLButtonElement>("[role='alertdialog'] button")].find(
       (button) => button.textContent === "Stop run",
@@ -517,7 +546,7 @@ describe("Live now cards", () => {
     );
     expect(container.querySelector("[data-slot='tasks-live-now-avatars']")).toBeNull();
 
-    const toggle = container.querySelector<HTMLButtonElement>("section > button[aria-expanded]")!;
+    const toggle = container.querySelector<HTMLButtonElement>("section button[aria-expanded]")!;
     flushSync(() => toggle.click());
 
     expect(liveRows()).toHaveLength(0);
@@ -527,12 +556,134 @@ describe("Live now cards", () => {
       "Builder",
       "Reviewer",
     ]);
-    expect(toggle.textContent).toContain("1 stalled");
+    expect(toggle.textContent).toContain("1 needs attention");
     expect(container.querySelector("[data-slot='tasks-live-now-count']")?.textContent).toBe("3");
 
     flushSync(() => toggle.click());
     expect(liveRows()).toHaveLength(3);
     expect(container.querySelector("[data-slot='tasks-live-now-avatars']")).toBeNull();
+  });
+});
+
+describe("Live now groups, density, filters and board lanes", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const working = (index: number) => ({
+    ...healthFixtures.active,
+    id: `working-${index}`,
+    issueId: `working-${index}`,
+    startedAt: at((10 + index) * 60_000),
+  });
+  const mixedRuns = [
+    working(1),
+    working(2),
+    working(3),
+    working(4),
+    { ...healthFixtures.stalledByClock, issueId: "stalled" },
+    { ...healthFixtures.quietByClock, issueId: "quiet" },
+  ];
+  const mixedIssues = ["working-1", "working-2", "working-3", "working-4", "stalled", "quiet"].map((id, index) =>
+    issue({ id, identifier: `ZHA-${index + 10}`, title: id }),
+  );
+
+  function groupIds(group: string) {
+    return [...container.querySelectorAll<HTMLElement>(`[data-live-now-group='${group}'] [data-live-now-issue-id]`)].map(
+      (row) => row.dataset.liveNowIssueId,
+    );
+  }
+
+  it("keeps every task that needs attention visible and only shortens the working group", () => {
+    render(<TasksLiveNowSection companyId="company-1" liveRuns={mixedRuns} issues={mixedIssues} />);
+
+    expect(groupIds("attention")).toEqual(["stalled", "quiet"]);
+    expect(groupIds("working")).toEqual(["working-1", "working-2"]);
+    const more = [...container.querySelectorAll("button")].find((button) => button.textContent === "Show 2 more working")!;
+    flushSync(() => more.click());
+    expect(groupIds("working")).toEqual(["working-1", "working-2", "working-3", "working-4"]);
+  });
+
+  it("moves a task into Needs attention when it goes quiet, without new run data", () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(NOW);
+    const goingQuiet = run({ startedAt: at(10 * 60_000), currentToolName: "bash", lastEventAt: at(100_000) });
+    render(<TasksLiveNowSection companyId="company-1" liveRuns={[goingQuiet]} issues={[issue({})]} />);
+    expect(groupIds("working")).toEqual(["issue-1"]);
+
+    flushSync(() => vi.advanceTimersByTime(19_000));
+    expect(groupIds("working")).toEqual(["issue-1"]);
+    flushSync(() => vi.advanceTimersByTime(2_000));
+    expect(groupIds("attention")).toEqual(["issue-1"]);
+    expect(liveRows()[0]!.querySelector("[data-slot='tasks-live-now-health']")?.textContent).toBe("Quiet 2m");
+  });
+
+  it("remembers the row density per company", () => {
+    const props = { liveRuns: [run({})], issues: [issue({})] };
+    render(<TasksLiveNowSection companyId="company-1" {...props} />);
+    expect(liveRows()[0]!.dataset.density).toBe("compact");
+
+    flushSync(() => container.querySelector<HTMLButtonElement>("button[aria-label='Comfortable rows']")!.click());
+    expect(liveRows()[0]!.dataset.density).toBe("comfortable");
+    expect(localStorage.getItem(liveNowDensityStorageKey("company-1"))).toBe("comfortable");
+
+    flushSync(() => root!.unmount());
+    render(<TasksLiveNowSection companyId="company-1" {...props} />);
+    expect(liveRows()[0]!.dataset.density).toBe("comfortable");
+
+    flushSync(() => root!.unmount());
+    render(<TasksLiveNowSection companyId="company-2" {...props} />);
+    expect(liveRows()[0]!.dataset.density).toBe("compact");
+  });
+
+  it("applies the board filters and offers the tasks they hide behind a chip", () => {
+    const onlyWorking = (candidate: Issue) => candidate.id.startsWith("working");
+    render(
+      <TasksLiveNowSection companyId="company-1" liveRuns={mixedRuns} issues={mixedIssues} issueFilter={onlyWorking} />,
+    );
+
+    expect(groupIds("attention")).toEqual([]);
+    const chip = container.querySelector<HTMLButtonElement>("[data-slot='tasks-live-now-hidden']")!;
+    expect(chip.textContent).toBe("2 hidden by filters");
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+    expect(container.querySelector("[data-slot='tasks-live-now-count']")?.textContent).toBe("4");
+
+    flushSync(() => chip.click());
+    expect(groupIds("attention")).toEqual(["stalled", "quiet"]);
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("shows no hidden chip when the filters keep every live task", () => {
+    render(
+      <TasksLiveNowSection companyId="company-1" liveRuns={mixedRuns} issues={mixedIssues} issueFilter={() => true} />,
+    );
+    expect(container.querySelector("[data-slot='tasks-live-now-hidden']")).toBeNull();
+    expect(liveRows()).toHaveLength(4);
+  });
+
+  it("renders board lanes per state with two cards each and the rest behind +n more", () => {
+    render(<TasksLiveNowSection companyId="company-1" liveRuns={mixedRuns} issues={mixedIssues} view="board" />);
+
+    const lane = (group: string) => container.querySelector<HTMLElement>(`[data-live-now-lane='${group}']`)!;
+    const laneIds = (group: string) =>
+      [...lane(group).querySelectorAll<HTMLElement>("[data-live-now-issue-id]")].map((card) => card.dataset.liveNowIssueId);
+    expect([...container.querySelectorAll("[data-live-now-lane]")].map((el) => el.getAttribute("data-live-now-lane"))).toEqual([
+      "attention",
+      "working",
+    ]);
+    expect(laneIds("attention")).toEqual(["stalled", "quiet"]);
+    expect(laneIds("working")).toEqual(["working-1", "working-2"]);
+    expect(container.querySelector("button[aria-label='Comfortable rows']")).toBeNull();
+
+    const more = [...lane("working").querySelectorAll("button")].find((button) => button.textContent === "+2 more")!;
+    flushSync(() => more.click());
+    expect(laneIds("working")).toEqual(["working-1", "working-2", "working-3", "working-4"]);
   });
 });
 

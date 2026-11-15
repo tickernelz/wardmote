@@ -4,6 +4,8 @@ import { statusLabelIcon, toolTaxonomy, type ToolIcon } from "../task-chat/tool-
 
 export type LiveNowHealth = "starting" | "active" | "thinking" | "quiet" | "stalled";
 
+export type LiveNowGroup = "attention" | "working";
+
 export interface LiveNowHealthSignal {
   health: LiveNowHealth;
   label: string;
@@ -88,6 +90,30 @@ export function classifyLiveNowHealth(run: LiveRunForIssue, now: number): LiveNo
   }
   if (toolInFlight(run)) return { health: "active", label: "Working", silentMs };
   return { health: "thinking", label: "Thinking", silentMs };
+}
+
+/** Earliest moment the run's health or its label changes on its own, or null when only new run data can change it. */
+export function nextLiveNowHealthChangeMs(run: LiveRunForIssue, now: number): number | null {
+  const startedMs = toMs(run.startedAt);
+  if (startedMs === null || run.status === "queued" || run.status === "scheduled_retry") return null;
+  const lastMs = lastLiveActivityMs(run);
+  if (lastMs === null && now - startedMs < STARTING_WINDOW_MS) return startedMs + STARTING_WINDOW_MS;
+  const sinceMs = lastMs ?? startedMs;
+  const silentMs = Math.max(0, now - sinceMs);
+  if (silentMs < QUIET_AFTER_MS) return sinceMs + QUIET_AFTER_MS;
+  const nextMinute = sinceMs + (Math.floor(silentMs / 60_000) + 1) * 60_000;
+  const stalledAt = sinceMs + (run.outputSilence?.criticalThresholdMs || STALLED_AFTER_MS);
+  return stalledAt > now ? Math.min(nextMinute, stalledAt) : nextMinute;
+}
+
+/** Stalled and quiet runs need the operator; every other live run is working. */
+export function liveNowGroupOf(health: LiveNowHealth): LiveNowGroup {
+  return health === "stalled" || health === "quiet" ? "attention" : "working";
+}
+
+/** Orders signals by how much they need the operator, most first. */
+export function compareLiveNowSeverity(a: LiveNowHealth, b: LiveNowHealth): number {
+  return HEALTH_SEVERITY[b] - HEALTH_SEVERITY[a];
 }
 
 /** The signal that most needs the operator's attention. */

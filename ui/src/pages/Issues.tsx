@@ -310,13 +310,15 @@ function OrganizationIssues({
       initialWorkspaces={initialWorkspaces.length > 0 ? initialWorkspaces : undefined}
       initialStatuses={initialStatuses}
       toolbarContext={toolbarContext}
-      listHeader={(
+      listHeader={({ viewMode, issueFilter }) => (
         <TasksLiveNowSection
           key={selectedCompanyId}
           companyId={selectedCompanyId}
           liveRuns={liveRuns}
           issues={issues}
           issueLinkState={issueLinkState}
+          view={viewMode}
+          issueFilter={issueFilter}
         />
       )}
       initialSearch={syncedSearch}
