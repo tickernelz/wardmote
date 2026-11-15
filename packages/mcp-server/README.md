@@ -81,7 +81,7 @@ The surface is bounded by the OpenAPI registry - 441 tools for an agent, 716 for
 The caller picks the size of what it reads; nothing on the agent paths is cut without a marker.
 
 - `wardmoteListIssues` takes any positive `limit` with `offset` paging. Its `view: "compact"` cuts each description at 1200 characters and sets `descriptionTruncated`; `wardmoteGetIssue` returns the whole row.
-- Issue comment lists take any positive `limit`; chat endpoint audit and activity pages take any positive `limit` and follow `nextCursor`. Audit entries store their content whole, so `config_changed` entries carry the full before and after values.
+- Issue comment lists take any positive `limit`; chat endpoint audit and activity pages take any positive `limit` and follow `nextCursor`. Audit entries store config changes and messages whole, so `config_changed` entries carry the full before and after values; `tool_called` entries keep at most 16 KB of content, and a cut field ends with `…[truncated N bytes]` or becomes `{ truncated: true, bytes, preview }`.
 - `wardmoteCreateChildIssue` has no per-parent child count cap, and task monitor `notes` have no length cap.
 - OpenWA tools (`openwa_*`) take `maxBytes`, `maxChars`, `limit` and `cursor`; `skills/openwa/SKILL.md` lists them with the fixed limits WhatsApp and the OpenWA gateway impose.
 

@@ -32,6 +32,7 @@ import {
   assertReadable,
   chatRef,
   consumeReplyGrants,
+  byteBudget,
   fitPage,
   resultBytes,
   messageIdOf,
@@ -429,15 +430,12 @@ async function wardmoteAuditList(ctx: ToolContext, args: Args, cursor: string | 
     },
     ...(cursor ? { cursor } : {}),
     limit: filters.limit ?? 25,
+    fits: byteBudget({ operation: OPENWA_AUDIT_LIST_OPERATION, access: "metadata" }, maxBytes),
   }).catch((error: unknown) => {
     if (error instanceof HttpError && error.status === 403) throw refusal(403, "owner_only", error.message);
     throw error;
   });
-  const envelope = { operation: OPENWA_AUDIT_LIST_OPERATION, access: page.access };
-  const fitted = fitPage(envelope, page.items, maxBytes);
-  const last = fitted.page.at(-1);
-  const nextCursor = fitted.truncated && last ? Buffer.from(JSON.stringify([last.occurredAt, last.id])).toString("base64url") : page.nextCursor;
-  return { ...envelope, items: fitted.page, nextCursor, ...(fitted.truncated ? { truncated: true } : {}) };
+  return { operation: OPENWA_AUDIT_LIST_OPERATION, access: page.access, items: page.items, nextCursor: page.nextCursor, ...(page.truncated ? { truncated: true } : {}) };
 }
 
 async function dispatch(ctx: ToolContext, resolved: ResolvedScope, effective: OpenwaEffectiveOperation, args: Args): Promise<OpenwaCallResult> {

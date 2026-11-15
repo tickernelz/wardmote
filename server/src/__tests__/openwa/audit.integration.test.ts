@@ -33,6 +33,7 @@ import { chatChannelRoutes } from "../../routes/chat-channels.js";
 import { chatChannelService, type ChatChannelService } from "../../services/chat-channels.js";
 import { ChatSdkRuntime } from "../../services/chat-sdk-runtime.js";
 import { REDACTED_EVENT_VALUE } from "../../redaction.js";
+import { byteBudget } from "../../services/openwa/tools.js";
 import {
   expireOpenwaGrants,
   listOpenwaAudit,
@@ -304,6 +305,41 @@ describeEmbeddedPostgres("OpenWA audit and retention", () => {
     expect((await request(owner).get(path).query({ unknown: "x" })).status).toBe(400);
   });
 
+  it("stops loading audit rows once the caller's byte budget is full and pages the rest", async () => {
+    const t = await seed();
+    const base = Date.parse("2026-10-01T00:00:00.000Z");
+    for (let index = 0; index < 60; index++) await record(t, "tool_called", new Date(base + index * 60_000), { text: index + ":" + "x".repeat(4_000) });
+    const viewer = { type: "board", userId: t.companyOwner.userId, instanceAdmin: false } as const;
+    const limits: number[] = [];
+    const select = db.select.bind(db);
+    const spy = vi.spyOn(db, "select").mockImplementation(((fields: never) => {
+      const builder = select(fields);
+      const from = builder.from.bind(builder);
+      return Object.assign(builder, {
+        from: (table: never) => {
+          const query = from(table);
+          const limit = query.limit.bind(query);
+          return Object.assign(query, { limit: (count: number) => (limits.push(count), limit(count)) });
+        },
+      });
+    }) as never);
+    const first = await listOpenwaAudit(db, {
+      companyId: t.companyId,
+      endpointId: t.endpointId,
+      viewer,
+      limit: 5_000,
+      fits: byteBudget({ operation: "wardmote.audit.list", access: "metadata" }, 16_384),
+    }).finally(() => spy.mockRestore());
+    expect(Math.max(...limits)).toBeLessThanOrEqual(26);
+    expect(first.truncated).toBe(true);
+    expect(first.items.length).toBeGreaterThan(0);
+    expect(first.items.length).toBeLessThan(60);
+    expect(Buffer.byteLength(JSON.stringify(first.items))).toBeLessThanOrEqual(16_384);
+    const rest = await listOpenwaAudit(db, { companyId: t.companyId, endpointId: t.endpointId, viewer, limit: 5_000, cursor: first.nextCursor! });
+    expect(rest.nextCursor).toBeNull();
+    expect(new Set([...first.items, ...rest.items].map((item) => item.id)).size).toBe(60);
+  });
+
   it("purges content after the endpoint retention and keeps metadata", async () => {
     const t = await seed({ auditContentRetentionDays: 2 });
     const occurredAt = new Date("2026-10-01T00:00:00.000Z");
@@ -363,10 +399,10 @@ describeEmbeddedPostgres("OpenWA audit and retention", () => {
     expect(await scheduler.runDue()).toEqual({ purged: 1, batches: 1, expiredGrants: 0 });
   });
 
-  it("redacts credentials and stores content whole", async () => {
+  it("redacts credentials, stores config and message content whole and cuts tool calls at 16 KB with a marker", async () => {
     const t = await seed();
     await recordOpenwaAudit(db, {
-      companyId: t.companyId, endpointId: t.endpointId, kind: "tool_called", actorKind: "agent",
+      companyId: t.companyId, endpointId: t.endpointId, kind: "config_changed", actorKind: "agent",
       metadata: { operation: "openwa.sendText", apiKey: "wa-live-0123456789abcdef" },
       content: {
         args: { chatId: CHAT, apiKey: "wa-live-0123456789abcdef", text: "Authorization: Bearer sk-live-abcdefghijklmnopqrstuvwxyz0123456789", blob: "x".repeat(10_000) },
@@ -384,6 +420,25 @@ describeEmbeddedPostgres("OpenWA audit and retention", () => {
     expect(content.resultSummary).toBe("y".repeat(5_000));
     expect(content.text).toBe("z".repeat(40_000));
     expect(serialized).not.toContain("[truncated");
+
+    await recordOpenwaAudit(db, {
+      companyId: t.companyId, endpointId: t.endpointId, kind: "message_sent", actorKind: "agent",
+      metadata: {}, content: { text: "m".repeat(40_000) },
+    });
+    await recordOpenwaAudit(db, {
+      companyId: t.companyId, endpointId: t.endpointId, kind: "tool_called", actorKind: "agent",
+      metadata: { operation: "openwa.sendText" },
+      content: { args: { blob: "x".repeat(10_000) }, resultSummary: "y".repeat(5_000), text: "z".repeat(40_000) },
+    });
+    const rows = await db.select().from(chatAuditEntries).where(eq(chatAuditEntries.endpointId, t.endpointId));
+    const message = rows.find((entry) => entry.kind === "message_sent")!;
+    expect((message.content as { text: string }).text).toBe("m".repeat(40_000));
+    const tool = rows.find((entry) => entry.kind === "tool_called")!;
+    const cut = tool.content as { args: { truncated: true; bytes: number }; resultSummary: string; text: string };
+    expect(Buffer.byteLength(JSON.stringify(cut))).toBeLessThanOrEqual(16_384);
+    expect(cut.text).toContain("…[truncated 40000 bytes]");
+    expect(cut.resultSummary).toBe("y".repeat(5_000));
+    expect(cut.args).toMatchObject({ truncated: true, bytes: Buffer.byteLength(JSON.stringify({ blob: "x".repeat(10_000) })) });
   });
 
   async function grantFixture(t: Fixture, input: { expiresAt: Date; scope?: "one_action" | "requester" }) {

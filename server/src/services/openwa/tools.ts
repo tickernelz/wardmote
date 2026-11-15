@@ -201,13 +201,11 @@ function clip(value: string, limit: number): { text: string; truncated: boolean 
   return chars.length <= limit ? { text: value, truncated: false } : { text: chars.slice(0, limit).join("") + "…", truncated: true };
 }
 
-/** Caller-chosen result budget: maxBytes when given (at least the minimum), else the default page size. */
 export function resultBytes(args: Args): number {
   const value = Number(args.maxBytes);
   return Number.isFinite(value) && value >= OPENWA_TOOL_RESULT_MIN_BYTES ? Math.floor(value) : OPENWA_TOOL_RESULT_DEFAULT_BYTES;
 }
 
-/** Caller-chosen text cut: maxChars when given, else the tool's default. */
 export function textChars(args: Args, fallback: number): number {
   const value = Number(args.maxChars);
   return Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
@@ -1304,14 +1302,22 @@ export function liveView(
   };
 }
 
-export function fitPage<T>(envelope: Record<string, unknown>, items: T[], maxBytes = OPENWA_TOOL_RESULT_DEFAULT_BYTES): { page: T[]; truncated: boolean } {
+export function byteBudget(envelope: Record<string, unknown>, maxBytes = OPENWA_TOOL_RESULT_DEFAULT_BYTES): (item: unknown, taken: number) => boolean {
   const budget = maxBytes - bytes(envelope) - RESULT_ENVELOPE_BYTES;
   let used = 0;
+  return (item, taken) => {
+    const size = bytes(item) + 1;
+    if (used + size > budget && taken > 0) return false;
+    used += size;
+    return true;
+  };
+}
+
+export function fitPage<T>(envelope: Record<string, unknown>, items: T[], maxBytes = OPENWA_TOOL_RESULT_DEFAULT_BYTES): { page: T[]; truncated: boolean } {
+  const fits = byteBudget(envelope, maxBytes);
   const page: T[] = [];
   for (const item of items) {
-    const size = bytes(item) + 1;
-    if (used + size > budget && page.length > 0) return { page, truncated: true };
-    used += size;
+    if (!fits(item, page.length)) return { page, truncated: true };
     page.push(item);
   }
   return { page, truncated: false };
@@ -1332,24 +1338,29 @@ async function openwaReadChat(ctx: ToolContext, args: Args): Promise<Record<stri
   if (source === "stored") {
     if (cursor && !cursor.startsWith("s:")) throw new OpenwaToolError(400, "invalid_cursor", "The cursor belongs to the live source");
     let after = cursor ? cursor.slice(2) : null;
-    const messages: OpenwaStoredMessage[] = [];
+    const envelope = { chatRef: ref, source };
+    const fits = byteBudget(envelope, maxBytes);
+    const messages: ReturnType<typeof storedView>[] = [];
+    let lastRow: string | null = null;
+    let truncated = false;
     let exhausted = false;
-    while (messages.length < limit) {
+    while (messages.length < limit && !truncated && !exhausted) {
       const want = Math.min(limit - messages.length, STORED_PAGE_LIMIT);
       const page = await gatewayCall(ctx, (gateway) => gateway.listStoredMessages({ chatId: target.chatId, limit: want, after, inlineMedia: false }));
-      messages.push(...page.messages);
-      if (page.messages.length < want) {
-        exhausted = true;
-        break;
+      for (const message of page.messages) {
+        const view = storedView(ctx, message, ownerKeys, chars);
+        if (!fits(view, messages.length)) {
+          truncated = true;
+          break;
+        }
+        messages.push(view);
+        lastRow = message.id;
       }
-      after = page.messages[page.messages.length - 1]!.id;
+      exhausted = page.messages.length < want;
+      after = page.messages.at(-1)?.id ?? after;
     }
-    const views = messages.map((message) => ({ row: message.id, view: storedView(ctx, message, ownerKeys, chars) }));
-    const envelope = { chatRef: ref, source };
-    const fitted = fitPage(envelope, views.map((entry) => entry.view), maxBytes);
-    const last = views[fitted.page.length - 1];
-    const more = fitted.truncated || !exhausted;
-    return { ...envelope, messages: fitted.page, nextCursor: more && last ? "s:" + last.row : null, ...(fitted.truncated ? { truncated: true } : {}) };
+    const more = truncated || !exhausted;
+    return { ...envelope, messages, nextCursor: more && lastRow ? "s:" + lastRow : null, ...(truncated ? { truncated: true } : {}) };
   }
   if (cursor && !cursor.startsWith("l:")) throw new OpenwaToolError(400, "invalid_cursor", "The cursor belongs to the stored source");
   const offset = cursor ? Number(cursor.slice(2)) : 0;
@@ -1372,7 +1383,6 @@ async function openwaReadChat(ctx: ToolContext, args: Args): Promise<Record<stri
   };
 }
 
-/** Marks a live read that reached the gateway's history ceiling. */
 export function liveCeiling(fetched: number, want: number, consumed: number): { historyCeiling?: number } {
   return fetched >= want && consumed >= DEEP_LIMIT ? { historyCeiling: DEEP_LIMIT } : {};
 }

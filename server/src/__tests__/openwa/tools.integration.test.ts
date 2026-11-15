@@ -996,6 +996,20 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     expect(String(live.nextCursor)).toMatch(/^l:\d+$/);
   });
 
+  it("stops fetching stored gateway pages once the byte budget is full", async () => {
+    const t = await setup();
+    const c = await conversation(t, MEMBER);
+    for (let index = 0; index < 250; index++) t.gateway.inbound({ chatId: MEMBER, body: index + ":" + "x".repeat(1800), emit: false });
+    const binding = await run(t, c, { triggerClass: "other" });
+    const storedLists = () => t.gateway.requests.filter((entry) => entry.method === "GET" && entry.path.endsWith("/messages")).length;
+    const before = storedLists();
+    const read = await executeOpenwaTool(db, binding, "openwa_read_chat", { limit: 5_000 });
+    expect(storedLists() - before).toBe(1);
+    expect(read).toMatchObject({ truncated: true, source: "stored" });
+    expect(Buffer.byteLength(JSON.stringify(read))).toBeLessThanOrEqual(16_384);
+    expect(String(read.nextCursor)).toMatch(/^s:/);
+  });
+
   it("returns caller-sized pages past the default budget and the gateway page, and full text on request", async () => {
     const t = await setup();
     const c = await conversation(t, MEMBER);

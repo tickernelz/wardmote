@@ -18,6 +18,7 @@ import { readOpenwaRunContext } from "./authority.js";
 type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 export type OpenwaAuditDb = Db | DbTransaction;
 
+export const OPENWA_AUDIT_TOOL_CALL_LIMIT_BYTES = 16384;
 export const DEFAULT_OPENWA_AUDIT_CONTENT_RETENTION_DAYS = 90;
 export const OPENWA_AUDIT_PURGE_BATCH_SIZE = 1000;
 export const OPENWA_AUDIT_PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -111,6 +112,31 @@ export function openwaAuditRetentionDays(policy: unknown): number {
 }
 
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function truncateText(text: string, maxBytes: number): string {
+  const bytes = encoder.encode(text);
+  if (bytes.length <= maxBytes) return text;
+  const marker = "…[truncated " + bytes.length + " bytes]";
+  const keep = Math.max(0, maxBytes - encoder.encode(marker).length);
+  return decoder.decode(bytes.subarray(0, keep)).replace(/\uFFFD+$/, "") + marker;
+}
+
+function boundValue(value: unknown, maxBytes: number): unknown {
+  if (typeof value === "string") return truncateText(value, maxBytes);
+  const json = JSON.stringify(value) ?? "null";
+  const size = encoder.encode(json).length;
+  return size <= maxBytes ? value : { truncated: true, bytes: size, preview: truncateText(json, Math.max(0, maxBytes - 64)) };
+}
+
+export function boundOpenwaToolCallContent(content: Record<string, unknown>): Record<string, unknown> {
+  const fields = Object.entries(content);
+  if (fields.length === 0 || encoder.encode(JSON.stringify(content)).length <= OPENWA_AUDIT_TOOL_CALL_LIMIT_BYTES) return content;
+  const share = Math.floor(OPENWA_AUDIT_TOOL_CALL_LIMIT_BYTES / fields.length) - 32;
+  return Object.fromEntries(fields.map(([key, value]) => [key, boundValue(value, share)]));
+}
+
 async function endpointRetentionDays(db: OpenwaAuditDb, companyId: string, endpointId: string): Promise<number> {
   const [row] = await db
     .select({ policy: chatEndpoints.policy })
@@ -123,7 +149,8 @@ async function endpointRetentionDays(db: OpenwaAuditDb, companyId: string, endpo
 /** Records a Layer-2 content-bearing audit entry; pass a transaction so it commits with the mutation. */
 export async function recordOpenwaAudit(db: OpenwaAuditDb, write: OpenwaAuditWrite): Promise<void> {
   const occurredAt = write.occurredAt ?? new Date();
-  const content = write.content ? sanitizeRecord(write.content) : null;
+  const sanitized = write.content ? sanitizeRecord(write.content) : null;
+  const content = sanitized && write.kind === "tool_called" ? boundOpenwaToolCallContent(sanitized) : sanitized;
   const retentionDays = content
     ? write.retentionDays ?? (await endpointRetentionDays(db, write.companyId, write.endpointId))
     : null;
@@ -176,7 +203,10 @@ export interface OpenwaAuditPage {
   items: OpenwaAuditEntryView[];
   nextCursor: string | null;
   access: OpenwaAuditAccess;
+  truncated?: true;
 }
+
+const AUDIT_BUDGET_BATCH = 25;
 
 async function boardAccess(
   db: Db,
@@ -260,6 +290,7 @@ export async function listOpenwaAudit(
     filters?: OpenwaAuditFilters;
     cursor?: string;
     limit?: number;
+    fits?: (item: OpenwaAuditEntryView, taken: number) => boolean;
   },
 ): Promise<OpenwaAuditPage> {
   const limit = input.limit ?? 25;
@@ -284,11 +315,8 @@ export async function listOpenwaAudit(
     filters.actorRef ? eq(chatAuditEntries.actorRef, filters.actorRef) : undefined,
     filters.from ? gte(chatAuditEntries.occurredAt, filters.from) : undefined,
     filters.to ? lte(chatAuditEntries.occurredAt, filters.to) : undefined,
-    before
-      ? sql`(date_trunc('milliseconds', ${chatAuditEntries.occurredAt}), ${chatAuditEntries.id}) < (${before.occurredAt}::timestamptz, ${before.id}::uuid)`
-      : undefined,
   ];
-  const rows = await db
+  const fetchRows = (after: { occurredAt: string; id: string } | null, take: number) => db
     .select({
       id: chatAuditEntries.id,
       kind: chatAuditEntries.kind,
@@ -305,17 +333,40 @@ export async function listOpenwaAudit(
       occurredAt: chatAuditEntries.occurredAt,
     })
     .from(chatAuditEntries)
-    .where(and(...conditions))
+    .where(and(
+      ...conditions,
+      after
+        ? sql`(date_trunc('milliseconds', ${chatAuditEntries.occurredAt}), ${chatAuditEntries.id}) < (${after.occurredAt}::timestamptz, ${after.id}::uuid)`
+        : undefined,
+    ))
     .orderBy(desc(sql`date_trunc('milliseconds', ${chatAuditEntries.occurredAt})`), desc(chatAuditEntries.id))
-    .limit(limit + 1);
-  const items = rows.slice(0, limit).map((row) => ({ ...row, occurredAt: row.occurredAt.toISOString() }));
+    .limit(take + 1);
+  const items: OpenwaAuditEntryView[] = [];
+  let after = before;
+  let more = false;
+  let truncated = false;
+  while (items.length < limit) {
+    const take = input.fits ? Math.min(limit - items.length, AUDIT_BUDGET_BATCH) : limit - items.length;
+    const rows = await fetchRows(after, take);
+    for (const row of rows.slice(0, take)) {
+      const item = { ...row, occurredAt: row.occurredAt.toISOString() };
+      if (input.fits && !input.fits(item, items.length)) {
+        truncated = true;
+        break;
+      }
+      items.push(item);
+    }
+    more = truncated || rows.length > take;
+    const last = items.at(-1);
+    if (!more || truncated || !last) break;
+    after = { occurredAt: last.occurredAt, id: last.id };
+  }
   const last = items.at(-1);
   return {
     items,
-    nextCursor: rows.length > limit && last
-      ? Buffer.from(JSON.stringify([last.occurredAt, last.id])).toString("base64url")
-      : null,
+    nextCursor: more && last ? Buffer.from(JSON.stringify([last.occurredAt, last.id])).toString("base64url") : null,
     access,
+    ...(truncated ? { truncated: true as const } : {}),
   };
 }
 
