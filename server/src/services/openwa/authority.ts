@@ -1151,7 +1151,7 @@ const WINDOW_REST_ALLOW: readonly { method: string; path: RegExp; patch?: true }
   { method: "PATCH", path: /^\/api\/issues\/([^/]+)$/i, patch: true },
 ];
 const WINDOW_ISSUE_CREATE_PATH = /^\/api\/companies\/[^/]+\/issues$/i;
-const WINDOW_PATCH_FIELDS = new Set([...ISSUE_LIFECYCLE_PATCH_FIELDS, ...ISSUE_DELEGATION_FIELDS]);
+const WINDOW_PATCH_FIELDS = new Set([...ISSUE_LIFECYCLE_PATCH_FIELDS, ...ISSUE_DELEGATION_FIELDS.filter((field) => field !== "projectId")]);
 
 async function someIssueInTree(db: Db, companyId: string, rootIssueId: string, issueKeys: readonly string[]): Promise<boolean> {
   for (const issueKey of issueKeys) {

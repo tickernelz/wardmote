@@ -945,8 +945,9 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
         await request(app()).post(`/api/issues/${sibling}/continue-for-owner`).set(auth).send({}),
         await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ parentId: null }),
         await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ title: "renamed" }),
+        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ projectId: randomUUID() }),
       ];
-      expect(stillDenied.map((res) => res.status)).toEqual(Array(14).fill(403));
+      expect(stillDenied.map((res) => res.status)).toEqual(Array(15).fill(403));
       const delegated = await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ assigneeAgentId: seed.agentId, status: "todo" });
       expect(delegated.status).toBe(200);
       await expect(assertOpenwaRunMay(db, runRow, "cross_chat_send", { windowIssueIds: [outside] })).rejects.toMatchObject({ status: 403 });
