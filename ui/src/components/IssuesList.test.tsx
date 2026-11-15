@@ -31,6 +31,8 @@ const mockIssuesApi = vi.hoisted(() => ({
 
 const mockKanbanBoard = vi.hoisted(() => vi.fn());
 const mockNavigate = vi.hoisted(() => vi.fn());
+const mockLocation = vi.hoisted(() => ({ key: "" }));
+let historyEntryCount = 0;
 
 const mockAuthApi = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -65,6 +67,7 @@ vi.mock("../context/DialogContext", () => ({
 
 vi.mock("@/lib/router", () => ({
   useNavigate: () => mockNavigate,
+  useLocation: () => mockLocation,
   Link: ({
     children,
     to,
@@ -371,6 +374,8 @@ describe("IssuesList", () => {
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
+    historyEntryCount += 1;
+    mockLocation.key = `history-entry-${historyEntryCount}`;
     dialogState.openNewIssue.mockReset();
     mockKanbanBoard.mockReset();
     mockNavigate.mockReset();
@@ -1696,6 +1701,57 @@ describe("IssuesList", () => {
 
     act(() => {
       root.unmount();
+    });
+  });
+
+  it("remounts the same history entry with the rows it had rendered and a new entry with the first batch", async () => {
+    const manyIssues = Array.from({ length: 420 }, (_, index) =>
+      createIssue({
+        id: `issue-${index + 1}`,
+        identifier: `PAP-${index + 1}`,
+        title: `Issue ${index + 1}`,
+      }),
+    );
+    const list = (
+      <IssuesList
+        issues={manyIssues}
+        agents={[]}
+        projects={[]}
+        viewStateKey="wardmote:test-issues"
+        onUpdateIssue={() => undefined}
+      />
+    );
+    const rows = () => container.querySelectorAll('[data-testid="issue-row"]');
+
+    const reading = renderWithQueryClient(list, container);
+    await waitForAssertion(() => {
+      expect(rows()).toHaveLength(100);
+    });
+    await flush();
+    act(() => {
+      setDocumentScrollMetrics({ innerHeight: 600, scrollY: 1500, scrollHeight: 2000 });
+      window.dispatchEvent(new Event("scroll"));
+    });
+    await flushAnimationFrame();
+    await waitForAssertion(() => {
+      expect(rows()).toHaveLength(250);
+    });
+    act(() => {
+      reading.root.unmount();
+    });
+    setDocumentScrollMetrics({ innerHeight: 600, scrollY: 0, scrollHeight: 20000 });
+
+    const returned = renderWithQueryClient(list, container);
+    expect(rows()).toHaveLength(250);
+    act(() => {
+      returned.root.unmount();
+    });
+
+    mockLocation.key = "another-history-entry";
+    const opened = renderWithQueryClient(list, container);
+    expect(rows()).toHaveLength(100);
+    act(() => {
+      opened.root.unmount();
     });
   });
 
