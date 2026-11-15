@@ -1121,6 +1121,8 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     const send = (attachmentId: string) => executeOpenwaTool(db, binding, "openwa_send", { kind: "document", attachmentId, idempotencyKey: randomUUID() });
 
     await expect(send(await attach(child!.id))).resolves.toMatchObject({ state: "delivered" });
+    const [privateChild] = await db.insert(issues).values({ companyId: t.companyId, parentId: c.issueId, title: "Private", status: "todo", visibility: "private" }).returning();
+    expect((await rejection(send(await attach(privateChild!.id)))).code).toBe("attachment_unavailable");
     const siblingFile = await attach(sibling!.id);
     expect((await rejection(send(siblingFile))).code).toBe("attachment_unavailable");
     expect((await rejection(send(await attach(unrelated!.id)))).code).toBe("attachment_unavailable");

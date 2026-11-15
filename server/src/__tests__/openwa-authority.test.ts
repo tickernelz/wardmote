@@ -937,8 +937,18 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
         await request(app()).post(`/api/companies/${seed.companyId}/issues`).set(auth).send({ title: "top level" }),
         await request(app()).post(`/api/companies/${seed.companyId}/issues`).set(auth).send({ title: "elsewhere", parentId: outside }),
         await request(app()).post("/api/agents/me/secret-proposals").set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/access-grants`).set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/low-trust/promotions`).set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/interactions/${randomUUID()}/accept`).set(auth).send({}),
+        await request(app()).patch(`/api/issues/${sibling}/model-override`).set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/admin/force-release`).set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/continue-for-owner`).set(auth).send({}),
+        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ parentId: null }),
+        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ title: "renamed" }),
       ];
-      expect(stillDenied.map((res) => res.status)).toEqual([403, 403, 403, 403, 403, 403]);
+      expect(stillDenied.map((res) => res.status)).toEqual(Array(14).fill(403));
+      const delegated = await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ assigneeAgentId: seed.agentId, status: "todo" });
+      expect(delegated.status).toBe(200);
       await expect(assertOpenwaRunMay(db, runRow, "cross_chat_send", { windowIssueIds: [outside] })).rejects.toMatchObject({ status: 403 });
       await expect(assertOpenwaRunMay(db, runRow, "cross_chat_send")).rejects.toMatchObject({ status: 403 });
       await expect(assertOpenwaRunMay(db, runRow, "wa_admin")).rejects.toMatchObject({ status: 403 });

@@ -13,6 +13,7 @@ import {
   chatOwnerApprovalRequests,
   heartbeatRuns,
   issueAttachments,
+  issues,
   type Db,
 } from "@tickernelz/wardmote-db";
 import {
@@ -38,12 +39,12 @@ import { openwaOwnerFacingChat, registerOpenwaGroupGateway } from "./owner-group
 import { parseOpenwaThreadId } from "./adapter.js";
 import { openwaApprovalResolveTool, openwaApprovalWithdrawTool, openwaRequestApprovalTool } from "./approvals.js";
 import { logOpenwaActivity, recordOpenwaAudit } from "./audit.js";
-import { autonomyWindowService } from "../autonomy-windows.js";
 import {
   OpenwaApprovalRequiredError,
   assertOpenwaRunMay,
   isOpenwaConversationTreeIssue,
   openwaHeldGrantValid,
+  openwaLiveWindowRoot,
   openwaMemberWindowRoot,
   openwaRunProfile,
   readOpenwaRunContext,
@@ -809,9 +810,15 @@ async function assertSendAllowed(ctx: ToolContext, target: Target, heldGrant: st
 async function attachmentIssueSendable(ctx: ToolContext, issueId: string): Promise<boolean> {
   if (issueId === ctx.binding.issueId || issueId === ctx.conversation.issueId) return true;
   const companyId = ctx.endpoint.companyId;
+  const [issue] = await ctx.db
+    .select({ visibility: issues.visibility })
+    .from(issues)
+    .where(and(eq(issues.companyId, companyId), eq(issues.id, issueId)))
+    .limit(1);
+  if (!issue || issue.visibility === "private") return false;
   if (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: ctx.conversation.issueId, issueKey: issueId })) return true;
   const windowRoot = ctx.profile === "full"
-    ? (await autonomyWindowService(ctx.db).findCovering(companyId, ctx.conversation.issueId))?.rootIssueId ?? null
+    ? await openwaLiveWindowRoot(ctx.db, companyId, ctx.conversation.issueId)
     : await openwaMemberWindowRoot(ctx.db, ctx.run);
   return windowRoot !== null && (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: windowRoot, issueKey: issueId }));
 }

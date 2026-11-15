@@ -5,7 +5,7 @@ import { inboxDismissals, joinRequests } from "@tickernelz/wardmote-db";
 import { sidebarBadgeService } from "../services/sidebar-badges.js";
 import { accessService } from "../services/access.js";
 import { collapseDuplicatePendingHumanJoinRequests } from "../lib/join-request-dedupe.js";
-import { assertCompanyAccess } from "./authz.js";
+import { assertCompanyAccess, companyOwnerAgentHasPermission } from "./authz.js";
 
 function buildDismissedAtByKey(
   dismissals: Array<{ itemKey: string; kind: string; dismissedAt: Date | string; snoozedUntil: Date | string | null }>,
@@ -38,7 +38,8 @@ export function sidebarBadgeRoutes(db: Db) {
         Boolean(req.actor.isInstanceAdmin) ||
         (await access.canUser(companyId, req.actor.userId, "joins:approve"));
     } else if (req.actor.type === "agent" && req.actor.agentId) {
-      canApproveJoins = await access.hasPermission(companyId, "agent", req.actor.agentId, "joins:approve");
+      canApproveJoins = await companyOwnerAgentHasPermission(req, access, companyId, "joins:approve")
+        || await access.hasPermission(companyId, "agent", req.actor.agentId, "joins:approve");
     }
 
     const visibleJoinRequests = canApproveJoins

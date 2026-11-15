@@ -20,6 +20,7 @@ import {
   createDb,
   heartbeatRuns,
   principalPermissionGrants,
+  projects,
   toolConnections,
   type Db,
 } from "@tickernelz/wardmote-db";
@@ -430,10 +431,10 @@ describe("OpenWA activation through the owner test DM (embedded Postgres + fake 
         openwa: { baseUrl: t.gateway.baseUrl, sessionId: SESSION_ID, numberMode: "agent_number", attestations: { pacing: true, soleClient: true } },
       })
       .expect(200);
-    const agentApp = async (role: string) => {
+    const agentApp = async (role: string, permissions: Record<string, unknown> = {}) => {
       const [agent] = await db
         .insert(agents)
-        .values({ companyId: t.companyId, name: role + " agent", role, status: "idle", adapterType: "omp_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} })
+        .values({ companyId: t.companyId, name: role + " agent", role, status: "idle", adapterType: "omp_local", adapterConfig: {}, runtimeConfig: {}, permissions })
         .returning();
       const app = express();
       app.use(express.json());
@@ -451,6 +452,12 @@ describe("OpenWA activation through the owner test DM (embedded Postgres + fake 
     expect(ceo.body.details).toMatchObject({ code: "chat_test_message_missing" });
     const engineer = await request(await agentApp("engineer")).post("/api/chat-endpoints/" + t.endpointId + "/test").send({});
     expect(engineer.status).toBe(403);
+    const [boundary] = await db.insert(projects).values({ companyId: t.companyId, name: "Boundary" }).returning();
+    const lowTrustCeo = await request(await agentApp("ceo", {
+      trustPreset: "low_trust_review",
+      authorizationPolicy: { trustBoundary: { mode: "low_trust_review", companyId: t.companyId, projectIds: [boundary!.id] } },
+    })).post("/api/chat-endpoints/" + t.endpointId + "/test").send({});
+    expect(lowTrustCeo.status).toBe(403);
 
     await expect(assertOpenwaRestAllowed(db, {
       run: {

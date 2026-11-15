@@ -448,8 +448,9 @@ While a live autonomy window (`openwa_autonomy_window`) covers the chat's
 conversation issue, a `read_only` run triggered in that chat by senders who are all
 owners or on the allow list may use `create_task`, non-destructive
 `external_tools` and `cross_chat_send` without approval, inside the window's issue
-tree: REST writes to issues in the tree (share links, comments, documents, child
-issues, issue creation with a parent in the tree), connector tools whose risk is not
+tree: comments, documents, attachments, work products, share links, checkout and
+release, child issues, issue creation with a parent in the tree, and status or
+delegation updates that keep the task in the tree, plus connector tools whose risk is not
 `destructive`, and sends to chats whose conversation issue is in the tree. Deletes,
 cancellations outside the conversation tree, credential issuing (connection intents,
 GitHub operation credentials), `wa_admin`, `gateway_admin`, endpoint and access
@@ -614,7 +615,7 @@ Every call is audited as `tool_called`.
 
 | Tool | Risk | Purpose |
 | --- | --- | --- |
-| `openwa_send` | write | Send text, image, video, audio, voice note, document, sticker, location, contact or poll to a chat (default origin chat). Markdown text; media from an attachment of the run's task, the chat's descendant tasks, or a live autonomy window's issue tree; `mentions`; `quoteMessageId`; required `idempotencyKey`. New numbers are checked first. |
+| `openwa_send` | write | Send text, image, video, audio, voice note, document, sticker, location, contact or poll to a chat (default origin chat). Markdown text; media from an attachment of the run's task, the chat's descendant tasks, or a live autonomy window's issue tree (never a private task other than the chat's own); `mentions`; `quoteMessageId`; required `idempotencyKey`. New numbers are checked first. |
 | `openwa_read_chat` | read | Page chat history, newest first, from the stored source (cursor) or live (`deep` reaches 2000 messages). |
 | `openwa_get_media` | read | Store one message's media as a task attachment; returns attachment id, mime, size, `localPath` (absolute file inside the storage root, local-disk storage only) or `contentPath` (attachment API path) and transcript when available (cut to fit 16 KB with `transcriptTruncated`). |
 | `openwa_find` | read | Find contacts and chats by name or number, check a number, or resolve a LID (exactly one of `query`, `phone`, `lid`); query results page with `cursor`. |

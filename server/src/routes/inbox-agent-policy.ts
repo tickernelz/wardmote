@@ -4,7 +4,7 @@ import { updateInboxAgentPolicySchema } from "@tickernelz/wardmote-shared";
 import { forbidden, notFound, unauthorized } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService, inboxAgentPolicyService, logActivity } from "../services/index.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyAccess, companyOwnerAgentHasPermission, getActorInfo } from "./authz.js";
 
 export function inboxAgentPolicyRoutes(db: Db) {
   const router = Router();
@@ -25,7 +25,8 @@ export function inboxAgentPolicyRoutes(db: Db) {
     } else if (
       req.actor.type === "agent"
       && req.actor.agentId
-      && await access.hasPermission(companyId, "agent", req.actor.agentId, "users:manage_permissions")
+      && (await companyOwnerAgentHasPermission(req, access, companyId, "users:manage_permissions")
+        || await access.hasPermission(companyId, "agent", req.actor.agentId, "users:manage_permissions"))
     ) {
       return;
     }

@@ -54,7 +54,7 @@ import {
   updateToolProfileWithEntriesSchema,
 } from "@tickernelz/wardmote-shared";
 import { validate } from "../middleware/validate.js";
-import { companyOwnerAgentHasPermission, getActorInfo, assertBoard, assertCompanyAccess, assertInstanceAdmin, getAccessibleResource, hasCompanyAccess, isCompanyOwnerAgentActor } from "./authz.js";
+import { companyOwnerAgentHasPermission, getActorInfo, assertBoard, assertCompanyAccess, assertInstanceAdmin, getAccessibleResource, hasCompanyAccess } from "./authz.js";
 import { badRequest, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { accessService, logActivity, toolAccessPolicyService, toolAccessService, vercelConnectIntegrationStatus } from "../services/index.js";
 import { ToolGatewayHttpError, type ToolGatewayService } from "../services/tool-gateway.js";
@@ -441,10 +441,11 @@ function connectorEnrollmentPrincipal(req: Request): string {
     throw forbidden(`Missing permission: ${permissionKey}`);
   }
 
-  function activeToolMembership(req: Request, companyId: string) {
+  async function activeToolMembership(req: Request, companyId: string) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin || isCompanyOwnerAgentActor(req)) return null;
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return null;
+    if (await companyOwnerAgentHasPermission(req, access, companyId, "tools:manage_connections")) return null;
     const membership = Array.isArray(req.actor.memberships)
       ? req.actor.memberships.find((item) => item.companyId === companyId)
       : null;
@@ -474,7 +475,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     req: Request,
     connection: { companyId: string; createdByUserId?: string | null },
   ) {
-    activeToolMembership(req, connection.companyId);
+    await activeToolMembership(req, connection.companyId);
     if (await isToolConnectionManager(req, connection.companyId)) return;
     if (req.actor.userId && connection.createdByUserId === req.actor.userId) return;
     throw forbidden(
@@ -486,7 +487,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     req: Request,
     connection: { id: string; companyId: string; createdByUserId?: string | null },
   ) {
-    activeToolMembership(req, connection.companyId);
+    await activeToolMembership(req, connection.companyId);
     if (await isToolConnectionManager(req, connection.companyId)) return;
     if (req.actor.userId && connection.createdByUserId === req.actor.userId) return;
     const [grant] = await db
@@ -517,13 +518,13 @@ function connectorEnrollmentPrincipal(req: Request): string {
    * with no scoped membership (local implicit / instance admin), matching
    * `activeToolMembership`'s "unrestricted" sentinel.
    */
-  function toolMembershipRole(req: Request, companyId: string): {
+  async function toolMembershipRole(req: Request, companyId: string): Promise<{
     unrestricted: boolean;
     role: string | null;
     isViewer: boolean;
     isActive: boolean;
-  } {
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin || isCompanyOwnerAgentActor(req)) {
+  }> {
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin || (await companyOwnerAgentHasPermission(req, access, companyId, "tools:manage_connections"))) {
       return { unrestricted: true, role: null, isViewer: false, isActive: true };
     }
     const membership = Array.isArray(req.actor.memberships)
@@ -535,7 +536,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   }
 
   async function isToolConnectionManagerQuiet(req: Request, companyId: string) {
-    const membership = toolMembershipRole(req, companyId);
+    const membership = await toolMembershipRole(req, companyId);
     if (membership.unrestricted) return true;
     if (!membership.isActive || membership.isViewer) return false;
     if (membership.role === "owner" || membership.role === "admin") return true;
@@ -570,7 +571,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     req: Request,
     connection: { id: string; companyId: string; createdByUserId?: string | null },
   ) {
-    const membership = toolMembershipRole(req, connection.companyId);
+    const membership = await toolMembershipRole(req, connection.companyId);
     const isManager = await isToolConnectionManagerQuiet(req, connection.companyId);
     const mutationCapable = membership.unrestricted || (membership.isActive && !membership.isViewer);
     const isCreator = Boolean(req.actor.userId && connection.createdByUserId === req.actor.userId);
@@ -727,8 +728,8 @@ function connectorEnrollmentPrincipal(req: Request): string {
     res.status(result.status === "use_env_lease" ? 409 : 200).json(result);
   });
 
-  function assertToolAppMutationAccess(req: Request, companyId: string) {
-    activeToolMembership(req, companyId);
+  async function assertToolAppMutationAccess(req: Request, companyId: string) {
+    await activeToolMembership(req, companyId);
   }
 
   router.get("/companies/:companyId/tools/gallery", async (req, res) => {
@@ -790,7 +791,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.post("/companies/:companyId/tools/apps/connect", validate(connectToolAppSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     // An omitted grant kind is the backward-compatible organization default.
     // On resume, the persisted connection identity is authoritative: accepting
     // a contradictory `grantKind: "user"` here could otherwise let a creator
@@ -880,7 +881,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     validate(startConnectionAuthorizationSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
-      activeToolMembership(req, companyId);
+      await activeToolMembership(req, companyId);
       if (!req.actor.userId || req.actor.userId !== req.body.subjectUserId) {
         throw forbidden("Board users may only authorize their own connection subject");
       }
@@ -910,7 +911,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
       // configuration action. Membership blocks viewers; the service then
       // proves this caller is the connection's retained subject before it can
       // create OAuth state. Shared reconnects keep the stricter configure gate.
-      activeToolMembership(req, existing.companyId);
+      await activeToolMembership(req, existing.companyId);
     } else {
       await assertToolConnectionConfigureAccess(req, existing);
     }
@@ -1224,7 +1225,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.post("/companies/:companyId/tools/examples/:id/install", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     const result = await svc.installExample(companyId, req.params.id as string, getActorInfo(req));
     await logActivity(db, {
       companyId,
@@ -1282,7 +1283,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.post("/companies/:companyId/tools/applications", validate(createToolApplicationSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     try {
       const application = await svc.createApplication(companyId, req.body);
       await logActivity(db, {
@@ -1303,7 +1304,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   router.patch("/tool-applications/:applicationId", validate(updateToolApplicationSchema), async (req, res) => {
     const existing = await getAccessibleResource(req, res, svc.getApplication(req.params.applicationId as string), "Tool application not found");
     if (!existing) return;
-    assertToolAppMutationAccess(req, existing.companyId);
+    await assertToolAppMutationAccess(req, existing.companyId);
     try {
       const application = await svc.updateApplication(existing.id, req.body);
       await logActivity(db, {
@@ -1324,7 +1325,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   router.delete("/tool-applications/:applicationId", async (req, res) => {
     const existing = await getAccessibleResource(req, res, svc.getApplication(req.params.applicationId as string), "Tool application not found");
     if (!existing) return;
-    assertToolAppMutationAccess(req, existing.companyId);
+    await assertToolAppMutationAccess(req, existing.companyId);
     const application = await svc.deleteApplication(existing.id);
     await logActivity(db, {
       companyId: application.companyId,
@@ -1354,7 +1355,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.post("/companies/:companyId/tools/connections", validate(createToolConnectionSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     try {
       const connection = await svc.createConnection(companyId, req.body, getActorInfo(req));
       await logActivity(db, {
@@ -1409,7 +1410,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     if (!connection) return;
     const listed = await svc.listConnectionGrants(connection.id, connection.companyId);
     const capabilities = await describeConnectionCapabilities(req, connection);
-    const membership = toolMembershipRole(req, connection.companyId);
+    const membership = await toolMembershipRole(req, connection.companyId);
     const grantContext = {
       userId: req.actor.userId ?? null,
       isManager: await isToolConnectionManagerQuiet(req, connection.companyId),
@@ -1445,7 +1446,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
       if (!connection) return;
       // Viewer/inactive principals are rejected before anything else, so a
       // read-only member can never reach the audience writer.
-      activeToolMembership(req, connection.companyId);
+      await activeToolMembership(req, connection.companyId);
       const { grants } = await svc.listConnectionGrants(connection.id, connection.companyId);
       const target = grants.find((grant) => grant.id === req.params.grantId);
       if (!target) throw notFound("Connection grant not found");
@@ -1994,7 +1995,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.post("/companies/:companyId/tools/profiles", validate(createToolProfileWithEntriesSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     try {
       const profile = await svc.createProfile(companyId, req.body);
       await logActivity(db, {
@@ -2022,7 +2023,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   router.patch("/tool-profiles/:profileId", validate(updateToolProfileWithEntriesSchema), async (req, res) => {
     const existing = await getAccessibleResource(req, res, svc.getProfile(req.params.profileId as string), "Tool profile not found");
     if (!existing) return;
-    assertToolAppMutationAccess(req, existing.companyId);
+    await assertToolAppMutationAccess(req, existing.companyId);
     try {
       const profile = await svc.updateProfile(existing.id, req.body);
       await logActivity(db, {
@@ -2043,7 +2044,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   router.post("/tool-profiles/:profileId/duplicate", validate(duplicateToolProfileSchema), async (req, res) => {
     const existing = await getAccessibleResource(req, res, svc.getProfile(req.params.profileId as string), "Tool profile not found");
     if (!existing) return;
-    assertToolAppMutationAccess(req, existing.companyId);
+    await assertToolAppMutationAccess(req, existing.companyId);
     try {
       const profile = await svc.duplicateProfile(existing.id, req.body);
       await logActivity(db, {
@@ -2069,7 +2070,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   router.delete("/tool-profiles/:profileId", validate(deleteToolProfileSchema), async (req, res) => {
     const existing = await getAccessibleResource(req, res, svc.getProfile(req.params.profileId as string), "Tool profile not found");
     if (!existing) return;
-    assertToolAppMutationAccess(req, existing.companyId);
+    await assertToolAppMutationAccess(req, existing.companyId);
     const result = await svc.deleteProfile(existing.id, req.body);
     await logActivity(db, {
       companyId: existing.companyId,
@@ -2091,7 +2092,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   router.post("/tool-profiles/:profileId/new-tools/review", validate(reviewToolProfileNewToolsSchema), async (req, res) => {
     const existing = await getAccessibleResource(req, res, svc.getProfile(req.params.profileId as string), "Tool profile not found");
     if (!existing) return;
-    assertToolAppMutationAccess(req, existing.companyId);
+    await assertToolAppMutationAccess(req, existing.companyId);
     const result = await svc.reviewProfileNewTools(existing.id, req.body, getActorInfo(req));
     await logActivity(db, {
       companyId: existing.companyId,
@@ -2112,7 +2113,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   router.post("/tool-profiles/:profileId/entries", validate(createToolProfileEntryForProfileSchema), async (req, res) => {
     const existing = await getAccessibleResource(req, res, svc.getProfile(req.params.profileId as string), "Tool profile not found");
     if (!existing) return;
-    assertToolAppMutationAccess(req, existing.companyId);
+    await assertToolAppMutationAccess(req, existing.companyId);
     const entry = await svc.addProfileEntry(existing.id, req.body);
     await logActivity(db, {
       companyId: entry.companyId,
@@ -2129,7 +2130,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   router.patch("/tool-profile-entries/:entryId", validate(updateToolProfileEntrySchema), async (req, res) => {
     const existing = await getAccessibleResource(req, res, svc.getProfileEntry(req.params.entryId as string), "Tool profile entry not found");
     if (!existing) return;
-    assertToolAppMutationAccess(req, existing.companyId);
+    await assertToolAppMutationAccess(req, existing.companyId);
     const entry = await svc.updateProfileEntry(existing.id, req.body);
     await logActivity(db, {
       companyId: entry.companyId,
@@ -2146,7 +2147,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   router.delete("/tool-profile-entries/:entryId", async (req, res) => {
     const existing = await getAccessibleResource(req, res, svc.getProfileEntry(req.params.entryId as string), "Tool profile entry not found");
     if (!existing) return;
-    assertToolAppMutationAccess(req, existing.companyId);
+    await assertToolAppMutationAccess(req, existing.companyId);
     const entry = await svc.deleteProfileEntry(existing.id);
     await logActivity(db, {
       companyId: entry.companyId,
@@ -2165,7 +2166,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     validate(createToolProfileBindingForProfileSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
-      assertToolAppMutationAccess(req, companyId);
+      await assertToolAppMutationAccess(req, companyId);
       const existing = await svc.getProfile(req.params.profileId as string, companyId);
       try {
         const binding = await svc.bindProfile(existing.id, req.body, getActorInfo(req));
@@ -2190,7 +2191,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     validate(unbindToolProfileBindingSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
-      assertToolAppMutationAccess(req, companyId);
+      await assertToolAppMutationAccess(req, companyId);
       const existing = await svc.getProfile(req.params.profileId as string, companyId);
       const result = await svc.unbindProfile(existing.id, req.body);
       await logActivity(db, {
@@ -2256,7 +2257,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   // capability -> riskLevel, app -> applicationId, actions -> toolNames.
   router.post("/companies/:companyId/tools/policies/reorder", validate(reorderToolPoliciesSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     const policies = await policySvc.reorderPolicies(companyId, req.body);
     await logActivity(db, {
       companyId,
@@ -2275,7 +2276,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.post("/companies/:companyId/tools/policies", validate(createToolPolicySchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     try {
       const policy = await policySvc.createPolicy(companyId, req.body, { userId: req.actor.userId ?? null });
       await logActivity(db, {
@@ -2295,7 +2296,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.post("/companies/:companyId/tools/policies/:policyId/duplicate", validate(duplicateToolPolicySchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     try {
       const policy = await policySvc.duplicatePolicy({
         companyId,
@@ -2325,7 +2326,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.patch("/companies/:companyId/tools/policies/:policyId", validate(updateToolPolicySchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     try {
       const policy = await policySvc.updatePolicy({
         companyId,
@@ -2349,7 +2350,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.delete("/companies/:companyId/tools/policies/:policyId", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     const policy = await policySvc.deletePolicy({
       companyId,
       policyId: req.params.policyId as string,
@@ -2371,7 +2372,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     validate(createToolTrustRuleFromActionRequestSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
-      assertToolAppMutationAccess(req, companyId);
+      await assertToolAppMutationAccess(req, companyId);
       const policy = await policySvc.createTrustRuleFromActionRequest({
         companyId,
         actionRequestId: req.params.actionRequestId as string,
@@ -2397,7 +2398,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
 
   router.post("/companies/:companyId/tools/trust-rules/:policyId/revoke", validate(revokeToolTrustRuleSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertToolAppMutationAccess(req, companyId);
+    await assertToolAppMutationAccess(req, companyId);
     const policy = await policySvc.revokeTrustRule({
       companyId,
       policyId: req.params.policyId as string,

@@ -9,6 +9,7 @@ import {
   chatOwnerApprovalRequests,
   chatOwnerGrants,
   heartbeatRuns,
+  issueAutonomyWindows,
   issueWorkProducts,
   issues,
   type Db,
@@ -27,7 +28,6 @@ import { openwaCurrentOwners, openwaPrincipalAuthorization } from "./owners.js";
 import { logOpenwaActivity } from "./audit.js";
 import { openwaOwnerOnlyGroup } from "./owner-group.js";
 import { isOpenwaCompletionTurn, openwaCompletionOwedToOwner } from "../chat-completion-delivery.js";
-import { autonomyWindowService } from "../autonomy-windows.js";
 
 export const OPENWA_RUN_CONTEXT_KEY = "wardmoteOpenwa";
 export const OPENWA_APPROVAL_REQUIRED_CODE = "openwa_approval_required";
@@ -791,6 +791,8 @@ export async function openwaMemberWindowRoot(db: Db, run: RunLike): Promise<stri
   const context = record(run.contextSnapshot);
   const issueId = uuid(context.issueId) ?? uuid(context.taskId);
   if (!issueId) return null;
+  const rootIssueId = await openwaLiveWindowRoot(db, run.companyId, issueId);
+  if (!rootIssueId) return null;
   const senders = await db
     .select({ role: chatDeliveries.principalRole })
     .from(chatDeliveries)
@@ -799,14 +801,43 @@ export async function openwaMemberWindowRoot(db: Db, run: RunLike): Promise<stri
       eq(chatDeliveries.endpointId, openwa.endpointId),
       inArray(chatDeliveries.id, openwa.deliveryIds),
     ));
-  if (senders.length !== openwa.deliveryIds.length) return null;
-  return openwaWindowRootForSenders(db, run.companyId, issueId, senders.map((sender) => sender.role));
+  return senders.length === openwa.deliveryIds.length && sendersMayUseWindow(senders.map((sender) => sender.role)) ? rootIssueId : null;
+}
+
+function sendersMayUseWindow(roles: readonly (string | null)[]): boolean {
+  return roles.length > 0 && roles.every((role) => role === "owner" || role === "allowed");
+}
+
+const WINDOW_ANCESTRY_MAX_DEPTH = 64;
+
+/** Root of the usable live autonomy window over the issue or one of its ancestors, in one query. */
+export async function openwaLiveWindowRoot(db: Db, companyId: string, issueId: string): Promise<string | null> {
+  const [anyLive] = await db
+    .select({ id: issueAutonomyWindows.id })
+    .from(issueAutonomyWindows)
+    .where(and(eq(issueAutonomyWindows.companyId, companyId), eq(issueAutonomyWindows.status, "live"), gt(issueAutonomyWindows.expiresAt, new Date())))
+    .limit(1);
+  if (!anyLive) return null;
+  const rows = await db.execute(sql`
+    with recursive chain(id, parent_id, depth) as (
+      select id, parent_id, 0 from issues where company_id = ${companyId}::uuid and id = ${issueId}::uuid
+      union all
+      select parent.id, parent.parent_id, chain.depth + 1 from issues parent
+      join chain on parent.id = chain.parent_id
+      where parent.company_id = ${companyId}::uuid and chain.depth < ${WINDOW_ANCESTRY_MAX_DEPTH}
+    )
+    select live.root_issue_id from ${issueAutonomyWindows} live
+    join chain on live.root_issue_id = chain.id
+    where live.company_id = ${companyId}::uuid and live.status = 'live' and live.expires_at > now()
+      and (live.max_accepts is null or live.accept_count < live.max_accepts)
+    order by live.expires_at desc
+    limit 1`);
+  const [row] = Array.from(rows as Iterable<Record<string, unknown>>);
+  return row ? String(row.root_issue_id) : null;
 }
 
 async function openwaWindowRootForSenders(db: Db, companyId: string, issueId: string, roles: readonly (string | null)[]): Promise<string | null> {
-  if (roles.length === 0 || roles.some((role) => role !== "owner" && role !== "allowed")) return null;
-  const window = await autonomyWindowService(db).findCovering(companyId, issueId);
-  return window?.rootIssueId ?? null;
+  return sendersMayUseWindow(roles) ? openwaLiveWindowRoot(db, companyId, issueId) : null;
 }
 
 async function logWindowAuthority(db: Db, run: RunLike, input: { rootIssueId: string; category: OpenwaApprovalCategory; path?: string }) {
@@ -1108,8 +1139,19 @@ export async function assertOpenwaRestAllowed(
   return assertOpenwaRunMay(db, input.run, decision.category, { window: false });
 }
 
-const WINDOW_ISSUE_PATH = /^\/api\/(?:companies\/[^/]+\/)?issues\/([^/]+)(?:\/.*)?$/i;
+const WINDOW_REST_ALLOW: readonly { method: string; path: RegExp; patch?: true }[] = [
+  { method: "POST", path: /^\/api\/issues\/([^/]+)\/comments$/i },
+  { method: "PUT", path: /^\/api\/issues\/([^/]+)\/documents\/[^/]+$/i },
+  { method: "POST", path: /^\/api\/companies\/[^/]+\/issues\/([^/]+)\/attachments$/i },
+  { method: "POST", path: /^\/api\/issues\/([^/]+)\/work-products$/i },
+  { method: "POST", path: /^\/api\/issues\/([^/]+)\/share-link$/i },
+  { method: "POST", path: /^\/api\/issues\/([^/]+)\/checkout$/i },
+  { method: "POST", path: /^\/api\/issues\/([^/]+)\/release$/i },
+  { method: "POST", path: /^\/api\/issues\/([^/]+)\/children$/i },
+  { method: "PATCH", path: /^\/api\/issues\/([^/]+)$/i, patch: true },
+];
 const WINDOW_ISSUE_CREATE_PATH = /^\/api\/companies\/[^/]+\/issues$/i;
+const WINDOW_PATCH_FIELDS = new Set([...ISSUE_LIFECYCLE_PATCH_FIELDS, ...ISSUE_DELEGATION_FIELDS]);
 
 async function someIssueInTree(db: Db, companyId: string, rootIssueId: string, issueKeys: readonly string[]): Promise<boolean> {
   for (const issueKey of issueKeys) {
@@ -1118,21 +1160,27 @@ async function someIssueInTree(db: Db, companyId: string, rootIssueId: string, i
   return false;
 }
 
-/** Autonomy-window scope for a member run's REST write: issues inside the window tree only, never a delete or a cancellation. */
+/** Autonomy-window scope for a member run's REST write: listed task writes on issues inside the window tree, never a cancellation or a move out of it. */
 async function openwaWindowRestAllowed(
   db: Db,
   input: { companyId: string; rootIssueId: string; method: string; path: string; body?: unknown },
 ): Promise<boolean> {
   const method = input.method.toUpperCase();
-  if (method === "DELETE") return false;
   const path = input.path.length > 1 ? input.path.replace(/\/+$/, "") : input.path;
   const body = record(input.body);
   if (body.status === "cancelled") return false;
+  if ("parentId" in body && !text(body.parentId)) return false;
   const parentId = text(body.parentId);
   if (parentId && !(await someIssueInTree(db, input.companyId, input.rootIssueId, [parentId]))) return false;
-  if (WINDOW_ISSUE_CREATE_PATH.test(path)) return method === "POST" && parentId !== null;
-  const issueKey = WINDOW_ISSUE_PATH.exec(path)?.[1];
-  return issueKey !== undefined && (await someIssueInTree(db, input.companyId, input.rootIssueId, [issueKey]));
+  if (method === "POST" && WINDOW_ISSUE_CREATE_PATH.test(path)) return parentId !== null;
+  for (const rule of WINDOW_REST_ALLOW) {
+    if (rule.method !== method) continue;
+    const issueKey = rule.path.exec(path)?.[1];
+    if (!issueKey) continue;
+    if (rule.patch && !Object.keys(body).every((field) => WINDOW_PATCH_FIELDS.has(field))) return false;
+    return someIssueInTree(db, input.companyId, input.rootIssueId, [issueKey]);
+  }
+  return false;
 }
 
 /** D35: persistent keys of an agent bound to a non-archived OpenWA endpoint never mutate. */

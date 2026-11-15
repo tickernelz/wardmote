@@ -5,7 +5,7 @@ import { ZodError, type ZodSchema } from "zod";
 import { forbidden, HttpError, unprocessable } from "../errors.js";
 import { accessService } from "../services/access.js";
 import { companySkillPolicyService, type SkillPolicyPrincipal } from "../services/company-skill-policy.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyAccess, companyOwnerAgentHasPermission, getActorInfo } from "./authz.js";
 
 export function companySkillPolicyRoutes(db: Db) {
   const router = Router();
@@ -48,7 +48,8 @@ export function companySkillPolicyRoutes(db: Db) {
     } else if (
       req.actor.type === "agent"
       && req.actor.agentId
-      && await access.hasPermission(companyId, "agent", req.actor.agentId, "users:manage_permissions")
+      && (await companyOwnerAgentHasPermission(req, access, companyId, "users:manage_permissions")
+        || await access.hasPermission(companyId, "agent", req.actor.agentId, "users:manage_permissions"))
     ) {
       return;
     }

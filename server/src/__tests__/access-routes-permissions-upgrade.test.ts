@@ -12,6 +12,7 @@ import {
   connectionGrants,
   createDb,
   principalPermissionGrants,
+  projects,
   toolApplications,
   toolConnections,
 } from "@tickernelz/wardmote-db";
@@ -127,6 +128,7 @@ describeEmbeddedPostgres("access routes permissions upgrade compatibility", () =
     await db.delete(toolApplications);
     await db.delete(principalPermissionGrants);
     await db.delete(companyMemberships);
+    await db.delete(projects);
     await db.delete(agents);
     await db.delete(companies);
   });
@@ -155,10 +157,15 @@ describeEmbeddedPostgres("access routes permissions upgrade compatibility", () =
 
   it("lets the CEO agent set any grant on an agent member and refuses a non-owner board user", async () => {
     const { company } = await createCompanyWithOwner(db);
-    const [ceo, worker] = await db
+    const [boundary] = await db.insert(projects).values({ companyId: company.id, name: "Boundary" }).returning();
+    const lowTrust = {
+      trustPreset: "low_trust_review",
+      authorizationPolicy: { trustBoundary: { mode: "low_trust_review", companyId: company.id, projectIds: [boundary!.id] } },
+    };
+    const [ceo, worker, lowTrustCeo] = await db
       .insert(agents)
-      .values(["ceo", "engineer"].map((role) => ({
-        companyId: company.id, name: role, role, status: "idle", adapterType: "process", adapterConfig: {}, runtimeConfig: {}, permissions: {},
+      .values([["ceo", {}], ["engineer", {}], ["ceo", lowTrust]].map(([role, permissions]) => ({
+        companyId: company.id, name: String(role), role: String(role), status: "idle", adapterType: "process", adapterConfig: {}, runtimeConfig: {}, permissions: permissions as Record<string, unknown>,
       })))
       .returning();
     const workerMember = await db
@@ -176,6 +183,10 @@ describeEmbeddedPostgres("access routes permissions upgrade compatibility", () =
       memberships: [{ companyId: company.id, membershipRole: "operator", status: "active" }], isInstanceAdmin: false,
     } as never)).patch(`/api/companies/${company.id}/members/${workerMember.id}/permissions`).send(grants);
     expect(operator.status, JSON.stringify(operator.body)).toBe(403);
+    const lowTrustRes = await request(await createAppAs(db, {
+      type: "agent", agentId: lowTrustCeo!.id, companyId: company.id, agentRole: "ceo", agentStatus: "idle", source: "agent_jwt",
+    } as never)).patch(`/api/companies/${company.id}/members/${workerMember.id}/permissions`).send(grants);
+    expect(lowTrustRes.status, JSON.stringify(lowTrustRes.body)).toBe(403);
 
     const res = await request(await createAppAs(db, {
       type: "agent", agentId: ceo!.id, companyId: company.id, agentRole: "ceo", agentStatus: "idle", source: "agent_jwt",

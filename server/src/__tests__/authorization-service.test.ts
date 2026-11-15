@@ -2016,30 +2016,29 @@ describeEmbeddedPostgres("authorization service", () => {
       expect(pausedDecision.reason).not.toBe("allow_agent_role_ceo");
     });
 
-    it("grants every company permission key to a CEO principal without membership or grants, and none to a non-CEO agent", async () => {
+    it("allows every company permission key to a CEO through decide, while principal grants stay grant-only", async () => {
       const f = await ceoFixture();
       const authz = authorizationService(db);
       for (const permissionKey of PERMISSION_KEYS) {
-        const ceo = await authz.decidePrincipalGrant({
-          companyId: f.company.id, principalType: "agent", principalId: f.ceo.id, action: permissionKey, permissionKey,
+        const ceo = await authz.decide({
+          actor: f.actorFor(f.ceo.id, { onBehalfOfUserId: null }),
+          action: permissionKey,
+          resource: { type: "company", companyId: f.company.id },
         });
         expect(ceo, permissionKey).toMatchObject({ allowed: true, reason: "allow_agent_role_ceo" });
-        const engineer = await authz.decidePrincipalGrant({
-          companyId: f.company.id, principalType: "agent", principalId: f.engineer.id, action: permissionKey, permissionKey,
-        });
-        expect(engineer.allowed, permissionKey).toBe(false);
+        for (const principalId of [f.ceo.id, f.engineer.id]) {
+          const grant = await authz.decidePrincipalGrant({
+            companyId: f.company.id, principalType: "agent", principalId, action: permissionKey, permissionKey,
+          });
+          expect(grant.allowed, permissionKey).toBe(false);
+        }
       }
-      const foreign = await authz.decidePrincipalGrant({
-        companyId: f.otherCompany.id, principalType: "agent", principalId: f.ceo.id,
-        action: "tools:manage_connections", permissionKey: "tools:manage_connections",
+      const foreign = await authz.decide({
+        actor: f.actorFor(f.ceo.id, { onBehalfOfUserId: null }),
+        action: "tools:manage_connections",
+        resource: { type: "company", companyId: f.otherCompany.id },
       });
       expect(foreign.allowed).toBe(false);
-      const paused = await ceoFixture("paused");
-      const pausedGrant = await authz.decidePrincipalGrant({
-        companyId: paused.company.id, principalType: "agent", principalId: paused.ceo.id,
-        action: "tools:manage_connections", permissionKey: "tools:manage_connections",
-      });
-      expect(pausedGrant.allowed).toBe(false);
     });
 
     it("keeps a low-trust review boundary on a CEO agent instead of owner-equivalent access", async () => {
@@ -2059,6 +2058,15 @@ describeEmbeddedPostgres("authorization service", () => {
       });
       expect(decision.reason).not.toBe("allow_agent_role_ceo");
       expect(decision.allowed).toBe(false);
+      for (const action of ["tools:manage_connections", "users:manage_permissions", "audit:view_agent_actions"] as const) {
+        const companyDecision = await authorizationService(db).decide({
+          actor: f.actorFor(f.ceo.id, { onBehalfOfUserId: null }),
+          action,
+          resource: { type: "company", companyId: f.company.id },
+        });
+        expect(companyDecision.allowed, action).toBe(false);
+        expect(companyDecision.reason, action).not.toBe("allow_agent_role_ceo");
+      }
     });
   });
 

@@ -14,7 +14,7 @@ import {
   teamsCatalogService,
 } from "../services/teams-catalog.js";
 import { forbidden } from "../errors.js";
-import { assertAuthenticated, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertAuthenticated, assertCompanyAccess, companyOwnerAgentHasPermission, getActorInfo } from "./authz.js";
 
 export function teamsCatalogRoutes(db: Db) {
   const router = Router();
@@ -54,7 +54,8 @@ export function teamsCatalogRoutes(db: Db) {
       throw forbidden("Agent key cannot access another company");
     }
 
-    const allowedByGrant = await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create");
+    const allowedByGrant = await companyOwnerAgentHasPermission(req, access, companyId, "agents:create")
+      || await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create");
     if (allowedByGrant || canCreateAgents(actorAgent)) {
       return;
     }
