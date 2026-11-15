@@ -244,8 +244,9 @@ at least one owner present, counts as the owner's own chat. Each chat has
   that group starts and again before every gated action of a run that relies
   on it. Members that cannot be read, a read slower than 4 seconds, any other
   member, or **Off** keep the normal group rules (fail closed). One request
-  reads the members once and reuses that answer for its own checks only; every
-  later request reads them again, so no member list survives across requests.
+  reads the members once and reuses that answer only until its response
+  closes; later requests and work that outlives the response, such as a run
+  started from it, read them again.
 - Runs without an owner message (monitor, `task_completion`,
   `approval_resolved`) get profile `full` with `ownerOrigin: owner_group`, so
   no `reply` or `reply_outside_allowlist` approval is needed.

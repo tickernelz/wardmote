@@ -33,20 +33,25 @@ export function registerOpenwaGroupGateway(db: Db, resolve: (endpoint: EndpointR
 }
 
 const groupCheckTimeoutMs = 4_000;
-const groupChecks = new AsyncLocalStorage<Map<string, Promise<boolean>>>();
+const groupChecks = new AsyncLocalStorage<{ open: boolean; checks: Map<string, Promise<boolean>> }>();
 
 function groupCheckKey(endpointId: string, chatKey: string): string {
   return endpointId + "\u0000" + chatKey;
 }
 
-/** Shares one live participant read per chat inside an HTTP request; the next request reads the gateway again. */
-export function openwaOwnerGroupRequestScope(_req: Request, _res: Response, next: NextFunction): void {
-  groupChecks.run(new Map(), next);
+/** Shares one live participant read per chat until the HTTP response closes; work that outlives the response reads the gateway again. */
+export function openwaOwnerGroupRequestScope(_req: Request, res: Response, next: NextFunction): void {
+  const scope = { open: true, checks: new Map<string, Promise<boolean>>() };
+  res.once("close", () => {
+    scope.open = false;
+    scope.checks.clear();
+  });
+  groupChecks.run(scope, next);
 }
 
 /** Drops a chat's shared live read so a settings change applies inside the same request. */
 export function openwaForgetOwnerGroup(endpointId: string, chatKey: string): void {
-  groupChecks.getStore()?.delete(groupCheckKey(endpointId, openwaChatKey(chatKey)));
+  groupChecks.getStore()?.checks.delete(groupCheckKey(endpointId, openwaChatKey(chatKey)));
 }
 
 export function openwaOwnerKeys(owner: Pick<OpenwaCurrentOwner, "jids" | "digits">): string[] {
@@ -130,10 +135,10 @@ export async function openwaOwnerOnlyGroup(db: Db, endpoint: EndpointRow, chatKe
   const key = openwaChatKey(chatKey);
   if (!key.endsWith("@g.us")) return false;
   const scope = groupChecks.getStore();
-  if (!scope) return readOwnerOnlyGroup(db, endpoint, key, check);
+  if (!scope?.open) return readOwnerOnlyGroup(db, endpoint, key, check);
   const scopeKey = groupCheckKey(endpoint.id, key);
-  const shared = scope.get(scopeKey) ?? readOwnerOnlyGroup(db, endpoint, key, check);
-  scope.set(scopeKey, shared);
+  const shared = scope.checks.get(scopeKey) ?? readOwnerOnlyGroup(db, endpoint, key, check);
+  scope.checks.set(scopeKey, shared);
   return shared;
 }
 

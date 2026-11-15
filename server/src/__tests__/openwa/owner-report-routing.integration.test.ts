@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -355,10 +356,11 @@ describe("OpenWA owner report routing (embedded Postgres + fake gateway)", () =>
     return { runId, issueId, openwa: openwa!, binding, run: { id: runId, companyId: t.companyId, contextSnapshot } };
   }
 
-  function inRequest<T>(body: () => Promise<T>): Promise<T> {
+  function inRequest<T>(body: (response: EventEmitter) => Promise<T>): Promise<T> {
+    const response = new EventEmitter();
     return new Promise((resolve, reject) => {
-      openwaOwnerGroupRequestScope({} as never, {} as never, () => {
-        body().then(resolve, reject);
+      openwaOwnerGroupRequestScope({} as never, response as never, () => {
+        body(response).then(resolve, reject);
       });
     });
   }
@@ -696,6 +698,27 @@ describe("OpenWA owner report routing (embedded Postgres + fake gateway)", () =>
     expect(groupReads(t) - before).toBe(1);
     t.gateway.groups.get(BOT_GROUP)!.participants.push({ id: jid(MEMBER_A) });
     expect(await inRequest(() => openwaRunProfile(db, monitor.run))).toBe("read_only");
+  }, 180_000);
+
+  it("reads the group again for work that outlives the request, so a stale answer never grants authority", async () => {
+    const t = await setup();
+    const ownerRun = await runStart(t, await admitted(t, mention(BOT_GROUP, OWNER_PHONE, "pantau server")));
+    const monitor = await monitorRun(t, ownerRun.issueId);
+    const before = groupReads(t);
+    const later = await inRequest(async (response) => {
+      expect(await openwaRunProfile(db, monitor.run)).toBe("full");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const deferred = gate.then(() => openwaRunProfile(db, monitor.run));
+      response.emit("close");
+      t.gateway.groups.get(BOT_GROUP)!.participants.push({ id: jid(MEMBER_A) });
+      release();
+      return deferred;
+    });
+    expect(later).toBe("read_only");
+    expect(groupReads(t) - before).toBe(2);
   }, 180_000);
 
   it("stays read_only and cards the owner's direct chat when the group participants cannot be read", async () => {
