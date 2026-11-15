@@ -18,6 +18,7 @@ export const OPENWA_COMPLETION_STATUSES = ["done", "cancelled", "blocked"] as co
 export const OPENWA_COMPLETION_COALESCE_MS = 60_000;
 const OPENWA_TITLE_LIMIT = 200;
 const OPENWA_COMMENT_LIMIT = 600;
+const OPENWA_MAX_BLOCKERS = 10;
 function ids(run: Run): string[] {
   const value = run.contextSnapshot?.chatCompletionDeliveryIds;
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
@@ -205,11 +206,12 @@ export async function openwaTaskReport(tx: Connection, task: Issue) {
       task.assigneeAgentId ? eq(issueComments.authorAgentId, task.assigneeAgentId) : sql`${issueComments.authorAgentId} is not null`))
     .orderBy(desc(issueComments.createdAt)).limit(1);
   const blockers = task.status === "blocked"
-    ? await tx.select({ identifier: issues.identifier, title: issues.title, status: issues.status }).from(issueRelations)
+    ? await tx.select({ identifier: issues.identifier, title: issues.title, status: issues.status, total: sql<number>`count(*) over()`.mapWith(Number) }).from(issueRelations)
       .innerJoin(issues, and(eq(issues.id, issueRelations.issueId), eq(issues.companyId, issueRelations.companyId)))
       .where(and(eq(issueRelations.companyId, task.companyId), eq(issueRelations.relatedIssueId, task.id), eq(issueRelations.type, "blocks")))
-      .orderBy(asc(issues.issueNumber))
+      .orderBy(asc(issues.issueNumber)).limit(OPENWA_MAX_BLOCKERS)
     : [];
+  const blockersOmitted = (blockers[0]?.total ?? 0) - blockers.length;
   const reference = task.identifier ?? task.id;
   return {
     identifier: task.identifier,
@@ -221,6 +223,7 @@ export async function openwaTaskReport(tx: Connection, task: Issue) {
     ...(comment ? { latestCommentId: comment.id, ...clippedField("latestComment", comment.body, OPENWA_COMMENT_LIMIT) } : { latestComment: null }),
     ...(task.status === "blocked"
       ? { blockedBy: blockers.map(blocker => ({ identifier: blocker.identifier, title: clipText(blocker.title, OPENWA_TITLE_LIMIT), status: blocker.status })),
+        ...(blockersOmitted > 0 ? { blockedByOmitted: blockersOmitted } : {}),
         unblock: task.unblockDescriptor ?? null }
       : {}),
   };

@@ -963,6 +963,29 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     expect(await grantsOf(second.requestId)).toHaveLength(1);
   }, 120_000);
 
+  it("lists the newest 10 pending approvals in the wake and counts the rest", async () => {
+    const t = await setup();
+    const ownerWake = await admitted(t, { chatId: jid(OWNER_PHONE), body: "status?" });
+    const ownerRun = await runStart(t, ownerWake);
+    await db.insert(chatOwnerApprovalRequests).values(Array.from({ length: 12 }, (_, index) => ({
+      companyId: t.companyId, endpointId: t.endpointId, originChatKey: ownerRun.openwa.chatKey, categories: ["create_task" as const],
+      scope: "one_action" as const, summary: "Request " + index, proposedAction: "create_task", status: "pending" as const,
+      createdAt: new Date(Date.UTC(2026, 9, 1, 0, index)),
+    })));
+    const guidance = await buildOpenwaRunGuidance(db, {
+      companyId: t.companyId,
+      issueId: ownerRun.issueId,
+      runId: ownerRun.runId,
+      wakeupRequestId: ownerWake.request.id,
+      openwa: ownerRun.openwa,
+      contextSnapshot: ownerRun.run.contextSnapshot,
+    });
+    expect(guidance!.wakeEvent.pendingApprovals).toHaveLength(10);
+    expect(guidance!.wakeEvent.pendingApprovals[0]).toMatchObject({ summary: "Request 11" });
+    expect(guidance!.wakeEvent.pendingApprovalsOmitted).toBe(2);
+    expect(guidance!.markdown).toContain("Pending approval requests for this chat: 12 (");
+  });
+
   it("lets an owner run or the requesting run withdraw a pending request; foreign chats, foreign agents and non-pending requests are refused", async () => {
     const t = await setup();
     const wakeA = await admitted(t, { chatId: jid(MEMBER_A), body: "minta izin buat task" });
