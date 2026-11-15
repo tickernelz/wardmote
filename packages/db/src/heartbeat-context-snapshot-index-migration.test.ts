@@ -56,7 +56,8 @@ d("heartbeat context_snapshot expression index migration", () => {
       "EXPLAIN SELECT id FROM agent_wakeup_requests WHERE company_id = '00000000-0000-0000-0000-000000000001' AND status = 'deferred_issue_execution' AND payload ->> 'issueId' = 'x' LIMIT 1",
     );
     const wakeText = wakePlan.map((r) => Object.values(r)[0]).join("\n");
-    expect(wakeText).toContain("agent_wakeup_requests_company_payload_issue_idx");
+    expect(wakeText).toMatch(/agent_wakeup_requests_(company_payload_issue|deferred_issue_key)_idx/);
+    expect(wakeText).not.toContain("Seq Scan");
 
     // Idempotency: re-running the migration statements against an already
     // migrated database must be a no-op, not an error.

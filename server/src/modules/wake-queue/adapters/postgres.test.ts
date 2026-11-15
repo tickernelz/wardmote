@@ -21,10 +21,12 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "../../../__tests__/helpers/embedded-postgres.js";
 import {
+  cancelDeferredWakesForClosedIssue,
   createAdmissionTransactionScope,
   createPostgresWakeQueueAdapter,
   createWakeAdmissionWriter,
 } from "./postgres.js";
+import { issueService } from "../../../services/issues.js";
 import type { WakeQueuePostgresAdapterDeps } from "./postgres.js";
 import { createReleaseIssueExecution } from "../application/use-cases.js";
 import type { TransactionScope } from "../application/ports.js";
@@ -346,6 +348,123 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
     expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, issueId))).toHaveLength(0);
   });
 
+  async function seedDeferredHumanComment(companyId: string, agentId: string, issueId: string) {
+    const [comment] = await db.insert(issueComments).values({
+      companyId, issueId, authorUserId: "responsible-user", body: "Please look again",
+    }).returning();
+    return seedDeferredWake({ companyId, agentId, issueId, requestedByActorId: "responsible-user",
+      payload: { commentId: comment.id, _wardmoteWakeContext: { issueId, wakeReason: "issue_commented", wakeCommentIds: [comment.id] } },
+    });
+  }
+
+  function releaseUseCase() {
+    return createReleaseIssueExecution({
+      issueLock: createPostgresWakeQueueAdapter(db, stubDeps),
+      recovery: { escalateStrandedAssignedIssue: async () => {}, escalateStrandedRecoveryIssueInPlace: async () => {} },
+    });
+  }
+
+  async function wakeStatus(wakeId: string) {
+    return (await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeId)))[0].status;
+  }
+
+  it("keeps a closed task's human message through owner cleanup, then reopens the task once the owner is gone", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "done" });
+    const runId = await seedRun({ companyId, agentId, status: "failed", contextSnapshot: { issueId } });
+    await db.update(heartbeatRuns).set({
+      runtimeMode: "legacy", processPid: process.pid, resultJson: { conversationContinuation: "continue_conversation_v1" },
+    }).where(eq(heartbeatRuns.id, runId));
+    const wakeId = await seedDeferredHumanComment(companyId, agentId, issueId);
+    const release = releaseUseCase();
+
+    expect((await release({ companyId, runId, now: new Date() })).outcome.kind).toBe("released");
+    expect(await wakeStatus(wakeId)).toBe("deferred_issue_execution");
+
+    await db.update(heartbeatRuns).set({ processPid: null }).where(eq(heartbeatRuns.id, runId));
+    expect((await release({ companyId, runId, now: new Date() })).outcome.kind).toBe("promoted");
+    expect(await wakeStatus(wakeId)).not.toBe("cancelled");
+    expect((await db.select().from(issues).where(eq(issues.id, issueId)))[0].status).not.toBe("done");
+  });
+
+  it("keeps deferred wakes when a task closes while its stopped run still owns its process", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "in_progress" });
+    const runId = await seedRun({ companyId, agentId, status: "failed", contextSnapshot: { issueId } });
+    await db.update(heartbeatRuns).set({
+      runtimeMode: "legacy", processPid: process.pid, resultJson: { conversationContinuation: "continue_conversation_v1" },
+    }).where(eq(heartbeatRuns.id, runId));
+    const wakeId = await seedDeferredHumanComment(companyId, agentId, issueId);
+
+    await issueService(db).update(issueId, { status: "done" });
+    expect(await wakeStatus(wakeId)).toBe("deferred_issue_execution");
+
+    await db.update(heartbeatRuns).set({ processPid: null }).where(eq(heartbeatRuns.id, runId));
+    expect(await cancelDeferredWakesForClosedIssue(db, { companyId, issueId, now: new Date() })).toEqual([wakeId]);
+  });
+
+  it.each(["done", "cancelled"] as const)("cancels deferred wakes when a %s issue closes with no run left to drain them", async (status) => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "in_progress" });
+    const byIssueId = await seedDeferredWake({ companyId, agentId, issueId });
+    const byContext = await seedDeferredWake({ companyId, agentId, issueId: randomUUID(), payload: { issueId: undefined, _wardmoteWakeContext: { issueId } } });
+    const otherIssueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "in_progress" });
+    const otherIssueWake = await seedDeferredWake({ companyId, agentId, issueId: otherIssueId });
+
+    await issueService(db).update(issueId, { status });
+
+    const rows = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, companyId));
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    expect(byId.get(byIssueId)).toMatchObject({ status: "cancelled", error: "issue_closed" });
+    expect(byId.get(byIssueId)?.finishedAt).not.toBeNull();
+    expect(byId.get(byContext)).toMatchObject({ status: "cancelled", error: "issue_closed" });
+    expect(byId.get(otherIssueWake)?.status).toBe("deferred_issue_execution");
+  });
+
+  it.each(["queued", "running", "scheduled_retry"])("keeps a closed issue's deferred wakes while a %s run can still drain them", async (runStatus) => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "done" });
+    await seedRun({ companyId, agentId, status: runStatus, contextSnapshot: { issueId } });
+    const wakeId = await seedDeferredWake({ companyId, agentId, issueId });
+
+    expect(await cancelDeferredWakesForClosedIssue(db, { companyId, issueId, now: new Date() })).toEqual([]);
+    expect((await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeId)))[0].status)
+      .toBe("deferred_issue_execution");
+  });
+
+  it("cancels a closed issue's deferred wakes when its run releases without draining them", async () => {
+    const companyId = await seedCompany();
+    const otherCompanyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "cancelled" });
+    const runId = await seedRun({ companyId, agentId, status: "cancelled", contextSnapshot: { issueId } });
+    await db.update(heartbeatRuns).set({ runtimeMode: "native", nativeIssueId: issueId, resultJson: {
+      reassignmentStopRequested: true,
+      nativeCancellation: { schema: "wardmote.native-cancellation.v1", runId, companyId, issueId,
+        scope: "run", reasonCode: "cancellation_run_only", dispatchState: "acknowledged", dispatched: true,
+        intentAuditId: randomUUID(), acknowledgementAuditId: randomUUID() },
+    } }).where(eq(heartbeatRuns.id, runId));
+    await db.update(issues).set({ executionRunId: runId, checkoutRunId: runId }).where(eq(issues.id, issueId));
+    const wakeId = await seedDeferredWake({ companyId, agentId, issueId });
+    const foreignAgentId = await seedAgent({ companyId: otherCompanyId });
+    const foreignWakeId = await seedDeferredWake({ companyId: otherCompanyId, agentId: foreignAgentId, issueId });
+
+    const adapter = createPostgresWakeQueueAdapter(db, stubDeps);
+    const result = await adapter.withIssueExecutionLock({ companyId, runId, now: new Date() }, async () => {
+      throw new Error("an acknowledged stop must not drain");
+    });
+
+    expect(result.outcome.kind).toBe("released");
+    expect((await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeId)))[0])
+      .toMatchObject({ status: "cancelled", error: "issue_closed" });
+    expect((await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, foreignWakeId)))[0].status)
+      .toBe("deferred_issue_execution");
+  });
+
   it.each(["in_progress", "blocked"])("preserves recovery ownership and queued messages when a native task fails from %s", async (status) => {
     const companyId = await seedCompany();
     const agentId = await seedAgent({ companyId });
@@ -456,10 +575,10 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
     expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId))).toHaveLength(2);
   });
 
-  it("leaves deferred work untouched until the effective execution hold clears", async () => {
+  it.each(["blocked", "done"])("leaves deferred work untouched on a %s issue until the effective execution hold clears", async (status) => {
     const companyId = await seedCompany();
     const agentId = await seedAgent({ companyId });
-    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "blocked" });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status });
     const runId = await seedRun({ companyId, agentId, contextSnapshot: { issueId }, status: "succeeded" });
     const wakeId = await seedDeferredWake({ companyId, agentId, issueId });
     const [hold] = await db.insert(issueRecoveryActions).values({

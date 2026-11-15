@@ -3,7 +3,8 @@ import { isCompletedOnboardingHandoffWake } from "../../../services/chat-complet
 import { instanceSettingsService } from "../../../services/instance-settings.js";
 import { currentConversationCommentCondition } from "../../../services/agent-conversations.js";
 import { getExecutionBlocker } from "../../../services/execution-blocker.js";
-import { and, asc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { getConversationOwnershipBlocker } from "../../../services/conversation-continuation.js";
+import { and, asc, eq, exists, inArray, isNull, notExists, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@tickernelz/wardmote-db";
 import { extractIssueReferenceIdentifiers } from "@tickernelz/wardmote-shared";
 import {
@@ -69,6 +70,58 @@ import type { RunSummary } from "../application/types.js";
 const DEFERRED_WAKE_STATUS = "deferred_issue_execution";
 const DEFERRED_WAKE_CONTEXT_KEY = "_wardmoteWakeContext";
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
+const CLOSED_ISSUE_STATUSES = ["done", "cancelled"];
+const ISSUE_CLOSED_CANCEL_REASON = "issue_closed";
+
+/** Cancels a closed issue's deferred wakes once no live run or still-running run owner remains to drain them. */
+export async function cancelDeferredWakesForClosedIssue(
+  tx: Db,
+  input: { companyId: string; issueId: string; now: Date },
+): Promise<string[]> {
+  const { companyId, issueId, now } = input;
+  const wakeIssueKey = sql`coalesce(
+    ${agentWakeupRequests.payload} ->> 'issueId',
+    ${agentWakeupRequests.payload} ->> 'taskId',
+    ${agentWakeupRequests.payload} -> '_wardmoteWakeContext' ->> 'issueId',
+    ${agentWakeupRequests.payload} -> '_wardmoteWakeContext' ->> 'taskId'
+  )`;
+  const cancellable = and(
+    eq(agentWakeupRequests.companyId, companyId),
+    sql`${agentWakeupRequests.status} = 'deferred_issue_execution'`,
+    sql`${wakeIssueKey} = ${issueId}`,
+    exists(
+      tx
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(eq(issues.companyId, companyId), eq(issues.id, issueId), inArray(issues.status, CLOSED_ISSUE_STATUSES))),
+    ),
+    notExists(
+      tx
+        .select({ id: heartbeatRuns.id })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
+            or(
+              eq(heartbeatRuns.nativeIssueId, issueId),
+              sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+              sql`${heartbeatRuns.id} = (select execution_run_id from issues where company_id = ${companyId} and id = ${issueId})`,
+            ),
+          ),
+        ),
+    ),
+  );
+  const [pending] = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests).where(cancellable).limit(1);
+  if (!pending) return [];
+  if (await getConversationOwnershipBlocker(tx, companyId, issueId)) return [];
+  const rows = await tx
+    .update(agentWakeupRequests)
+    .set({ status: "cancelled", finishedAt: now, error: ISSUE_CLOSED_CANCEL_REASON, updatedAt: now })
+    .where(cancellable)
+    .returning({ id: agentWakeupRequests.id });
+  return rows.map((row) => row.id);
+}
 
 type HeartbeatRunRow = typeof heartbeatRuns.$inferSelect;
 type IssueRow = typeof issues.$inferSelect;
@@ -1019,8 +1072,8 @@ export function createWakeAdmissionWriter(): WakeAdmissionWriter {
 export function createPostgresWakeQueueAdapter(db: Db, deps: WakeQueuePostgresAdapterDeps): IssueLockWriter {
   return {
     async withIssueExecutionLock(input, fn): Promise<ReleaseTransactionResult & { run: RunSnapshot }> {
-      return db.transaction(async (rawTx) => {
-        const tx = rawTx as unknown as Db;
+      let closedIssueId: string | null = null;
+      const releaseUnderLock = async (tx: Db): Promise<ReleaseTransactionResult & { run: RunSnapshot }> => {
         const run = await tx
           .select()
           .from(heartbeatRuns)
@@ -1083,6 +1136,7 @@ export function createPostgresWakeQueueAdapter(db: Db, deps: WakeQueuePostgresAd
 
         const issueRow =
           (contextIssueId ? candidateIssues.find((candidate) => candidate.id === contextIssueId) : candidateIssues[0]) ?? null;
+        const terminalIssueId = issueRow && CLOSED_ISSUE_STATUSES.includes(issueRow.status) ? issueRow.id : null;
 
         // A queue interrupt authorizes only its original pending queue. Replays
         // after dispatch or deleting the final message cannot launch other work.
@@ -1119,6 +1173,9 @@ export function createPostgresWakeQueueAdapter(db: Db, deps: WakeQueuePostgresAd
         const preDrain = decidePreDrain(preDrainFacts);
 
         if (preDrain.kind === "released") {
+          if (decidePreDrain({ ...preDrainFacts, executionCancellationAcknowledged: false }).kind !== "released") {
+            closedIssueId = terminalIssueId;
+          }
           return { outcome: { kind: "released" }, postCommitEffects: [], run: runSnapshot };
         }
 
@@ -1198,6 +1255,7 @@ export function createPostgresWakeQueueAdapter(db: Db, deps: WakeQueuePostgresAd
 
         const locked: LockedIssueExecution = { primaryIssue: toIssueSnapshot(issueRow), run: runSnapshot, recoveryOnly };
         const result = await fn(locked, { host: buildHost(tx, deps), transaction: buildTransaction(tx, deps, db, run) });
+        if (!recoveryOnly) closedIssueId = terminalIssueId;
         // Explicit retry admission requires the exact source's task claim.
         // Preserve it only when the existing queue-first recovery policy
         // requests that retry. The clear/restore stays inside this task lock.
@@ -1211,6 +1269,14 @@ export function createPostgresWakeQueueAdapter(db: Db, deps: WakeQueuePostgresAd
             sql`${issues.executionRunId} is null`));
         }
         return { ...result, run: runSnapshot };
+      };
+      return db.transaction(async (rawTx) => {
+        const tx = rawTx as unknown as Db;
+        const released = await releaseUnderLock(tx);
+        if (closedIssueId) {
+          await cancelDeferredWakesForClosedIssue(tx, { companyId: input.companyId, issueId: closedIssueId, now: input.now });
+        }
+        return released;
       });
     },
   };

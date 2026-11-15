@@ -94,5 +94,12 @@ export const agentWakeupRequests = pgTable(
       table.companyId,
       sql`(${table.payload} ->> 'issueId')`,
     ),
+    deferredIssueKeyIdx: index("agent_wakeup_requests_deferred_issue_key_idx")
+      .on(
+        table.companyId,
+        sql`(coalesce(${table.payload} ->> 'issueId', ${table.payload} ->> 'taskId', ${table.payload} -> '_wardmoteWakeContext' ->> 'issueId', ${table.payload} -> '_wardmoteWakeContext' ->> 'taskId'))`,
+      )
+      .concurrently()
+      .where(sql`${table.status} = 'deferred_issue_execution'`),
   }),
 );

@@ -457,6 +457,7 @@ const MIGRATIONS_WITH_TOP_LEVEL_STATEMENTS = new Set([
   "0328_private_task_access.sql",
   "0329_private_task_draft_assets.sql",
   "0347_little_night_nurse.sql",
+  "0391_wardmote_cancel_closed_issue_deferred_wakes.sql",
 ]);
 
 async function applyPendingMigrationsManually(
