@@ -283,7 +283,7 @@ export interface OpenwaGatewayClient {
     includeMedia: boolean;
     timeoutMs?: number;
   }): Promise<OpenwaHistoryMessage[]>;
-  getGroup(groupId: string): Promise<OpenwaGroup>;
+  getGroup(groupId: string, options?: { timeoutMs?: number }): Promise<OpenwaGroup>;
   listGroups(input?: { limit?: number; offset?: number }): Promise<OpenwaGroupSummary[]>;
   contactPhone(contactId: string): Promise<OpenwaContactPhone>;
   checkNumber(number: string): Promise<OpenwaNumberCheck>;
@@ -776,7 +776,8 @@ export function createOpenwaGatewayClient(options: OpenwaGatewayClientOptions): 
         { chatId: input.chatId, limit: input.limit, deep: input.deep, includeMedia: input.includeMedia },
         input.timeoutMs === undefined ? undefined : { timeoutMs: input.timeoutMs },
       ),
-    getGroup: (groupId) => json<OpenwaGroup>("GroupController_findOne", { groupId }),
+    getGroup: (groupId, options) =>
+      json<OpenwaGroup>("GroupController_findOne", { groupId }, options?.timeoutMs === undefined ? undefined : { timeoutMs: options.timeoutMs }),
     listGroups: (input = {}) => {
       const args: Record<string, unknown> = {};
       if (input.limit !== undefined) args.limit = input.limit;

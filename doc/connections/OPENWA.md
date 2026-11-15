@@ -242,8 +242,10 @@ at least one owner present, counts as the owner's own chat. Each chat has
 
 - The server reads the members from the gateway (`getGroup`) when a run of
   that group starts and again before every gated action of a run that relies
-  on it. Members that cannot be read, any other member, or **Off** keep the
-  normal group rules (fail closed). A cached member list never grants it.
+  on it. Members that cannot be read, a read slower than 4 seconds, any other
+  member, or **Off** keep the normal group rules (fail closed). One request
+  reads the members once and reuses that answer for its own checks only; every
+  later request reads them again, so no member list survives across requests.
 - Runs without an owner message (monitor, `task_completion`,
   `approval_resolved`) get profile `full` with `ownerOrigin: owner_group`, so
   no `reply` or `reply_outside_allowlist` approval is needed.

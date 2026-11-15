@@ -8,6 +8,7 @@ import {
   type OpenwaChatSettings,
 } from "@tickernelz/wardmote-shared";
 import { HttpError } from "../../errors.js";
+import { openwaForgetOwnerGroup } from "./owner-group.js";
 import type { OpenwaAgentConfigOrigin } from "./owners.js";
 import { OpenwaToolError, chatRef, fitPage, openwaToolOwners, resolveTarget, type ToolContext } from "./tools.js";
 
@@ -144,6 +145,7 @@ export async function openwaEndpointConfigTool(ctx: ToolContext, args: Args): Pr
     }
     if (chatSettings) {
       await owners.putChat(ctx.endpoint.id, { chatId: target.chatId, settings: (current) => mergeChatSettings(current, chatSettings) }, null, origin);
+      openwaForgetOwnerGroup(ctx.endpoint.id, target.chatKey);
       changed.chat = chatRef(ctx, target.chatId);
     }
     if (add.length || remove.length) changed.senders = await owners.applySenderRuleChanges(ctx.endpoint.id, { add, remove }, origin);

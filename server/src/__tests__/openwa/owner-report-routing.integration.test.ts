@@ -35,6 +35,7 @@ import { secretService } from "../../services/secrets.js";
 import { HttpError } from "../../errors.js";
 import { applyOpenwaRunContext, assertOpenwaRunMay, openwaRunProfile, resolveOpenwaRunContext, type OpenwaRunContext } from "../../services/openwa/authority.js";
 import { buildOpenwaRunGuidance } from "../../services/openwa/guidance.js";
+import { openwaOwnerGroupRequestScope, openwaRecordOwnerGroupStatus } from "../../services/openwa/owner-group.js";
 import type { OpenwaScheduledWakeClock } from "../../services/openwa/scheduled-wakes.js";
 import { executeOpenwaTool, type OpenwaToolBinding } from "../../services/openwa/tools.js";
 import { FAKE_OPENWA_KEY, FakeOpenwaGateway } from "./fake-gateway.js";
@@ -354,6 +355,18 @@ describe("OpenWA owner report routing (embedded Postgres + fake gateway)", () =>
     return { runId, issueId, openwa: openwa!, binding, run: { id: runId, companyId: t.companyId, contextSnapshot } };
   }
 
+  function inRequest<T>(body: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      openwaOwnerGroupRequestScope({} as never, {} as never, () => {
+        body().then(resolve, reject);
+      });
+    });
+  }
+
+  function groupReads(t: Setup): number {
+    return t.gateway.requests.filter((request) => request.path.includes("/groups/")).length;
+  }
+
   async function ownerGroupAudits(t: Setup) {
     return db
       .select()
@@ -664,5 +677,60 @@ describe("OpenWA owner report routing (embedded Postgres + fake gateway)", () =>
     const [delivery] = await db.select().from(chatDeliveries).where(eq(chatDeliveries.id, wake.delivery));
     expect(delivery).toMatchObject({ principalRole: "owner", triggerClass: "owner" });
     expect(wake.request.payload).toMatchObject({ openwa: { triggerClass: "owner" } });
+  }, 180_000);
+
+  it("reads the group participants once per request and again on the next request", async () => {
+    const t = await setup();
+    const ownerRun = await runStart(t, await admitted(t, mention(BOT_GROUP, OWNER_PHONE, "pantau server")));
+    const monitor = await monitorRun(t, ownerRun.issueId);
+    expect(await openwaRunProfile(db, monitor.run)).toBe("full");
+    const before = groupReads(t);
+    const profiles = await inRequest(async () => [
+      await openwaRunProfile(db, monitor.run),
+      await openwaRunProfile(db, monitor.run),
+      await executeOpenwaTool(db, monitor.binding, "openwa_send", { text: "Status: aman", idempotencyKey: randomUUID() }),
+      await openwaRunProfile(db, monitor.run),
+    ]);
+    expect(profiles.slice(0, 2)).toEqual(["full", "full"]);
+    expect(profiles[3]).toBe("full");
+    expect(groupReads(t) - before).toBe(1);
+    t.gateway.groups.get(BOT_GROUP)!.participants.push({ id: jid(MEMBER_A) });
+    expect(await inRequest(() => openwaRunProfile(db, monitor.run))).toBe("read_only");
+  }, 180_000);
+
+  it("stays read_only and cards the owner's direct chat when the group participants cannot be read", async () => {
+    const t = await setup();
+    const ownerRun = await runStart(t, await admitted(t, mention(BOT_GROUP, OWNER_PHONE, "cek invoice 42")));
+    await t.service.openwa.putChat(t.endpointId, { chatId: BOT_GROUP, settings: { activation: "on" } }, t.userId);
+    expect((await monitorRun(t, ownerRun.issueId)).openwa.ownerOrigin).toBe("owner_group");
+    t.gateway.groups.delete(BOT_GROUP);
+    const monitor = await monitorRun(t, ownerRun.issueId);
+    expect(monitor.openwa).toMatchObject({ profile: "read_only" });
+    expect(monitor.openwa.ownerOrigin).toBeUndefined();
+    await expect(assertOpenwaRunMay(db, monitor.run, "create_task")).rejects.toMatchObject({ status: 403 });
+    const sendsBefore = t.gateway.sends.length;
+    const card = await requestApproval(monitor.binding, { categories: ["wa_admin"], message: "Boleh ganti nama grup?" });
+    expect(t.gateway.sends.slice(sendsBefore).map((send) => send.chatId)).toEqual([jid(OWNER_PHONE)]);
+    expect((await bubbleChats(card.requestId)).map((bubble) => bubble.chatKey)).toEqual([jid(OWNER_PHONE)]);
+    expect((await ownerGroupAudits(t)).map((row) => row.metadata)).toEqual([
+      expect.objectContaining({ ownerOnly: true, reason: "owner_only" }),
+      expect.objectContaining({ ownerOnly: false, reason: "unverified" }),
+    ]);
+  }, 180_000);
+
+  it("records one owner_group_changed audit row when two checks flip the same group at once", async () => {
+    const t = await setup();
+    await runStart(t, await admitted(t, mention(BOT_GROUP, OWNER_PHONE, "pantau server")));
+    await t.service.openwa.putChat(t.endpointId, { chatId: BOT_GROUP, settings: { activation: "on" } }, t.userId);
+    const [resource] = (await resources(t)).filter((row) => (row.metadata as { chatKey?: string }).chatKey === BOT_GROUP);
+    await db.update(chatEndpointResources).set({ metadata: { ownerOnly: true } }).where(eq(chatEndpointResources.id, resource!.id));
+    const before = (await ownerGroupAudits(t)).length;
+    const group = { companyId: t.companyId, endpointId: t.endpointId, providerResourceId: resource!.providerResourceId, chatKey: BOT_GROUP };
+    const status = { ownerOnly: false, reason: "non_owner" as const, participantCount: 3 };
+    await Promise.all([
+      openwaRecordOwnerGroupStatus(db, group, status, { source: "probe" }),
+      openwaRecordOwnerGroupStatus(db, group, status, { source: "probe" }),
+    ]);
+    expect((await ownerGroupAudits(t)).length - before).toBe(1);
   }, 180_000);
 });

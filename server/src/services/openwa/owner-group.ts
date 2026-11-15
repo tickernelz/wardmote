@@ -1,4 +1,6 @@
-import { and, eq, sql } from "drizzle-orm";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { NextFunction, Request, Response } from "express";
+import { sql } from "drizzle-orm";
 import { chatEndpointResources, chatEndpoints, type Db } from "@tickernelz/wardmote-db";
 import { openwaChatSettingsSchema, openwaEndpointPolicySchema } from "@tickernelz/wardmote-shared";
 import { recordOpenwaAudit } from "./audit.js";
@@ -28,6 +30,23 @@ export function registerOpenwaGroupGateway(db: Db, resolve: (endpoint: EndpointR
   return () => {
     if (groupGateways.get(db) === resolve) groupGateways.delete(db);
   };
+}
+
+const groupCheckTimeoutMs = 4_000;
+const groupChecks = new AsyncLocalStorage<Map<string, Promise<boolean>>>();
+
+function groupCheckKey(endpointId: string, chatKey: string): string {
+  return endpointId + "\u0000" + chatKey;
+}
+
+/** Shares one live participant read per chat inside an HTTP request; the next request reads the gateway again. */
+export function openwaOwnerGroupRequestScope(_req: Request, _res: Response, next: NextFunction): void {
+  groupChecks.run(new Map(), next);
+}
+
+/** Drops a chat's shared live read so a settings change applies inside the same request. */
+export function openwaForgetOwnerGroup(endpointId: string, chatKey: string): void {
+  groupChecks.getStore()?.delete(groupCheckKey(endpointId, openwaChatKey(chatKey)));
 }
 
 export function openwaOwnerKeys(owner: Pick<OpenwaCurrentOwner, "jids" | "digits">): string[] {
@@ -75,21 +94,24 @@ export async function openwaRecordOwnerGroupStatus(
   check: OpenwaOwnerGroupCheck,
 ): Promise<void> {
   const key = openwaChatKey(group.chatKey);
-  const where = and(
-    eq(chatEndpointResources.companyId, group.companyId),
-    eq(chatEndpointResources.endpointId, group.endpointId),
-    eq(chatEndpointResources.type, "group_chat"),
-    eq(chatEndpointResources.providerResourceId, group.providerResourceId),
-  );
-  const [row] = await db.select({ metadata: chatEndpointResources.metadata }).from(chatEndpointResources).where(where).limit(1);
-  if (!row) return;
-  const recorded = row.metadata.ownerOnly;
-  if (recorded === status.ownerOnly) return;
-  await db
-    .update(chatEndpointResources)
-    .set({ metadata: sql`${chatEndpointResources.metadata} || jsonb_build_object('ownerOnly', ${status.ownerOnly}::boolean)`, updatedAt: new Date() })
-    .where(where);
-  if ((recorded === true) === status.ownerOnly) return;
+  const [flip] = (await db.execute(sql`
+    with current as (
+      select ${chatEndpointResources.id} as id, ${chatEndpointResources.metadata} as metadata
+      from ${chatEndpointResources}
+      where ${chatEndpointResources.companyId} = ${group.companyId}::uuid
+        and ${chatEndpointResources.endpointId} = ${group.endpointId}::uuid
+        and ${chatEndpointResources.type} = 'group_chat'
+        and ${chatEndpointResources.providerResourceId} = ${group.providerResourceId}
+      for update
+    )
+    update ${chatEndpointResources} as target
+    set metadata = target.metadata || jsonb_build_object('ownerOnly', ${status.ownerOnly}::boolean), updated_at = now()
+    from current
+    where target.id = current.id
+      and (current.metadata ->> 'ownerOnly') is distinct from (${status.ownerOnly}::boolean)::text
+    returning (current.metadata ->> 'ownerOnly') as previous
+  `)) as unknown as Array<{ previous: string | null }>;
+  if (!flip || (flip.previous === "true") === status.ownerOnly) return;
   await recordOpenwaAudit(db, {
     companyId: group.companyId,
     endpointId: group.endpointId,
@@ -107,6 +129,15 @@ export async function openwaRecordOwnerGroupStatus(
 export async function openwaOwnerOnlyGroup(db: Db, endpoint: EndpointRow, chatKey: string, check: OpenwaOwnerGroupCheck): Promise<boolean> {
   const key = openwaChatKey(chatKey);
   if (!key.endsWith("@g.us")) return false;
+  const scope = groupChecks.getStore();
+  if (!scope) return readOwnerOnlyGroup(db, endpoint, key, check);
+  const scopeKey = groupCheckKey(endpoint.id, key);
+  const shared = scope.get(scopeKey) ?? readOwnerOnlyGroup(db, endpoint, key, check);
+  scope.set(scopeKey, shared);
+  return shared;
+}
+
+async function readOwnerOnlyGroup(db: Db, endpoint: EndpointRow, key: string, check: OpenwaOwnerGroupCheck): Promise<boolean> {
   const resource = await openwaChatResource(db, endpoint, key);
   const policy = openwaEndpointPolicySchema.parse(endpoint.policy ?? {});
   if (!resource || resource.type !== "group_chat" || !openwaResourceGroupActive(policy, resource)) return false;
@@ -118,7 +149,7 @@ export async function openwaOwnerOnlyGroup(db: Db, endpoint: EndpointRow, chatKe
   }
   const resolve = groupGateways.get(db);
   const [live, owners] = await Promise.all([
-    resolve ? resolve(endpoint).then((gateway) => gateway.getGroup(key)).catch(() => null) : Promise.resolve(null),
+    resolve ? resolve(endpoint).then((gateway) => gateway.getGroup(key, { timeoutMs: groupCheckTimeoutMs })).catch(() => null) : Promise.resolve(null),
     openwaCurrentOwners(db, endpoint),
   ]);
   const participants = live && Array.isArray(live.participants) ? live.participants : null;
