@@ -3,6 +3,7 @@ import { isCompletedOnboardingHandoffWake } from "../../../services/chat-complet
 import { instanceSettingsService } from "../../../services/instance-settings.js";
 import { currentConversationCommentCondition } from "../../../services/agent-conversations.js";
 import { getExecutionBlocker } from "../../../services/execution-blocker.js";
+import { getConversationOwnershipBlocker } from "../../../services/conversation-continuation.js";
 import { and, asc, eq, exists, inArray, isNull, notExists, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@tickernelz/wardmote-db";
 import { extractIssueReferenceIdentifiers } from "@tickernelz/wardmote-shared";
@@ -72,7 +73,7 @@ const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_r
 const CLOSED_ISSUE_STATUSES = ["done", "cancelled"];
 const ISSUE_CLOSED_CANCEL_REASON = "issue_closed";
 
-/** Cancels a closed issue's deferred wakes that no live run on that issue will drain. */
+/** Cancels a closed issue's deferred wakes once no live run or still-running run owner remains to drain them. */
 export async function cancelDeferredWakesForClosedIssue(
   tx: Db,
   input: { companyId: string; issueId: string; now: Date },
@@ -84,14 +85,20 @@ export async function cancelDeferredWakesForClosedIssue(
     ${agentWakeupRequests.payload} -> '_wardmoteWakeContext' ->> 'issueId',
     ${agentWakeupRequests.payload} -> '_wardmoteWakeContext' ->> 'taskId'
   )`;
+  const deferredForIssue = and(
+    eq(agentWakeupRequests.companyId, companyId),
+    sql`${agentWakeupRequests.status} = 'deferred_issue_execution'`,
+    sql`${wakeIssueKey} = ${issueId}`,
+  );
+  const [pending] = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests).where(deferredForIssue).limit(1);
+  if (!pending) return [];
+  if (await getConversationOwnershipBlocker(tx, companyId, issueId)) return [];
   const rows = await tx
     .update(agentWakeupRequests)
     .set({ status: "cancelled", finishedAt: now, error: ISSUE_CLOSED_CANCEL_REASON, updatedAt: now })
     .where(
       and(
-        eq(agentWakeupRequests.companyId, companyId),
-        sql`${agentWakeupRequests.status} = 'deferred_issue_execution'`,
-        sql`${wakeIssueKey} = ${issueId}`,
+        deferredForIssue,
         exists(
           tx
             .select({ id: issues.id })
@@ -1133,7 +1140,7 @@ export function createPostgresWakeQueueAdapter(db: Db, deps: WakeQueuePostgresAd
 
         const issueRow =
           (contextIssueId ? candidateIssues.find((candidate) => candidate.id === contextIssueId) : candidateIssues[0]) ?? null;
-        closedIssueId = issueRow && CLOSED_ISSUE_STATUSES.includes(issueRow.status) ? issueRow.id : null;
+        const terminalIssueId = issueRow && CLOSED_ISSUE_STATUSES.includes(issueRow.status) ? issueRow.id : null;
 
         // A queue interrupt authorizes only its original pending queue. Replays
         // after dispatch or deleting the final message cannot launch other work.
@@ -1170,6 +1177,9 @@ export function createPostgresWakeQueueAdapter(db: Db, deps: WakeQueuePostgresAd
         const preDrain = decidePreDrain(preDrainFacts);
 
         if (preDrain.kind === "released") {
+          if (decidePreDrain({ ...preDrainFacts, executionCancellationAcknowledged: false }).kind !== "released") {
+            closedIssueId = terminalIssueId;
+          }
           return { outcome: { kind: "released" }, postCommitEffects: [], run: runSnapshot };
         }
 
@@ -1249,6 +1259,7 @@ export function createPostgresWakeQueueAdapter(db: Db, deps: WakeQueuePostgresAd
 
         const locked: LockedIssueExecution = { primaryIssue: toIssueSnapshot(issueRow), run: runSnapshot, recoveryOnly };
         const result = await fn(locked, { host: buildHost(tx, deps), transaction: buildTransaction(tx, deps, db, run) });
+        if (!recoveryOnly) closedIssueId = terminalIssueId;
         // Explicit retry admission requires the exact source's task claim.
         // Preserve it only when the existing queue-first recovery policy
         // requests that retry. The clear/restore stays inside this task lock.

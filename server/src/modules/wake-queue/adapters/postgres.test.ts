@@ -348,6 +348,63 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
     expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, issueId))).toHaveLength(0);
   });
 
+  async function seedDeferredHumanComment(companyId: string, agentId: string, issueId: string) {
+    const [comment] = await db.insert(issueComments).values({
+      companyId, issueId, authorUserId: "responsible-user", body: "Please look again",
+    }).returning();
+    return seedDeferredWake({ companyId, agentId, issueId, requestedByActorId: "responsible-user",
+      payload: { commentId: comment.id, _wardmoteWakeContext: { issueId, wakeReason: "issue_commented", wakeCommentIds: [comment.id] } },
+    });
+  }
+
+  function releaseUseCase() {
+    return createReleaseIssueExecution({
+      issueLock: createPostgresWakeQueueAdapter(db, stubDeps),
+      recovery: { escalateStrandedAssignedIssue: async () => {}, escalateStrandedRecoveryIssueInPlace: async () => {} },
+    });
+  }
+
+  async function wakeStatus(wakeId: string) {
+    return (await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeId)))[0].status;
+  }
+
+  it("keeps a closed task's human message through owner cleanup, then reopens the task once the owner is gone", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "done" });
+    const runId = await seedRun({ companyId, agentId, status: "failed", contextSnapshot: { issueId } });
+    await db.update(heartbeatRuns).set({
+      runtimeMode: "legacy", processPid: process.pid, resultJson: { conversationContinuation: "continue_conversation_v1" },
+    }).where(eq(heartbeatRuns.id, runId));
+    const wakeId = await seedDeferredHumanComment(companyId, agentId, issueId);
+    const release = releaseUseCase();
+
+    expect((await release({ companyId, runId, now: new Date() })).outcome.kind).toBe("released");
+    expect(await wakeStatus(wakeId)).toBe("deferred_issue_execution");
+
+    await db.update(heartbeatRuns).set({ processPid: null }).where(eq(heartbeatRuns.id, runId));
+    expect((await release({ companyId, runId, now: new Date() })).outcome.kind).toBe("promoted");
+    expect(await wakeStatus(wakeId)).not.toBe("cancelled");
+    expect((await db.select().from(issues).where(eq(issues.id, issueId)))[0].status).not.toBe("done");
+  });
+
+  it("keeps deferred wakes when a task closes while its stopped run still owns its process", async () => {
+    const companyId = await seedCompany();
+    const agentId = await seedAgent({ companyId });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "in_progress" });
+    const runId = await seedRun({ companyId, agentId, status: "failed", contextSnapshot: { issueId } });
+    await db.update(heartbeatRuns).set({
+      runtimeMode: "legacy", processPid: process.pid, resultJson: { conversationContinuation: "continue_conversation_v1" },
+    }).where(eq(heartbeatRuns.id, runId));
+    const wakeId = await seedDeferredHumanComment(companyId, agentId, issueId);
+
+    await issueService(db).update(issueId, { status: "done" });
+    expect(await wakeStatus(wakeId)).toBe("deferred_issue_execution");
+
+    await db.update(heartbeatRuns).set({ processPid: null }).where(eq(heartbeatRuns.id, runId));
+    expect(await cancelDeferredWakesForClosedIssue(db, { companyId, issueId, now: new Date() })).toEqual([wakeId]);
+  });
+
   it.each(["done", "cancelled"] as const)("cancels deferred wakes when a %s issue closes with no run left to drain them", async (status) => {
     const companyId = await seedCompany();
     const agentId = await seedAgent({ companyId });
@@ -518,10 +575,10 @@ describeEmbeddedPostgres("wake-queue postgres adapter", () => {
     expect(await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.companyId, companyId))).toHaveLength(2);
   });
 
-  it("leaves deferred work untouched until the effective execution hold clears", async () => {
+  it.each(["blocked", "done"])("leaves deferred work untouched on a %s issue until the effective execution hold clears", async (status) => {
     const companyId = await seedCompany();
     const agentId = await seedAgent({ companyId });
-    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status: "blocked" });
+    const issueId = await seedIssue({ companyId, assigneeAgentId: agentId, status });
     const runId = await seedRun({ companyId, agentId, contextSnapshot: { issueId }, status: "succeeded" });
     const wakeId = await seedDeferredWake({ companyId, agentId, issueId });
     const [hold] = await db.insert(issueRecoveryActions).values({
