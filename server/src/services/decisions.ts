@@ -262,8 +262,9 @@ export function decisionService(db: Db, options: DecisionServiceOptions) {
     return { ...decision, executions };
   }
 
-  async function list(companyId: string, filter: { status?: string; bundleId?: string; targetIssueId?: string; originAgentId?: string; limit?: number } = {}) {
+  async function list(companyId: string, filter: { status?: string; bundleId?: string; targetIssueId?: string; originAgentId?: string; limit?: number; before?: string } = {}) {
     const conditions = [eq(decisions.companyId, companyId)];
+    if (filter.before) conditions.push(sql<boolean>`(${decisions.createdAt}, ${decisions.id}) < (select cursor.created_at, cursor.id from ${decisions} cursor where cursor.id = ${filter.before} and cursor.company_id = ${companyId})`);
     if (filter.status) conditions.push(eq(decisions.status, filter.status));
     if (filter.bundleId) conditions.push(eq(decisions.bundleId, filter.bundleId));
     if (filter.originAgentId) conditions.push(eq(decisions.originAgentId, filter.originAgentId));
@@ -272,7 +273,7 @@ export function decisionService(db: Db, options: DecisionServiceOptions) {
       if (!links.length) return [];
       conditions.push(inArray(decisions.id, links.map((row) => row.id)));
     }
-    const rows = await db.select().from(decisions).where(and(...conditions)).orderBy(desc(decisions.createdAt)).limit(Math.min(filter.limit ?? 50, 100));
+    const rows = await db.select().from(decisions).where(and(...conditions)).orderBy(desc(decisions.createdAt), desc(decisions.id)).limit(filter.limit ?? 50);
     const openDecisionIds = rows.filter((decision) => decision.status === "open").map((decision) => decision.id);
     const currentIssueTargetIds = rows.flatMap((decision) => Object.keys(decision.targetSnapshots as Record<string, Snapshot>))
       .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id));

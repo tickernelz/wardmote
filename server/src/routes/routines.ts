@@ -1,4 +1,5 @@
 import { Router, type Request } from "express";
+import { z } from "zod";
 import type { Db } from "@tickernelz/wardmote-db";
 import {
   createRoutineSchema,
@@ -18,6 +19,11 @@ import { assertBoardOrAgentAuthority, assertCompanyAccess, getAccessibleResource
 import { badRequest, forbidden, unauthorized, unsupportedMediaType } from "../errors.js";
 import { getTelemetryClient } from "../telemetry.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
+
+const routineRunsPageQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  before: z.string().uuid().optional(),
+});
 
 export function routineRoutes(
   db: Db,
@@ -455,8 +461,9 @@ export function routineRoutes(
   router.get("/routines/:id/runs", async (req, res) => {
     const routine = await getAccessibleResource(req, res, svc.get(req.params.id as string), "Routine not found");
     if (!routine) return;
-    const limit = Number(req.query.limit ?? 50);
-    const result = await svc.listRuns(routine.id, Number.isFinite(limit) ? limit : 50);
+    const page = routineRunsPageQuerySchema.safeParse(req.query);
+    if (!page.success) throw badRequest("Invalid routine runs query", page.error.issues);
+    const result = await svc.listRuns(routine.id, page.data.limit, page.data.before);
     res.json(result);
   });
 

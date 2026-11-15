@@ -246,6 +246,26 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
       .then((rows) => rows[0]!);
   }
 
+  it("pages every run through the before cursor when runs share a timestamp", async () => {
+    const { companyId, routine, svc } = await seedFixture();
+    const triggeredAt = new Date("2026-11-15T00:00:00.000Z");
+    const inserted = await db
+      .insert(routineRuns)
+      .values(Array.from({ length: 5 }, () => ({ companyId, routineId: routine.id, source: "schedule" as const, status: "completed", triggeredAt })))
+      .returning({ id: routineRuns.id });
+
+    const seen: string[] = [];
+    let before: string | undefined;
+    for (let page = 0; page < 5; page += 1) {
+      const runs = await svc.listRuns(routine.id, 2, before);
+      if (runs.length === 0) break;
+      seen.push(...runs.map((run) => run.id));
+      before = runs.at(-1)!.id;
+    }
+
+    expect(seen).toEqual(inserted.map((row) => row.id).sort().reverse());
+  });
+
   it("rejects malformed routine and trigger IDs before any query", async () => {
     const { routine, svc } = await seedFixture();
     const malformed = [

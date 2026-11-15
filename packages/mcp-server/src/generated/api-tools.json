@@ -198,7 +198,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@activity.ts:341",
+    "boardGuard": "assertBoard@activity.ts:349",
     "authorityCapability": null,
     "parameters": [
       {
@@ -1876,7 +1876,7 @@
       "requirePluginConfigCompanyId"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@plugins.ts:2249",
+    "boardGuard": "assertInstanceAdmin@plugins.ts:2261",
     "authorityCapability": null,
     "parameters": [
       {
@@ -7839,7 +7839,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@agents.ts:7149",
+    "boardGuard": "assertInstanceAdmin@agents.ts:7153",
     "authorityCapability": null,
     "parameters": [
       {
@@ -11891,7 +11891,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1517",
+    "boardGuard": "assertBoard@tool-access.ts:1522",
     "authorityCapability": null,
     "parameters": [
       {
@@ -11951,7 +11951,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1465",
+    "boardGuard": "assertBoard@tool-access.ts:1470",
     "authorityCapability": null,
     "parameters": [
       {
@@ -11987,7 +11987,7 @@
       "assertCanTestAsAgent"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1773",
+    "boardGuard": "assertBoard@tool-access.ts:1778",
     "authorityCapability": null,
     "parameters": [
       {
@@ -14149,7 +14149,7 @@
       "assertInstanceAdmin"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@agents.ts:7287",
+    "boardGuard": "assertInstanceAdmin@agents.ts:7291",
     "authorityCapability": null,
     "parameters": [
       {
@@ -15474,7 +15474,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1542",
+    "boardGuard": "assertBoard@tool-access.ts:1547",
     "authorityCapability": null,
     "parameters": [
       {
@@ -15526,7 +15526,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1492",
+    "boardGuard": "assertBoard@tool-access.ts:1497",
     "authorityCapability": null,
     "parameters": [
       {
@@ -17229,6 +17229,14 @@
     "parameters": [
       {
         "name": "agentId",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      {
+        "name": "before",
         "in": "query",
         "required": false,
         "schema": {
@@ -20997,7 +21005,7 @@
       "assertInstanceAdmin"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@agents.ts:7120",
+    "boardGuard": "assertInstanceAdmin@agents.ts:7124",
     "authorityCapability": null,
     "parameters": [
       {
@@ -22640,7 +22648,7 @@
       "requirePluginConfigCompanyId"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2217",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2229",
     "authorityCapability": null,
     "parameters": [
       {
@@ -22682,7 +22690,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2931",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2943",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24138,7 +24146,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1198",
+    "boardGuard": "assertBoard@tool-access.ts:1203",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24173,7 +24181,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:768",
+    "boardGuard": "assertBoard@tool-access.ts:773",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24223,7 +24231,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1372",
+    "boardGuard": "assertBoard@tool-access.ts:1377",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24257,7 +24265,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1963",
+    "boardGuard": "assertBoard@tool-access.ts:1968",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24299,7 +24307,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1956",
+    "boardGuard": "assertBoard@tool-access.ts:1961",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24334,7 +24342,7 @@
       "assertBoardAnyToolPermission"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1798",
+    "boardGuard": "assertBoard@tool-access.ts:1803",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24376,7 +24384,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1571",
+    "boardGuard": "assertBoard@tool-access.ts:1576",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24423,7 +24431,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:725",
+    "boardGuard": "assertBoard@tool-access.ts:730",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24563,7 +24571,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2006",
+    "boardGuard": "assertBoard@tool-access.ts:2011",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24606,7 +24614,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2218",
+    "boardGuard": "assertBoard@tool-access.ts:2223",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24644,7 +24652,7 @@
       "hasCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:919",
+    "boardGuard": "assertBoard@tool-access.ts:924",
     "authorityCapability": null,
     "parameters": []
   },
@@ -29523,6 +29531,14 @@
     "authorityCapability": "work:read",
     "parameters": [
       {
+        "name": "before",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      {
         "name": "bundleId",
         "in": "query",
         "required": false,
@@ -31975,7 +31991,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2772",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2784",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32019,7 +32035,7 @@
       "requireLocalFolderDeclaration"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2803",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2815",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32094,7 +32110,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2530",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2542",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32144,7 +32160,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2484",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2496",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32194,6 +32210,14 @@
     "boardGuard": "assertBoardOrgAccess@plugins.ts:2114",
     "authorityCapability": null,
     "parameters": [
+      {
+        "name": "before",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
       {
         "name": "level",
         "in": "query",
@@ -32454,7 +32478,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@agents.ts:6665",
+    "boardGuard": "assertInstanceAdmin@agents.ts:6669",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32681,6 +32705,14 @@
     "boardGuard": null,
     "authorityCapability": null,
     "parameters": [
+      {
+        "name": "before",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
       {
         "name": "limit",
         "in": "query",
@@ -33525,7 +33557,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1205",
+    "boardGuard": "assertBoard@tool-access.ts:1210",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33578,7 +33610,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1267",
+    "boardGuard": "assertBoard@tool-access.ts:1272",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33676,7 +33708,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1397",
+    "boardGuard": "assertBoard@tool-access.ts:1402",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33710,7 +33742,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1580",
+    "boardGuard": "assertBoard@tool-access.ts:1585",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33745,7 +33777,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1332",
+    "boardGuard": "assertBoard@tool-access.ts:1337",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33781,7 +33813,7 @@
       "assertCanTestAsAgent"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1692",
+    "boardGuard": "assertBoard@tool-access.ts:1697",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33825,7 +33857,7 @@
       "assertCanTestAsAgent"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1651",
+    "boardGuard": "assertBoard@tool-access.ts:1656",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33860,7 +33892,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1191",
+    "boardGuard": "assertBoard@tool-access.ts:1196",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33987,7 +34019,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2239",
+    "boardGuard": "assertBoard@tool-access.ts:2244",
     "authorityCapability": null,
     "parameters": [
       {
@@ -34021,7 +34053,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1979",
+    "boardGuard": "assertBoard@tool-access.ts:1984",
     "authorityCapability": null,
     "parameters": [
       {
@@ -34056,7 +34088,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1972",
+    "boardGuard": "assertBoard@tool-access.ts:1977",
     "authorityCapability": null,
     "parameters": [
       {
@@ -34091,7 +34123,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2225",
+    "boardGuard": "assertBoard@tool-access.ts:2230",
     "authorityCapability": null,
     "parameters": [
       {
@@ -34202,7 +34234,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2232",
+    "boardGuard": "assertBoard@tool-access.ts:2237",
     "authorityCapability": null,
     "parameters": [
       {
@@ -39000,7 +39032,7 @@
       "assertInstanceAdmin"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@agents.ts:7212",
+    "boardGuard": "assertInstanceAdmin@agents.ts:7216",
     "authorityCapability": null,
     "parameters": [
       {
@@ -42060,7 +42092,7 @@
       "requireLocalFolderDeclaration"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2859",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2871",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43083,7 +43115,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1433",
+    "boardGuard": "assertBoard@tool-access.ts:1438",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43147,7 +43179,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1590",
+    "boardGuard": "assertBoard@tool-access.ts:1595",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43795,7 +43827,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1238",
+    "boardGuard": "assertBoard@tool-access.ts:1243",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43839,7 +43871,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1384",
+    "boardGuard": "assertBoard@tool-access.ts:1389",
     "authorityCapability": null,
     "parameters": [
       {
@@ -45034,7 +45066,7 @@
       "requirePluginConfigCompanyId"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2382",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2394",
     "authorityCapability": null,
     "parameters": [
       {
@@ -45089,7 +45121,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2475",
+    "boardGuard": "assertBoard@tool-access.ts:2480",
     "authorityCapability": null,
     "parameters": [
       {
@@ -45342,7 +45374,7 @@
       "assertInstanceAdmin"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@plugins.ts:2578",
+    "boardGuard": "assertInstanceAdmin@plugins.ts:2590",
     "authorityCapability": null,
     "parameters": [
       {
@@ -51675,7 +51707,7 @@
       "assertPluginManagementVisible"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@plugins.ts:2167",
+    "boardGuard": "assertInstanceAdmin@plugins.ts:2179",
     "authorityCapability": null,
     "parameters": [
       {
@@ -51711,7 +51743,7 @@
       "requireLocalFolderDeclaration"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2826",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2838",
     "authorityCapability": null,
     "parameters": [
       {

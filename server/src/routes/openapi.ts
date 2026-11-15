@@ -7587,6 +7587,7 @@ registerCurrentRoute({
     targetIssueId: z.string().guid().optional(),
     originAgentId: z.string().guid().optional(),
     limit: z.coerce.number().int().positive().max(100).optional(),
+    before: z.string().guid().optional(),
   }),
   responses: {
     200: r.ok(),
@@ -13832,6 +13833,7 @@ for (const [method, path, query] of [
     entityType: z.string().optional(),
     entityId: z.string().optional(),
     limit: z.coerce.number().int().min(1).max(500).optional(),
+    before: z.string().uuid().optional(),
   })],
   ["get", "/api/companies/{companyId}/audit/agent-actions", z.object({
     actorScope: z.enum(["agents", "all"]).optional(),
@@ -13899,6 +13901,7 @@ for (const [method, path, query] of [
     level: z.string().optional(),
     since: z.string().optional(),
     limit: z.coerce.number().int().min(1).max(500).optional(),
+    before: z.string().uuid().optional(),
   })],
   ["get", "/api/plugins/{pluginId}/jobs", z.object({ status: z.enum(PLUGIN_JOB_STATUSES).optional() })],
   ["get", "/api/plugins/{pluginId}/jobs/{jobId}/runs", z.object({
@@ -13906,7 +13909,8 @@ for (const [method, path, query] of [
   })],
   ["get", "/api/companies/{companyId}/routines", z.object({ projectId: z.string().optional() })],
   ["get", "/api/routines/{id}/runs", z.object({
-    limit: z.coerce.number().int().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+    before: z.string().uuid().optional(),
   })],
   ["get", "/api/companies/{companyId}/tools/apps/{galleryKey}/preflight", z.object({ methodKey: z.string().optional() })],
   ["get", "/api/companies/{companyId}/tools/action-requests", z.object({
@@ -13914,7 +13918,7 @@ for (const [method, path, query] of [
   })],
   ["get", "/api/tool-connections/{connectionId}/usage", z.object({ range: z.enum(["7d", "30d"]).optional() })],
   ["get", "/api/tool-connections/{connectionId}/activity", z.object({
-    limit: z.coerce.number().int().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
   })],
   ["get", "/api/tool-gateway/audit", z.object({ gateway: z.string().optional() })],
   ["get", "/api/companies/{companyId}/fast-response/models", z.object({ connectionId: z.string() })],

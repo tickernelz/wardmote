@@ -464,6 +464,11 @@ const BUILTIN_LOCAL_STDIO_RUNTIME_TEMPLATES: Record<
   },
 };
 
+function requestedLimit(value: unknown, fallback: number): number {
+  const requested = Math.floor(Number(value ?? fallback));
+  return requested >= 1 ? requested : fallback;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -2962,7 +2967,7 @@ export function createToolGatewayService(
     const params = asRecord(parameters) ?? {};
     const query =
       typeof params.query === "string" ? params.query.trim().toLowerCase() : "";
-    const limit = Math.max(1, Math.min(50, Number(params.limit ?? 10) || 10));
+    const limit = requestedLimit(params.limit, 10);
     const tools = (await searchableOnDemandTools(session))
       .filter((tool) => {
         if (!query) return true;
@@ -3179,7 +3184,7 @@ export function createToolGatewayService(
           "agent_context_required",
         );
       }
-      const limit = Math.max(1, Math.min(50, Number(params.limit ?? 10) || 10));
+      const limit = requestedLimit(params.limit, 10);
       const rows = await db
         .select({
           id: issues.id,
