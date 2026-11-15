@@ -1846,6 +1846,7 @@ export interface IssueFilters {
   updatedSince?: string;
   includeConversations?: boolean;
   conversationOwner?: { agentId: string | null; userId: string | null };
+  includeHidden?: boolean;
 }
 
 function conversationOwnerScope(
@@ -8095,9 +8096,10 @@ export function issueService(db: Db) {
         });
       }
 
+      const visibility = filters?.includeHidden ? isNull(issues.harnessKind) : visibleIssueCondition();
       const conditions = [
         eq(issues.companyId, companyId),
-        visibleIssueCondition(),
+        visibility,
       ];
       const includeConversations = filters?.includeConversations === true;
       if (includeConversations) {
@@ -8250,7 +8252,7 @@ export function issueService(db: Db) {
       const issueSource = db.select(issueListSelect).from(issues);
       const searchedSource = hasSearch
         ? issueSource.innerJoin(sql`(
-            ${taskSearchCtes(companyId, taskSearch, false, and(...conditions), filters?.readCondition)}
+            ${taskSearchCtes(companyId, taskSearch, false, and(...conditions), filters?.readCondition, visibility)}
             SELECT m.id, ${taskSearchScore(taskSearch)} AS score FROM matched m
           ) task_search`, sql`task_search.id = ${issues.id}`)
         : issueSource;

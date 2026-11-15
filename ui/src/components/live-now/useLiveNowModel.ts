@@ -19,11 +19,21 @@ import {
 const ISSUE_DETAIL_STALE_TIME_MS = 30_000;
 const NO_PAUSED_TASKS: readonly PausedTask[] = [];
 
-export interface LiveNowEntry {
-  issueId: string;
+export interface LiveNowRunSet {
   runs: LiveRunForIssue[];
   latestStartAt: string;
   earliestStartedAt: string | null;
+}
+
+export interface LiveNowEntry extends LiveNowRunSet {
+  issueId: string;
+}
+
+/** A live run with no task, such as a timer heartbeat, shown under its agent's name. */
+export interface LiveNowHeartbeatItem {
+  entry: LiveNowRunSet;
+  signal: LiveNowHealthSignal;
+  group: LiveNowGroup;
 }
 
 export interface LiveNowAncestor {
@@ -72,17 +82,36 @@ export function buildLiveNowEntries(
     else runsByIssueId.set(run.issueId, [run]);
   }
   const entries: LiveNowEntry[] = [];
-  for (const [issueId, runs] of runsByIssueId) {
-    runs.sort((a, b) => timestampMs(runStartAt(b)) - timestampMs(runStartAt(a)));
-    const started = runs.filter((run) => run.startedAt !== null);
-    entries.push({
-      issueId,
-      runs,
-      latestStartAt: runStartAt(runs[0]!),
-      earliestStartedAt: started.length > 0 ? started[started.length - 1]!.startedAt : null,
-    });
-  }
+  for (const [issueId, runs] of runsByIssueId) entries.push({ issueId, ...toRunSet(runs) });
   return entries.sort((a, b) => timestampMs(b.latestStartAt) - timestampMs(a.latestStartAt));
+}
+
+function toRunSet(runs: LiveRunForIssue[]): LiveNowRunSet {
+  runs.sort((a, b) => timestampMs(runStartAt(b)) - timestampMs(runStartAt(a)));
+  const started = runs.filter((run) => run.startedAt !== null);
+  return {
+    runs,
+    latestStartAt: runStartAt(runs[0]!),
+    earliestStartedAt: started.length > 0 ? started[started.length - 1]!.startedAt : null,
+  };
+}
+
+/** Live runs that have no task, one item each, ordered like tasks: needs attention first, then newest start. */
+export function buildLiveNowHeartbeats(
+  liveRuns: readonly LiveRunForIssue[] | null | undefined,
+  now: number,
+): LiveNowHeartbeatItem[] {
+  const items = (liveRuns ?? [])
+    .filter((run) => !run.issueId && isLiveIssueRun(run))
+    .map((run) => {
+      const signal = classifyLiveNowHealth(run, now);
+      return { entry: toRunSet([run]), signal, group: liveNowGroupOf(signal.health) } satisfies LiveNowHeartbeatItem;
+    })
+    .sort((a, b) => timestampMs(b.entry.latestStartAt) - timestampMs(a.entry.latestStartAt));
+  return items.sort((a, b) => {
+    if (a.group !== b.group) return a.group === "attention" ? -1 : 1;
+    return a.group === "attention" ? compareLiveNowSeverity(a.signal.health, b.signal.health) : 0;
+  });
 }
 
 /** Resolves a task's ancestors root-first from loaded tasks, falling back to the detail ancestors. */
@@ -216,8 +245,16 @@ export function useLiveNowModel(
     return buildLiveNowEntries(liveRuns, statusById);
   }, [detailById, liveRuns, loadedById]);
 
-  const liveEntryRuns = useMemo(() => entries.flatMap((entry) => entry.runs), [entries]);
+  const heartbeatRuns = useMemo(
+    () => (liveRuns ?? []).filter((run) => !run.issueId && isLiveIssueRun(run)),
+    [liveRuns],
+  );
+  const liveEntryRuns = useMemo(
+    () => [...entries.flatMap((entry) => entry.runs), ...heartbeatRuns],
+    [entries, heartbeatRuns],
+  );
   const now = useLiveNowClock(liveEntryRuns);
+  const heartbeats = buildLiveNowHeartbeats(heartbeatRuns, now);
   const pauseByIssueId = useMemo(() => new Map(pausedTasks.map((pause) => [pause.issueId, pause])), [pausedTasks]);
   const issueById = (issueId: string) => loadedById.get(issueId) ?? detailById.get(issueId) ?? null;
   const stillLive = entries.filter((entry) => pauseByIssueId.get(entry.issueId)?.state !== "paused");
@@ -230,5 +267,5 @@ export function useLiveNowModel(
       issue: issueById(pause.issueId),
       identifier: pause.identifier ?? pause.issueId.slice(0, 8),
     }));
-  return { items, pausedItems, loadedById, detailById, failedIds, now };
+  return { items, heartbeats, pausedItems, loadedById, detailById, failedIds, now };
 }

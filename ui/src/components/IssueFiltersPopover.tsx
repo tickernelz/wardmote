@@ -110,6 +110,7 @@ export function IssueFiltersPopover({
   currentUserId,
   enableExternalObjectFilters = true,
   enableRoutineVisibilityFilter = false,
+  enableHiddenTasksFilter = false,
   buttonVariant = "ghost",
   iconOnly = false,
   creators,
@@ -125,6 +126,7 @@ export function IssueFiltersPopover({
   currentUserId?: string | null;
   enableExternalObjectFilters?: boolean;
   enableRoutineVisibilityFilter?: boolean;
+  enableHiddenTasksFilter?: boolean;
   buttonVariant?: "ghost" | "secondary";
   iconOnly?: boolean;
   creators?: CreatorOption[];
@@ -522,6 +524,15 @@ export function IssueFiltersPopover({
                       onCheckedChange={(checked) => onChange({ hideRoutineExecutions: checked === true })}
                     />
                     <span className="text-sm">Hide routine runs</span>
+                  </label>
+                ) : null}
+                {enableHiddenTasksFilter ? (
+                  <label className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1 hover:bg-bg-3/50">
+                    <Checkbox
+                      checked={state.showHiddenTasks}
+                      onCheckedChange={(checked) => onChange({ showHiddenTasks: checked === true })}
+                    />
+                    <span className="text-sm">Show hidden tasks</span>
                   </label>
                 ) : null}
               </div>

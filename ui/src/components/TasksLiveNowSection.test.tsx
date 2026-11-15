@@ -15,7 +15,7 @@ import {
   useAboveViewportResizeCompensation,
 } from "./TasksLiveNowSection";
 import { classifyLiveNowHealth, countLiveNowHealth } from "./live-now/live-now-health";
-import { buildLiveNowEntries } from "./live-now/useLiveNowModel";
+import { buildLiveNowEntries, buildLiveNowHeartbeats } from "./live-now/useLiveNowModel";
 
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -807,6 +807,93 @@ describe("Live now groups, density, filters and board lanes", () => {
     const more = [...lane("working").querySelectorAll("button")].find((button) => button.textContent === "+2 more")!;
     flushSync(() => more.click());
     expect(laneIds("working")).toEqual(["working-1", "working-2", "working-3", "working-4"]);
+  });
+});
+
+describe("Live now runs the task list does not show", () => {
+  const heartbeatRun = run({ id: "heartbeat-1", issueId: null, agentName: "Wira", invocationSource: "timer" });
+
+  function heartbeatRows() {
+    return [...container.querySelectorAll<HTMLElement>("[data-live-now-kind='heartbeat']")];
+  }
+
+  it("turns live runs without a task into heartbeat items and leaves finished runs and task runs out", () => {
+    const items = buildLiveNowHeartbeats(
+      [heartbeatRun, run({ id: "done", issueId: null, status: "succeeded" }), run({ id: "task-run" })],
+      Date.parse("2026-10-08T10:00:30.000Z"),
+    );
+    expect(items.map((item) => item.entry.runs[0]!.id)).toEqual(["heartbeat-1"]);
+  });
+
+  it("shows a run with no task as a Heartbeat row under its agent, past the filters, and stops it after confirmation", async () => {
+    mockHeartbeatsApi.cancel.mockResolvedValue(undefined);
+    render(<TasksLiveNowSection companyId="company-1" liveRuns={[heartbeatRun]} issues={[]} issueFilter={() => false} />);
+
+    const row = heartbeatRows()[0]!;
+    expect(row.textContent).toContain("Heartbeat");
+    expect(row.textContent).toContain("Wira");
+    expect(row.querySelector("a[aria-label='Open Wira heartbeat run']")?.getAttribute("href")).toBe("/agents/agent-1/runs/heartbeat-1");
+    expect(container.querySelector("[data-slot='tasks-live-now-count']")?.textContent).toBe("1");
+    expect(container.querySelector("[data-slot='tasks-live-now-hidden']")).toBeNull();
+    expect(mockIssuesApi.get).not.toHaveBeenCalled();
+
+    openMoreMenu(row);
+    await waitFor(() => expect(menuItem("Stop run")).toBeDefined());
+    expect(menuItem("Open task")).toBeUndefined();
+    flushSync(() => menuItem("Stop run")!.click());
+    await waitFor(() => expect(document.body.querySelector("[role='alertdialog']")).not.toBeNull());
+    const confirm = [...document.body.querySelectorAll<HTMLButtonElement>("[role='alertdialog'] button")].find(
+      (button) => button.textContent === "Stop run",
+    )!;
+    flushSync(() => confirm.click());
+    await waitFor(() => expect(mockHeartbeatsApi.cancel).toHaveBeenCalledWith("heartbeat-1"));
+  });
+
+  it("puts a heartbeat card in its board lane", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-10-08T10:00:30.000Z"));
+    try {
+      render(
+        <TasksLiveNowSection
+          companyId="company-1"
+          liveRuns={[{ ...heartbeatRun, lastEventAt: "2026-10-08T10:00:20.000Z" }]}
+          issues={[]}
+          view="board"
+        />,
+      );
+      const card = container.querySelector<HTMLElement>("[data-live-now-kind='heartbeat']")!;
+      expect(card.closest("[data-live-now-lane]")?.getAttribute("data-live-now-lane")).toBe("working");
+      expect(card.textContent).toContain("Wira");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("labels live runs on a hidden task, a routine run and a chat, and keeps them visible", async () => {
+    mockIssuesApi.get.mockResolvedValue(
+      issue({ id: "hidden-1", identifier: "ZHA-7", title: "Update status card", hiddenAt: new Date("2026-10-08T09:00:00.000Z") }),
+    );
+    const routine = issue({ id: "routine-1", identifier: "ZHA-8", title: "Nightly digest", originKind: "routine_execution" });
+    const chat = issue({ id: "chat-1", identifier: "ZHA-9", title: "OpenWA group", originKind: "chat_channel" });
+    render(
+      <TasksLiveNowSection
+        companyId="company-1"
+        liveRuns={[
+          run({ id: "run-hidden", issueId: "hidden-1" }),
+          run({ id: "run-routine", issueId: "routine-1" }),
+          run({ id: "run-chat", issueId: "chat-1" }),
+        ]}
+        issues={[routine, chat]}
+        issueFilter={() => true}
+      />,
+    );
+
+    const kindOf = (issueId: string) =>
+      container.querySelector(`[data-live-now-issue-id='${issueId}'] [data-slot='tasks-live-now-kind']`)?.textContent;
+    await waitFor(() => expect(kindOf("hidden-1")).toBe("Hidden"));
+    expect(kindOf("routine-1")).toBe("Routine");
+    expect(kindOf("chat-1")).toBe("Chat");
+    expect(container.querySelector("[data-slot='tasks-live-now-hidden']")).toBeNull();
   });
 });
 

@@ -3029,7 +3029,7 @@ span.wardmote-mention-chip[data-mention-kind="external-object"] {
   --sz-execution-blocker-block: calc(var(--spacing) * 2);
   /* Ten single-line repository rows, including the gaps between them. */
   --sz-github-repository-list: calc(10lh + 9 * var(--spacing) * 2);
-  --sz-320px: 320px; /* Extracted from ui/src/components/ActiveAgentsPanel.tsx (h-[320px]). */
+  --sz-320px: 320px; /* Extracted from ui/src/components/AgentRunCard.tsx (h-[320px]). */
   --sz-390px: 390px;
   --sz-64px: 64px;
   --sz-3px: 3px; /* Extracted from ui/src/components/ActivityCharts.tsx (gap-[3px]). */
@@ -3201,7 +3201,7 @@ span.wardmote-mention-chip[data-mention-kind="external-object"] {
   --pct-70: 70%; /* Extracted from ui/src/components/CaseFieldsPanel.tsx (max-w-[70%]). */
   --pct-neg-50: -50%; /* Extracted from ui/src/components/ui/alert-dialog.tsx (translate-x-[-50%]). */
   --pct-72: 72%; /* Extracted from ui/src/pages/IssueDetail.tsx (w-[72%]). */
-  --shadow-extract-1: 0 16px 40px rgba(37,99,235,0.08); /* ActiveAgentsPanel.tsx live-box glow. Gallery feedback r2: liveness glow recolored cyan->status blue (value edit, site unchanged; originally extracted as rgba(6,182,212,0.08)). */
+  --shadow-extract-1: 0 16px 40px rgba(37,99,235,0.08); /* AgentRunCard.tsx live-box glow. Gallery feedback r2: liveness glow recolored cyan->status blue (value edit, site unchanged; originally extracted as rgba(6,182,212,0.08)). */
   --shadow-extract-2: 0 20px 80px -40px rgba(0,0,0,0.55); /* Extracted from ui/src/components/BudgetPolicyCard.tsx (shadow-[0_20px_80px_-40px_rgba(0,0,0,0.55)]). */
   --shadow-extract-3: 0 0 0 1px rgba(255,255,255,0.08); /* Extracted from ui/src/components/BudgetSidebarMarker.tsx (shadow-[0_0_0_1px_rgba(255,255,255,0.08)]). */
   --shadow-extract-4: 0 -12px 28px rgba(15,23,42,0.08); /* Extracted from ui/src/components/ChatComposer.test.tsx (shadow-[0_-12px_28px_rgba(15,23,42,0.08)]). */

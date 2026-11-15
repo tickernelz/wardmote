@@ -929,6 +929,7 @@ describe("inbox helpers", () => {
           liveOnly: false,
           externalObjectStatuses: [],
           hideRoutineExecutions: true,
+          showHiddenTasks: false,
         },
       }).map((issue) => issue.id),
     ).toEqual(["remote-match"]);
@@ -950,6 +951,7 @@ describe("inbox helpers", () => {
           liveOnly: false,
           externalObjectStatuses: [],
           hideRoutineExecutions: true,
+          showHiddenTasks: false,
         },
       }),
     ).toEqual([]);
@@ -971,6 +973,7 @@ describe("inbox helpers", () => {
           liveOnly: false,
           externalObjectStatuses: [],
           hideRoutineExecutions: true,
+          showHiddenTasks: false,
         },
       }),
     ).toEqual([]);
@@ -1019,6 +1022,7 @@ describe("inbox helpers", () => {
           liveOnly: false,
           externalObjectStatuses: ["failed"],
           hideRoutineExecutions: true,
+          showHiddenTasks: false,
         },
         issueFilterContext: {
           externalObjectSummaryByIssueId: summaries,
@@ -1115,6 +1119,7 @@ describe("inbox helpers", () => {
         liveOnly: true,
         externalObjectStatuses: [],
         hideRoutineExecutions: false,
+        showHiddenTasks: false,
       },
     });
     saveInboxFilterPreferences("company-2", {
@@ -1131,6 +1136,7 @@ describe("inbox helpers", () => {
         liveOnly: false,
         externalObjectStatuses: [],
         hideRoutineExecutions: true,
+        showHiddenTasks: false,
       },
     });
 
@@ -1148,6 +1154,7 @@ describe("inbox helpers", () => {
         liveOnly: true,
         externalObjectStatuses: [],
         hideRoutineExecutions: false,
+        showHiddenTasks: false,
       },
     });
     expect(loadInboxFilterPreferences("company-2")).toEqual({
@@ -1164,6 +1171,7 @@ describe("inbox helpers", () => {
         liveOnly: false,
         externalObjectStatuses: [],
         hideRoutineExecutions: true,
+        showHiddenTasks: false,
       },
     });
   });
@@ -1199,6 +1207,7 @@ describe("inbox helpers", () => {
         liveOnly: false,
         externalObjectStatuses: [],
         hideRoutineExecutions: false,
+        showHiddenTasks: false,
       },
     });
   });

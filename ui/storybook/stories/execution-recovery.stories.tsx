@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { IssueRow } from "@/components/IssueRow";
-import { ActiveAgentsPanel } from "@/components/ActiveAgentsPanel";
+import { AgentRunCard } from "@/components/AgentRunCard";
 import { TaskChatRunnerTurn } from "@/components/task-chat/TaskChatRunnerTurn";
 import { TaskChatLiveRunPill } from "@/components/task-chat/TaskChatLiveRunPill";
 import { Textarea } from "@/components/ui/textarea";
-import { queryKeys } from "@/lib/queryKeys";
 import { createIssue, storybookLiveRuns } from "../fixtures/wardmoteData";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { ExecutionProjection } from "@tickernelz/wardmote-shared";
@@ -307,65 +306,47 @@ export const LegacyChatStatusLabels: Story = {
   ),
 };
 
+const dashboardLabelRuns = labelExamples.map((execution, index) => ({
+  ...storybookLiveRuns[0]!,
+  id: `dashboard-label-${index}`,
+  issueId: `dashboard-task-${index}`,
+  agentName: `Research agent ${index + 1}`,
+  createdAt: "2026-09-08T16:00:00Z", startedAt: "2026-09-08T16:00:00Z",
+  status: runStatus(execution),
+  finishedAt: ["succeeded", "failed"].includes(runStatus(execution))
+    ? "2026-09-08T16:00:30Z"
+    : null,
+  execution,
+}));
+
 function DashboardLabelExamples() {
-  const [client] = useState(() => {
-    const cache = new QueryClient({
-      defaultOptions: {
-        queries: {
-          staleTime: Infinity,
-          retry: false,
-          refetchOnWindowFocus: false,
-        },
+  const [client] = useState(() => new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: Infinity,
+        retry: false,
+        refetchOnWindowFocus: false,
       },
-    });
-    const runs = labelExamples.map((execution, index) => ({
-      ...storybookLiveRuns[0]!,
-      id: `dashboard-label-${index}`,
-      issueId: `dashboard-task-${index}`,
-      agentName: `Research agent ${index + 1}`,
-      createdAt: "2026-09-08T16:00:00Z", startedAt: "2026-09-08T16:00:00Z",
-      status: runStatus(execution),
-      finishedAt: ["succeeded", "failed"].includes(runStatus(execution))
-        ? "2026-09-08T16:00:30Z"
-        : null,
-      execution,
-    }));
-    cache.setQueryData(
-      [
-        ...queryKeys.liveRuns("company-storybook"),
-        "execution-label-review",
-        { minRunCount: 0, fetchLimit: undefined },
-      ],
-      runs,
-    );
-    runs.forEach((run) =>
-      cache.setQueryData(
-        queryKeys.issues.detail(run.issueId),
-        createIssue({
-          id: run.issueId,
-          title: "Summarize the launch decisions",
-        }),
-      ),
-    );
-    return cache;
-  });
+    },
+  }));
   return (
     <QueryClientProvider client={client}>
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Dashboard agent-card labels</h2>
+        <h2 className="text-lg font-semibold">Agent run card labels</h2>
         <p className="text-sm text-ink-3">
           Active agents say Working during automatic recovery, with no additional
           card or controls.
         </p>
-        <ActiveAgentsPanel
-          companyId="company-storybook"
-          title="Agent execution"
-          queryScope="execution-label-review"
-          minRunCount={0}
-          cardLimit={7}
-          gridClassName="xl:grid-cols-3"
-          showMoreLink={false}
-        />
+        <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2 sm:gap-4 xl:grid-cols-3">
+          {dashboardLabelRuns.map((run) => (
+            <AgentRunCard
+              key={run.id}
+              companyId="company-storybook"
+              run={run}
+              issue={createIssue({ id: run.issueId, title: "Summarize the launch decisions" })}
+            />
+          ))}
+        </div>
       </div>
     </QueryClientProvider>
   );

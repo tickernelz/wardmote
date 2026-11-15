@@ -623,6 +623,8 @@ interface IssuesListProps {
    */
   parentIssueIdForCostSummary?: string;
   enableRoutineVisibilityFilter?: boolean;
+  /** Offers Filters › Show hidden tasks and reports it, so the page can fetch hidden tasks. */
+  onShowHiddenTasksChange?: (show: boolean) => void;
   hasMoreIssues?: boolean;
   isLoadingMoreIssues?: boolean;
   mutedIssueIds?: Set<string>;
@@ -846,6 +848,7 @@ function StreamlinedIssuesList({
   showProgressSummary = false,
   parentIssueIdForCostSummary,
   enableRoutineVisibilityFilter = false,
+  onShowHiddenTasksChange,
   hasMoreIssues = false,
   isLoadingMoreIssues = false,
   mutedIssueIds,
@@ -1037,6 +1040,12 @@ function StreamlinedIssuesList({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [issues]);
 
+  const enableHiddenTasksFilter = onShowHiddenTasksChange !== undefined;
+  const includeHidden = enableHiddenTasksFilter && viewState.showHiddenTasks;
+  useEffect(() => {
+    onShowHiddenTasksChange?.(includeHidden);
+  }, [includeHidden, onShowHiddenTasksChange]);
+
   const issueSearchListParams = useMemo(() => {
     if (!issueSearchActive) return {};
     const params = {
@@ -1054,6 +1063,7 @@ function StreamlinedIssuesList({
       "compact",
       ISSUE_SEARCH_RESULT_LIMIT,
       enableRoutineVisibilityFilter ? "with-routine-executions" : "without-routine-executions",
+      includeHidden ? "with-hidden" : "without-hidden",
     ],
     queryFn: ({ signal }) =>
       issuesApi.listCompact(selectedCompanyId!, {
@@ -1063,6 +1073,7 @@ function StreamlinedIssuesList({
         limit: ISSUE_SEARCH_RESULT_LIMIT,
         ...searchFilters,
         ...(enableRoutineVisibilityFilter ? { includeRoutineExecutions: true } : {}),
+        ...(includeHidden ? { includeHidden: true } : {}),
       }, { signal }).then((rows) => rows as Issue[]),
     enabled: !!selectedCompanyId && remoteIssueSearchActive,
     placeholderData: (previousData) => previousData,
@@ -1080,6 +1091,7 @@ function StreamlinedIssuesList({
         "compact",
         ISSUE_BOARD_COLUMN_RESULT_LIMIT,
         enableRoutineVisibilityFilter ? "with-routine-executions" : "without-routine-executions",
+        includeHidden ? "with-hidden" : "without-hidden",
       ],
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         issueSearchListParams.status && !issueSearchListParams.status.split(",").includes(status)
@@ -1092,6 +1104,7 @@ function StreamlinedIssuesList({
           status,
           limit: ISSUE_BOARD_COLUMN_RESULT_LIMIT,
           ...(enableRoutineVisibilityFilter ? { includeRoutineExecutions: true } : {}),
+          ...(includeHidden ? { includeHidden: true } : {}),
         }, { signal }).then((rows) => rows as Issue[]),
       enabled: !!selectedCompanyId && viewState.viewMode === "board" && !searchWithinLoadedIssues,
       placeholderData: (previousData: Issue[] | undefined) => previousData,
@@ -1417,7 +1430,7 @@ function StreamlinedIssuesList({
     };
   }, [checklistAffordanceEnabled, filtered, issueById, viewState.nestingEnabled]);
 
-  const activeFilterCount = countActiveIssueFilters(viewState, enableRoutineVisibilityFilter);
+  const activeFilterCount = countActiveIssueFilters(viewState, enableRoutineVisibilityFilter, enableHiddenTasksFilter);
   const headerIssueFilter = useMemo(() => {
     if (activeFilterCount === 0 && !issueSearchActive) return null;
     const terms = localSearchTerms(issueSearchText);
@@ -1573,6 +1586,7 @@ function StreamlinedIssuesList({
       viewState.liveOnly ?? false,
       viewState.externalObjectStatuses,
       viewState.hideRoutineExecutions,
+      includeHidden,
       viewState.sortField,
       viewState.sortDir,
       viewState.groupBy,
@@ -1593,6 +1607,7 @@ function StreamlinedIssuesList({
       viewState.liveOnly,
       viewState.externalObjectStatuses,
       viewState.hideRoutineExecutions,
+      includeHidden,
       viewState.sortField,
       viewState.sortDir,
       viewState.groupBy,
@@ -2296,6 +2311,7 @@ function StreamlinedIssuesList({
             currentUserId={currentUserId}
             enableExternalObjectFilters={externalObjectsEnabled}
             enableRoutineVisibilityFilter={enableRoutineVisibilityFilter}
+            enableHiddenTasksFilter={enableHiddenTasksFilter}
             iconOnly
             presentation={rowPresentation === "task" ? "streamlined" : "legacy"}
           />

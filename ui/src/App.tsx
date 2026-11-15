@@ -30,7 +30,7 @@ import { canEnterAppsConnect } from "./pages/apps/app-connect-policy";
 import { useCompany } from "./context/CompanyContext";
 import { useDialogActions, useDialogState } from "./context/DialogContext";
 import { loadLastInboxTab } from "./lib/inbox";
-import { TASK_VIEW_PARAM, taskViewForInboxTab, type TaskViewKey } from "./lib/task-views";
+import { TASK_VIEW_PARAM, taskViewForInboxTab, taskViewPath, type TaskViewKey } from "./lib/task-views";
 import {
   isOnboardingWizardActive,
   onboardingStepForCompany,
@@ -42,7 +42,6 @@ const TaskChatLab = lazyPage(() => import("./pages/TaskChatLab").then((module) =
 const Cases = lazyPage(() => import("./pages/Cases").then((module) => module.Cases));
 const CaseDetail = lazyPage(() => import("./pages/CaseDetail").then((module) => module.CaseDetail));
 const Dashboard = lazyPage(() => import("./pages/Dashboard").then((module) => module.Dashboard));
-const DashboardLive = lazyPage(() => import("./pages/DashboardLive").then((module) => module.DashboardLive));
 const Companies = lazyPage(() => import("./pages/Companies").then((module) => module.Companies));
 const Agents = lazyPage(() => import("./pages/Agents").then((module) => module.Agents));
 const AgentDetail = lazyPage(() => import("./pages/AgentDetail").then((module) => module.AgentDetail));
@@ -145,7 +144,7 @@ function boardRoutes(combinedInboxTasksEnabled: boolean) {
     <>
       <Route index element={<Navigate to="dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
-      <Route path="dashboard/live" element={<DashboardLive />} />
+      <Route path="dashboard/live" element={<Navigate to={taskViewPath("all")} replace />} />
       <Route
         path="timeline"
         element={<AuditCompatibilityRedirect to="/activity/timeline" />}

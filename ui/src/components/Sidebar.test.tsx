@@ -185,6 +185,28 @@ describe("Sidebar", () => {
     });
   });
 
+  it("counts live runs on Tasks, not on Dashboard, in the full sidebar and the collapsed rail", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+    mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([
+      { id: "run-1", issueId: "issue-1", status: "running" },
+      { id: "run-2", issueId: null, status: "running" },
+      { id: "run-3", issueId: "issue-2", status: "queued" },
+    ]);
+    const navLink = (href: string) => container.querySelector<HTMLAnchorElement>(`nav a[href="${href}"]`)!;
+    let root = await renderSidebar();
+
+    expect(navLink("/issues").textContent).toContain("3 live");
+    expect(navLink("/dashboard").textContent).not.toContain("live");
+
+    flushSync(() => root.unmount());
+    mockSidebar.collapsed = true;
+    root = await renderSidebar();
+    expect(navLink("/issues").getAttribute("aria-label")).toBe("Tasks, 3 live");
+    expect(navLink("/dashboard").getAttribute("aria-label")).toBeNull();
+
+    flushSync(() => root.unmount());
+  });
+
   it("shows Search as a nav item instead of a header icon", async () => {
     // The header's spare width goes to the workspace name (which otherwise
     // truncates at ~78px), so search lives in the nav list — still

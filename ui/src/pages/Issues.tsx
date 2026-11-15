@@ -227,6 +227,7 @@ function OrganizationIssues({
   }, [setBreadcrumbs]);
 
   const issuePageSize = workspaceIdFilter ? WORKSPACE_FILTER_ISSUE_LIMIT : ISSUES_PAGE_SIZE;
+  const [includeHidden, setIncludeHidden] = useState(false);
 
   const {
     data: issuePages,
@@ -244,6 +245,7 @@ function OrganizationIssues({
       workspaceIdFilter ?? "__all__",
       "compact",
       "with-routine-executions",
+      includeHidden ? "with-hidden" : "without-hidden",
       "infinite",
       issuePageSize,
     ],
@@ -251,6 +253,7 @@ function OrganizationIssues({
       participantAgentId,
       workspaceId: workspaceIdFilter,
       includeRoutineExecutions: true,
+      ...(includeHidden ? { includeHidden: true } : {}),
       limit: issuePageSize,
       offset: pageParam,
       sortField: "updated",
@@ -324,6 +327,7 @@ function OrganizationIssues({
       initialSearch={syncedSearch}
       onSearchChange={handleSearchChange}
       enableRoutineVisibilityFilter
+      onShowHiddenTasksChange={setIncludeHidden}
       hasMoreIssues={hasMoreServerIssues}
       onLoadMoreIssues={loadMoreServerIssues}
       onUpdateIssue={(id, data) => updateIssue.mutate({ id, data })}
