@@ -170,7 +170,7 @@ vi.mock("./IssueRow", () => ({
       data-current-step={checklistCurrentStep ? "true" : undefined}
       data-title-class={titleClassName ?? undefined}
     >
-      <span>{issue.title}</span>
+      <span data-inbox-issue-link="">{issue.title}</span>
       {leadingControl}
       {externalObjectSummary ? (
         <span data-testid="external-object-summary">{externalObjectSummary.total}</span>
@@ -1697,6 +1697,61 @@ describe("IssuesList", () => {
     act(() => {
       root.unmount();
     });
+  });
+
+  it("leaves the scroll position alone when a row batch mounts after the keyboard selection was shown", async () => {
+    const manyIssues = Array.from({ length: 420 }, (_, index) =>
+      createIssue({
+        id: `issue-${index + 1}`,
+        identifier: `PAP-${index + 1}`,
+        title: `Issue ${index + 1}`,
+      }),
+    );
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={manyIssues}
+        agents={[]}
+        projects={[]}
+        viewStateKey="wardmote:test-issues"
+        onUpdateIssue={() => undefined}
+      />,
+      container,
+    );
+
+    try {
+      await waitForAssertion(() => {
+        expect(container.querySelectorAll('[data-testid="issue-row"]')).toHaveLength(100);
+      });
+      await flush();
+
+      act(() => {
+        document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+      });
+      await waitForAssertion(() => {
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      });
+
+      act(() => {
+        setDocumentScrollMetrics({ innerHeight: 600, scrollY: 1500, scrollHeight: 2000 });
+        window.dispatchEvent(new Event("scroll"));
+      });
+      await flushAnimationFrame();
+      await waitForAssertion(() => {
+        expect(container.querySelectorAll('[data-testid="issue-row"]')).toHaveLength(250);
+      });
+      await flush();
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+      act(() => {
+        root.unmount();
+      });
+    }
   });
 
   it("keeps rendered rows mounted when a page is mixed in or a middle issue moves to the top", async () => {
