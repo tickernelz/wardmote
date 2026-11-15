@@ -538,23 +538,8 @@ function TriggerDefaultsSection({ endpoint }: { endpoint: OpenwaEndpoint }) {
   );
 }
 
-const approvalToggles = [
-  { key: "createTask", label: "Creating or delegating tasks" },
-  { key: "externalTools", label: "Write tools and external actions" },
-  { key: "crossChatSend", label: "Sending to other chats" },
-  { key: "waAdmin", label: "WhatsApp admin actions" },
-  { key: "gatewayAdmin", label: "Gateway admin actions" },
-] as const;
-
 function ApprovalsSection({ endpoint }: { endpoint: OpenwaEndpoint }) {
   const approvals = endpoint.policy.approvals;
-  const [toggles, setToggles] = useState({
-    createTask: approvals.createTask,
-    externalTools: approvals.externalTools,
-    crossChatSend: approvals.crossChatSend,
-    waAdmin: approvals.waAdmin,
-    gatewayAdmin: approvals.gatewayAdmin,
-  });
   const [reminderMinutes, setReminderMinutes] = useState(String(approvals.reminderMinutes));
   const [maxReminders, setMaxReminders] = useState(String(approvals.maxReminders));
   const [grantTtlHours, setGrantTtlHours] = useState(String(approvals.grantTtlHours));
@@ -563,7 +548,7 @@ function ApprovalsSection({ endpoint }: { endpoint: OpenwaEndpoint }) {
   const submit = () =>
     state.save({
       approvals: {
-        ...toggles,
+        ...approvals,
         reminderMinutes: wholeNumber(reminderMinutes),
         maxReminders: wholeNumber(maxReminders),
         grantTtlHours: wholeNumber(grantTtlHours),
@@ -573,20 +558,9 @@ function ApprovalsSection({ endpoint }: { endpoint: OpenwaEndpoint }) {
   return (
     <SettingsSection
       title="Approvals"
-      description="Runs started by non-owners need an owner's approval for these actions. Turning one off lets those runs do it without asking."
+      description="Owner and non-owner runs use the same tools; the agent decides when to ask an owner first. These settings control the approval requests it sends."
       footer={<SaveRow label="Save approvals" state={{ ...state, submit }} />}
     >
-      <div className="divide-y divide-line">
-        {approvalToggles.map((toggle) => (
-          <ToggleRow
-            key={toggle.key}
-            label={toggle.label}
-            detail="Requires owner approval"
-            checked={toggles[toggle.key]}
-            onChange={(value) => setToggles((current) => ({ ...current, [toggle.key]: value }))}
-          />
-        ))}
-      </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <NumberField id="openwa-reminder-minutes" label="Reminder interval (minutes)" value={reminderMinutes} error={fieldError(state.errors, "approvals.reminderMinutes")} onChange={setReminderMinutes} />
         <NumberField id="openwa-max-reminders" label="Maximum reminders" value={maxReminders} error={fieldError(state.errors, "approvals.maxReminders")} onChange={setMaxReminders} />

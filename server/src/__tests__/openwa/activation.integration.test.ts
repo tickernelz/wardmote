@@ -33,7 +33,7 @@ import { resolveChatRunPresentationAuthorizationReason } from "../../services/ch
 import { instanceSettingsService } from "../../services/instance-settings.js";
 import { secretService } from "../../services/secrets.js";
 import { issueService } from "../../services/issues.js";
-import { applyOpenwaRunContext, assertOpenwaRestAllowed, resolveOpenwaRunContext } from "../../services/openwa/authority.js";
+import { applyOpenwaRunContext, resolveOpenwaRunContext } from "../../services/openwa/authority.js";
 import { OPENWA_WAKE_CONTEXT_KEY, buildOpenwaRunGuidance, type OpenwaWakeEvent } from "../../services/openwa/guidance.js";
 import { executeOpenwaTool } from "../../services/openwa/tools.js";
 import { chatChannelRoutes } from "../../routes/chat-channels.js";
@@ -295,7 +295,7 @@ describe("OpenWA activation through the owner test DM (embedded Postgres + fake 
       contextSnapshot,
     });
     const openwa = await resolveOpenwaRunContext(db, { companyId: t.companyId, issueId, contextSnapshot, wakeupRequestId: wakeRequest!.id, runId });
-    expect(openwa).toMatchObject({ endpointId: t.endpointId, triggerClass: "owner", profile: "full" });
+    expect(openwa).toMatchObject({ endpointId: t.endpointId, triggerClass: "owner", senderClass: "owner" });
     applyOpenwaRunContext(contextSnapshot, openwa);
     const guidance = await buildOpenwaRunGuidance(db, { companyId: t.companyId, issueId, runId, wakeupRequestId: wakeRequest!.id, openwa: openwa!, contextSnapshot });
     contextSnapshot[OPENWA_WAKE_CONTEXT_KEY] = guidance!.wakeEvent;
@@ -421,7 +421,7 @@ describe("OpenWA activation through the owner test DM (embedded Postgres + fake 
     expect(memberWake).toHaveLength(1);
   }, 120_000);
 
-  it("lets a CEO agent run the connection-manager routes, refuses a non-CEO agent, and still blocks a CEO run whose OpenWA profile is read_only", async () => {
+  it("lets a CEO agent run the connection-manager routes, refuses a non-CEO agent", async () => {
     const t = await setup();
     await request(t.app)
       .post("/api/chat-endpoints/" + t.endpointId + "/setup")
@@ -459,15 +459,6 @@ describe("OpenWA activation through the owner test DM (embedded Postgres + fake 
     })).post("/api/chat-endpoints/" + t.endpointId + "/test").send({});
     expect(lowTrustCeo.status).toBe(403);
 
-    await expect(assertOpenwaRestAllowed(db, {
-      run: {
-        id: randomUUID(),
-        companyId: t.companyId,
-        contextSnapshot: { wardmoteOpenwa: { endpointId: t.endpointId, chatKey: jid(MEMBER_PHONE), triggerClass: "other", profile: "read_only" } },
-      },
-      method: "POST",
-      path: "/api/chat-endpoints/" + t.endpointId + "/test",
-    })).rejects.toMatchObject({ status: 403, details: { code: "openwa_approval_required" } });
   }, 120_000);
 
   it("returns an endpoint in session-health attention to active when the wizard reconnects the same session and key, so members are admitted again", async () => {
@@ -548,7 +539,7 @@ describe("OpenWA activation through the owner test DM (embedded Postgres + fake 
     const contextSnapshot: Record<string, unknown> = { ...wake.contextSnapshot };
     await db.insert(heartbeatRuns).values({ id: runId, companyId: t.companyId, agentId: t.agentId, status: "running", wakeupRequestId: action!.id, startedAt: new Date(), contextSnapshot });
     const openwa = await resolveOpenwaRunContext(db, { companyId: t.companyId, issueId, contextSnapshot, wakeupRequestId: action!.id, runId });
-    expect(openwa).toMatchObject({ endpointId: t.endpointId, triggerClass: "owner", profile: "full" });
+    expect(openwa).toMatchObject({ endpointId: t.endpointId, triggerClass: "owner", senderClass: "owner" });
     applyOpenwaRunContext(contextSnapshot, openwa!);
     const guidance = await buildOpenwaRunGuidance(db, { companyId: t.companyId, issueId, runId, wakeupRequestId: action!.id, openwa: openwa!, contextSnapshot });
     expect(guidance!.wakeEvent).toMatchObject({ triggerClass: "owner", chat: { type: "group", activation: "on" }, policy: { replyAllowed: true, replyRequires: [] } });

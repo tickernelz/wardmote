@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { issues, type Db } from "@tickernelz/wardmote-db";
 import { forbidden } from "../errors.js";
 import { captureRunIdentity } from "./run-identity.js";
-import { assertOpenwaRunMay } from "./openwa/authority.js";
+import { noteOpenwaRunAction } from "./openwa/authority.js";
 
 /** Resolve authority from the authenticated run, never caller-supplied user/task IDs. */
 export async function projectToolContext(db: Db, actor: Request["actor"], write = false, resource = "Project") {
@@ -23,7 +23,7 @@ export async function projectToolContext(db: Db, actor: Request["actor"], write 
     throw forbidden("Conversation session has changed");
   }
   if (write && !["standard", "skill_test"].includes(issue.workMode)) throw forbidden(`${resource} creation is unavailable in Ask or Plan mode`);
-  if (write) await assertOpenwaRunMay(db, run, resource === "Project" ? "create_task" : "external_tools", { consume: false });
+  if (write) noteOpenwaRunAction(db, run, { seam: "project_tools", category: resource === "Project" ? "create_task" : "external_tools" });
   const userId = identity.run.responsibleUserId;
   // local-board is a server-owned identity; never accepted from tool arguments.
   return { run, issue, userId, localTrusted: userId === "local-board" };

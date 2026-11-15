@@ -4,7 +4,7 @@ import type { OpenwaApprovalCategory } from "@tickernelz/wardmote-shared";
 import type { OpenwaOperation } from "@tickernelz/wardmote-shared/openwa-operations";
 import { HttpError } from "../../errors.js";
 import { listOpenwaAudit, logOpenwaActivity } from "./audit.js";
-import { OpenwaApprovalRequiredError, assertOpenwaRunMay, openwaHeldGrantValid, restoreOpenwaGrant } from "./authority.js";
+import { noteOpenwaRunAction } from "./authority.js";
 import {
   OPENWA_AUDIT_LIST_OPERATION,
   OPENWA_SECRET_ISSUING_OPERATIONS,
@@ -51,7 +51,6 @@ import {
   openwaWriteHashMatches,
   openwaWriteReplay,
   runOpenwaWrite,
-  setOpenwaWriteGrant,
   settleOpenwaWrite,
   type OpenwaWriteScope,
 } from "./tool-writes.js";
@@ -274,17 +273,8 @@ function unavailableError(reason: OpenwaUnavailableReason, operationId: string):
     : refusal(422, "unavailable_without_admin_key", "This operation needs an OpenWA admin key, which is not configured", { operationId });
 }
 
-async function mayCategory(ctx: ToolContext, category: OpenwaApprovalCategory, retry: boolean): Promise<string | null> {
-  try {
-    return await assertOpenwaRunMay(ctx.db, ctx.run, category, retry ? { consume: false } : {});
-  } catch (error) {
-    if (error instanceof OpenwaApprovalRequiredError)
-      throw refusal(403, "approval_required", "This operation needs owner approval for " + category, {
-        category,
-        hint: "Ask an endpoint owner with openwa_request_approval, then continue in the approved run.",
-      });
-    throw error;
-  }
+function noteCategory(ctx: ToolContext, category: OpenwaApprovalCategory): void {
+  noteOpenwaRunAction(ctx.db, ctx.run, { seam: "openwa_call", category });
 }
 
 async function assertReadsAllowed(ctx: ToolContext, operation: OpenwaOperation, args: Args): Promise<void> {
@@ -301,25 +291,26 @@ async function assertGate(
   ctx: ToolContext,
   effective: OpenwaEffectiveOperation,
   args: Args,
-  retry: boolean,
-  heldGrant: string | null,
-): Promise<{ grant: string | null; targets: Target[] }> {
+): Promise<{ targets: Target[] }> {
   const { operation } = effective;
-  if (effective.gate === "none") return { grant: null, targets: [] };
-  const held = heldGrant !== null && (await openwaHeldGrantValid(ctx.db, { companyId: ctx.endpoint.companyId, grantId: heldGrant }));
-  if (effective.gate === "wa_admin" || effective.gate === "gateway_admin" || effective.gate === "owner_confirmation")
-    return { grant: held ? null : await mayCategory(ctx, effective.gate === "wa_admin" ? "wa_admin" : "gateway_admin", retry), targets: [] };
+  if (effective.gate === "none") return { targets: [] };
+  if (effective.gate === "wa_admin" || effective.gate === "gateway_admin" || effective.gate === "owner_confirmation") {
+    noteCategory(ctx, effective.gate === "wa_admin" ? "wa_admin" : "gateway_admin");
+    return { targets: [] };
+  }
   const targets = sendTargets(operation, ctx, args);
   if (targets.length) ctx.audit.chatKey = targets[0]!.chatKey;
-  if (targets.length === 0 || targets.some((target) => !target.isOrigin))
-    return { grant: held ? null : await mayCategory(ctx, "cross_chat_send", retry), targets };
+  if (targets.length === 0 || targets.some((target) => !target.isOrigin)) {
+    noteCategory(ctx, "cross_chat_send");
+    return { targets };
+  }
   const failure = await replyRequirementFailure(ctx);
   if (failure)
     throw refusal(403, "reply_denied", failure.reason + "; replying here needs owner approval", {
       category: failure.category,
       hint: "Ask an endpoint owner with openwa_request_approval, or stay silent.",
     });
-  return { grant: null, targets };
+  return { targets };
 }
 
 function isOwnerRun(ctx: ToolContext): boolean {
@@ -485,9 +476,8 @@ async function executeWrite(
     throw refusal(409, "idempotency_conflict", "This idempotencyKey already belongs to a different OpenWA operation", { actionId: action.id });
   const replay = openwaWriteReplay(action);
   if (replay) return replay;
-  const heldGrant = str(action.payload.grantId);
   if (effective.gate === "owner_confirmation" && typeof action.payload.confirmationId !== "string") {
-    await assertGate(ctx, effective, args, true, heldGrant);
+    await assertGate(ctx, effective, args);
     const confirmationId = await selfSessionConfirmation(ctx, operation, action.id);
     const [updated] = await ctx.db
       .update(chatActions)
@@ -496,14 +486,7 @@ async function executeWrite(
       .returning();
     action = updated ?? action;
   }
-  const retry = action.status === "uncertain" || action.status === "processing";
-  const { grant, targets } = await assertGate(ctx, effective, args, retry, heldGrant);
-  if (grant) await setOpenwaWriteGrant(ctx.db, action.id, grant);
-  const restore = async () => {
-    if (!grant) return;
-    await restoreOpenwaGrant(ctx.db, { companyId: ctx.endpoint.companyId, runId: ctx.run.id, grantId: grant });
-    await setOpenwaWriteGrant(ctx.db, action.id, null);
-  };
+  const { targets } = await assertGate(ctx, effective, args);
   const sent = withPrefix(ctx, operation, args);
   let value: unknown;
   let messageIds: string[] = [];
@@ -528,7 +511,6 @@ async function executeWrite(
       ],
     });
     if (outcome.state === "failed") {
-      if (outcome.delivered === 0) await restore();
       const mapped = toolErrorFromGateway(outcome.error, false);
       if (mapped instanceof HttpError) mapped.details = { ...record(mapped.details), actionId: action.id, state: "failed" };
       throw mapped;
@@ -567,7 +549,6 @@ async function executeWrite(
         reserved.map((entry) => resolved.handle.registry.settle({ record: entry, providerMessageId: null, state: definite ? "failed" : "uncertain" })),
       );
       await settleOpenwaWrite(ctx.db, action.id, definite ? "failed" : "uncertain");
-      if (definite) await restore();
       const mapped = toolErrorFromGateway(error, false);
       if (mapped instanceof HttpError) mapped.details = { ...record(mapped.details), actionId: action.id, state: definite ? "failed" : "uncertain" };
       throw mapped;
@@ -663,12 +644,11 @@ export async function openwaCallTool(ctx: ToolContext, input: Args): Promise<Rec
     return executeWrite(ctx, resolved, effective, args, idempotencyKey, maxBytes);
   }
   const cursor = parseCursor(input.cursor);
-  const { grant } = await assertGate(ctx, effective, args, false, null);
+  await assertGate(ctx, effective, args);
   let result: OpenwaCallResult;
   try {
     result = await dispatch(ctx, resolved, effective, args);
   } catch (error) {
-    if (grant) await restoreOpenwaGrant(ctx.db, { companyId: ctx.endpoint.companyId, runId: ctx.run.id, grantId: grant });
     throw toolErrorFromGateway(error, false);
   }
   const paged = pageResult(resultValue(effective, ctx, result), cursor, maxBytes);

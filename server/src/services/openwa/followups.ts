@@ -141,35 +141,6 @@ function followupActionId(runId: string, conversationId: string): string {
   return "openwa-followup:" + runId + ":" + conversationId;
 }
 
-/** Records owner triggers steered into a read_only run so the run end can schedule a follow-up owner run for any still pending. */
-export async function recordSteeredOwnerTriggers(
-  db: Db,
-  input: { companyId: string; endpointId: string; conversationId: string; issueId: string; runId: string; chatKey: string; deliveryIds: string[] },
-): Promise<void> {
-  const ids = uuids(input.deliveryIds);
-  if (!ids.length) return;
-  const payload = { version: 1, runId: input.runId, issueId: input.issueId, chatKey: input.chatKey, triggerIds: ids };
-  await db
-    .insert(chatActions)
-    .values({
-      companyId: input.companyId,
-      endpointId: input.endpointId,
-      conversationId: input.conversationId,
-      kind: OPENWA_STEERED_OWNER_ACTION_KIND,
-      providerActionId: "openwa-steered-owner:" + input.runId + ":" + input.conversationId,
-      status: "received",
-      payload,
-    })
-    .onConflictDoUpdate({
-      target: [chatActions.endpointId, chatActions.providerActionId],
-      set: {
-        payload: sql`jsonb_set(${chatActions.payload}, '{triggerIds}', (select coalesce(jsonb_agg(distinct value), '[]'::jsonb) from jsonb_array_elements_text(coalesce(${chatActions.payload} -> 'triggerIds', '[]'::jsonb) || ${JSON.stringify(ids)}::jsonb)))`,
-        updatedAt: new Date(),
-      },
-      setWhere: sql`${chatActions.companyId} = ${input.companyId} and ${chatActions.status} = 'received'`,
-    });
-}
-
 async function stageFollowup(
   tx: DbTransaction,
   input: { companyId: string; endpointId: string; conversationId: string; runId: string },

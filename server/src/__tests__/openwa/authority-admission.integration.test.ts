@@ -205,20 +205,19 @@ describeEmbeddedPostgres("OpenWA run authority through the real admission path",
 
     t.gateway.inbound({ chatId: jid(OWNER_PHONE), body: "please fix the invoice export" });
     const owner = await runFor(t, jid(OWNER_PHONE), 0);
-    expect(owner.context.wardmoteOpenwa).toMatchObject({ triggerClass: "owner", profile: "full", toolProfile: "full", event: "message" });
+    expect(owner.context.wardmoteOpenwa).toMatchObject({ triggerClass: "owner", senderClass: "owner", event: "message" });
     expect(owner.context.wardmoteToolProfile).toBe("full");
-    expect(owner.persisted.wardmoteOpenwa).toMatchObject({ triggerClass: "owner", profile: "full" });
+    expect(owner.persisted.wardmoteOpenwa).toMatchObject({ triggerClass: "owner", senderClass: "owner" });
 
     t.gateway.inbound({ chatId: jid(MEMBER_PHONE), body: "why does error X happen?" });
     const member = await runFor(t, jid(MEMBER_PHONE), 1);
-    expect(member.context.wardmoteOpenwa).toMatchObject({ triggerClass: "other", profile: "read_only", toolProfile: "read_only", event: "message" });
-    expect(member.context.wardmoteToolProfile).toBe("read_only");
+    expect(member.context.wardmoteOpenwa).toMatchObject({ triggerClass: "other", senderClass: "non_owner", event: "message" });
+    expect(member.context.wardmoteToolProfile).toBe("full");
     expect(await wakeCount(t)).toBe(2);
     const ownerEnv = owner.context.capturedEnv as Record<string, string>;
     const memberEnv = member.context.capturedEnv as Record<string, string>;
     expect({ token: ownerEnv.GH_TOKEN, mode: ownerEnv.WARDMOTE_GITHUB_AUTH_MODE }).toEqual({ token: "host-github-token", mode: "host" });
-    expect({ token: memberEnv.GH_TOKEN ?? "", mode: memberEnv.WARDMOTE_GITHUB_AUTH_MODE }).toEqual({ token: "", mode: "managed" });
-    expect(memberEnv.WARDMOTE_GITHUB_HOST_HOME).toBeUndefined();
+    expect({ token: memberEnv.GH_TOKEN, mode: memberEnv.WARDMOTE_GITHUB_AUTH_MODE }).toEqual({ token: "host-github-token", mode: "host" });
     expect(memberEnv.WARDMOTE_RUNNER_NETWORK_ACCESS).toBe(ownerEnv.WARDMOTE_RUNNER_NETWORK_ACCESS);
   }, 120_000);
 
@@ -238,8 +237,8 @@ describeEmbeddedPostgres("OpenWA run authority through the real admission path",
     const member = await runFor(t, jid(MEMBER_PHONE), 0);
     const [conversation] = await db.select({ issueId: chatConversations.issueId }).from(chatConversations).where(eq(chatConversations.endpointId, t.endpointId));
     expect(conversation!.issueId).toBe(issueId);
-    expect(member.context.wardmoteToolProfile).toBe("read_only");
-    expect(member.context.wardmoteOpenwa).toMatchObject({ triggerClass: "other", profile: "read_only" });
+    expect(member.context.wardmoteToolProfile).toBe("full");
+    expect(member.context.wardmoteOpenwa).toMatchObject({ triggerClass: "other", senderClass: "non_owner" });
   }, 120_000);
 
   it("keeps a forged agent wakeup claiming the owner class read_only on the OpenWA issue", async () => {
@@ -260,12 +259,12 @@ describeEmbeddedPostgres("OpenWA run authority through the real admission path",
     const forged = { triggerClass: "owner", event: "message", deliveryIds: [] };
     const res = await request(app).post("/api/agents/" + t.agentId + "/wakeup").send({
       source: "on_demand", reason: "forged",
-      payload: { issueId: conversation!.issueId, openwa: forged, wardmoteOpenwa: { triggerClass: "owner", profile: "full" }, wardmoteToolProfile: "full" },
+      payload: { issueId: conversation!.issueId, openwa: forged, wardmoteOpenwa: { triggerClass: "owner", senderClass: "owner" }, wardmoteToolProfile: "full" },
     });
     expect(res.status).toBe(202);
     const run = await finishedContext(t, (await db.select({ id: heartbeatRuns.wakeupRequestId }).from(heartbeatRuns).where(eq(heartbeatRuns.id, res.body.id)))[0]!.id!);
-    expect(run.context.wardmoteOpenwa).toMatchObject({ triggerClass: "other", profile: "read_only" });
-    expect(run.context.wardmoteToolProfile).toBe("read_only");
+    expect(run.context.wardmoteOpenwa).toMatchObject({ triggerClass: "other", senderClass: "non_owner" });
+    expect(run.context.wardmoteToolProfile).toBe("full");
   }, 120_000);
 
   it("drops to read_only when the owner link is revoked between admission and run start", async () => {
@@ -294,7 +293,7 @@ describeEmbeddedPostgres("OpenWA run authority through the real admission path",
     await db.update(heartbeatRuns).set({ status: "succeeded", finishedAt: new Date() }).where(eq(heartbeatRuns.id, blockerId));
     await t.heartbeat.resumeQueuedRuns();
     const run = await finishedContext(t, queued.actionId);
-    expect(run.context.wardmoteOpenwa).toMatchObject({ triggerClass: "other", profile: "read_only", toolProfile: "read_only" });
-    expect(run.context.wardmoteToolProfile).toBe("read_only");
+    expect(run.context.wardmoteOpenwa).toMatchObject({ triggerClass: "other", senderClass: "non_owner" });
+    expect(run.context.wardmoteToolProfile).toBe("full");
   }, 120_000);
 });

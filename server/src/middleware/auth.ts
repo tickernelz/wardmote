@@ -20,9 +20,7 @@ import { logger } from "./logger.js";
 import { captureRunIdentity } from "../services/run-identity.js";
 import {
   assertOpenwaAgentKeyMethodAllowed,
-  assertOpenwaRestAllowed,
-  openwaGrantScope,
-  restoreOpenwaGrant,
+  noteOpenwaRestMutation,
 } from "../services/openwa/authority.js";
 import { boardAuthService } from "../services/board-auth.js";
 import { authorizationService } from "../services/authorization.js";
@@ -34,18 +32,6 @@ export {
 } from "../database-retry.js";
 
 import { forbidden, unauthorized, unprocessable } from "../errors.js";
-
-function restoreOpenwaGrantOnRejection(db: Db, res: Response, grant: { companyId: string; runId: string; grantId: string }) {
-  const end = res.end;
-  res.end = function (this: Response, ...args: unknown[]) {
-    res.end = end;
-    if (res.statusCode < 400 || res.statusCode >= 500) return end.apply(this, args as Parameters<Response["end"]>);
-    void restoreOpenwaGrant(db, grant)
-      .catch((err) => logger.warn({ err, runId: grant.runId }, "failed to restore OpenWA grant"))
-      .finally(() => end.apply(this, args as Parameters<Response["end"]>));
-    return this;
-  } as Response["end"];
-}
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -385,21 +371,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
           code: conversation ? "conversation_turn_cancelled" : "agent_run_cancelled" });
         return;
       }
-      let openwaGrantId: string | null = null;
-      if (identityRun) {
-        try {
-          openwaGrantId = await assertOpenwaRestAllowed(db, {
-            run: { id: claims.run_id, companyId: claims.company_id, contextSnapshot: identityRun.contextSnapshot },
-            method: req.method,
-            path: req.path,
-            body: req.body,
-          });
-          if (openwaGrantId) restoreOpenwaGrantOnRejection(db, _res, { companyId: claims.company_id, runId: claims.run_id, grantId: openwaGrantId });
-        } catch (error) {
-          next(error);
-          return;
-        }
-      }
+      if (identityRun)
+        noteOpenwaRestMutation(db, {
+          run: { id: claims.run_id, companyId: claims.company_id, contextSnapshot: identityRun.contextSnapshot },
+          method: req.method,
+          path: req.path,
+        });
       if (identityRun?.activeIdentityContextId && identityRun.status === "running") {
         const captured = await captureRunIdentity(db, { companyId: claims.company_id, agentId: claims.sub, runId: claims.run_id });
         identityRun.activeIdentityContextId = captured.context?.id ?? null;
@@ -440,8 +417,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         next(error);
         return;
       }
-      if (openwaGrantId) openwaGrantScope({ companyId: claims.company_id, runId: claims.run_id, grantId: openwaGrantId }, next);
-      else next();
+      next();
       return;
     }
 

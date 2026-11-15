@@ -42,7 +42,7 @@ import { ChatSdkRuntime } from "../../services/chat-sdk-runtime.js";
 import { instanceSettingsService } from "../../services/instance-settings.js";
 import { secretService } from "../../services/secrets.js";
 import { HttpError } from "../../errors.js";
-import { applyOpenwaRunContext, assertOpenwaRunMay, resolveOpenwaRunContext, restoreOpenwaGrant, type OpenwaRunContext } from "../../services/openwa/authority.js";
+import { applyOpenwaRunContext, resolveOpenwaRunContext, type OpenwaRunContext } from "../../services/openwa/authority.js";
 import { accessService } from "../../services/access.js";
 import { buildOpenwaRunGuidance } from "../../services/openwa/guidance.js";
 import { executeOpenwaTool, type OpenwaToolBinding } from "../../services/openwa/tools.js";
@@ -458,8 +458,7 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     const memberWake = await admitted(t, { chatId: jid(MEMBER_A), body: "tolong buatkan task untuk invoice 42" });
     expect(memberWake.delivery).toMatchObject({ triggerClass: "other", principalRole: "allowed" });
     const memberRun = await runStart(t, memberWake);
-    expect(memberRun.openwa).toMatchObject({ triggerClass: "other", profile: "read_only", grantIds: [] });
-    await expect(assertOpenwaRunMay(db, memberRun.run, "create_task")).rejects.toMatchObject({ status: 403 });
+    expect(memberRun.openwa).toMatchObject({ triggerClass: "other", senderClass: "non_owner", grantIds: [] });
 
     const created = await requestApproval(memberRun.binding);
     const request = await requestRow(created.requestId);
@@ -503,7 +502,7 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     });
     expect(reply.wake.allowRunCoalescing).toBe(false);
     const replyRun = await runStart(t, reply);
-    expect(replyRun.openwa).toMatchObject({ triggerClass: "owner", profile: "full" });
+    expect(replyRun.openwa).toMatchObject({ triggerClass: "owner", senderClass: "owner" });
 
     const clarify = await executeOpenwaTool(db, replyRun.binding, "openwa_approval_resolve", { requestId: request.id, decision: "clarify" });
     expect(clarify).toMatchObject({ status: "pending" });
@@ -548,11 +547,7 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
       requesterPrincipalId: request.requestedByPrincipalId,
       approvalRequestId: request.id,
     });
-    expect(grantRun.openwa).toMatchObject({ triggerClass: "grant", profile: "read_only", grantIds: [grants[0]!.id] });
-    expect(await assertOpenwaRunMay(db, grantRun.run, "create_task")).toBe(grants[0]!.id);
-    await expect(assertOpenwaRunMay(db, grantRun.run, "create_task")).rejects.toMatchObject({ status: 403 });
-    const consumedLog = await db.select().from(activityLog).where(and(eq(activityLog.companyId, t.companyId), eq(activityLog.action, "openwa.grant_consumed")));
-    expect(consumedLog).toEqual([expect.objectContaining({ runId: grantRun.runId, entityId: t.endpointId, details: expect.objectContaining({ grantId: grants[0]!.id, category: "create_task" }) })]);
+    expect(grantRun.openwa).toMatchObject({ triggerClass: "grant", senderClass: "non_owner", grantIds: [grants[0]!.id] });
     const informed = await executeOpenwaTool(db, grantRun.binding, "openwa_send", { text: "Task sudah dibuat", idempotencyKey: key() });
     expect(informed).toMatchObject({ state: "delivered" });
     expect(t.gateway.sends.at(-1)).toMatchObject({ chatId: jid(MEMBER_A), text: "Task sudah dibuat" });
@@ -604,7 +599,7 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     const rejectedWake = await approvalWake(t, second.requestId);
     expect(rejectedWake.request.payload).toMatchObject({ openwa: { event: "approval_resolved", triggerClass: "other", approvalRequestId: second.requestId } });
     const rejectedRun = await runStart(t, rejectedWake);
-    expect(rejectedRun.openwa).toMatchObject({ triggerClass: "other", profile: "read_only", grantIds: [] });
+    expect(rejectedRun.openwa).toMatchObject({ triggerClass: "other", senderClass: "non_owner", grantIds: [] });
   }, 120_000);
 
   it("AC6/AC7: requester grants stay with their requester, the Approvals tab resolves, owner loss revokes", async () => {
@@ -639,16 +634,13 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     const wakeB = await admitted(t, mention(MEMBER_B, "kirim juga email saya"));
     const runB = await runStart(t, wakeB, { requesterPrincipalId: wakeB.delivery.principalId });
     expect(runB.openwa.grantIds).toEqual([]);
-    await expect(assertOpenwaRunMay(db, runB.run, "external_tools")).rejects.toMatchObject({ status: 403 });
     const wakeA2 = await admitted(t, mention(MEMBER_A, "satu email lagi"));
     const runA2 = await runStart(t, wakeA2, { requesterPrincipalId: wakeA2.delivery.principalId });
     expect(runA2.openwa.grantIds).toEqual([grants[0]!.id]);
-    expect(await assertOpenwaRunMay(db, runA2.run, "external_tools")).toBeNull();
 
     const [owner] = await t.service.openwa.listOwners(t.endpointId);
     await t.service.openwa.removeOwner(t.endpointId, owner!.id, t.userId);
     expect((await grantsOf(request.id))[0]!.status).toBe("revoked");
-    await expect(assertOpenwaRunMay(db, runA2.run, "external_tools")).rejects.toMatchObject({ status: 403 });
 
     const activity = await db.select().from(activityLog).where(and(eq(activityLog.companyId, t.companyId), sql`${activityLog.action} like 'openwa.%'`));
     const one = (action: string) => {
@@ -852,15 +844,12 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
       requesterPrincipalId: request.requestedByPrincipalId,
       approvalRequestId: request.id,
     });
-    expect(await assertOpenwaRunMay(db, grantRun.run, "create_task")).toBe(grant!.id);
-    expect((await grantsOf(created.requestId))[0]).toMatchObject({ status: "consumed", consumedByRunId: grantRun.runId });
+    expect((await grantsOf(created.requestId))[0]).toMatchObject({ status: "live" });
 
     const [owner] = await t.service.openwa.listOwners(t.endpointId);
     await t.service.openwa.removeOwner(t.endpointId, owner!.id, t.userId);
     expect((await grantsOf(created.requestId))[0]!.status).toBe("revoked");
-    await restoreOpenwaGrant(db, { companyId: t.companyId, runId: grantRun.runId, grantId: grant!.id });
     expect((await grantsOf(created.requestId))[0]!.status).toBe("revoked");
-    await expect(assertOpenwaRunMay(db, grantRun.run, "create_task")).rejects.toMatchObject({ status: 403 });
   }, 120_000);
 
   it("revokes an owner's grants when company membership demotes them to viewer", async () => {
@@ -885,11 +874,9 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
       .where(and(eq(companyMemberships.companyId, t.companyId), eq(companyMemberships.principalId, t.userId)));
     await access.updateMember(t.companyId, membership!.id, { membershipRole: "admin" });
     expect((await grantsOf(created.requestId))[0]!.status).toBe("live");
-    expect(await assertOpenwaRunMay(db, runA2.run, "external_tools")).toBeNull();
 
     await access.updateMember(t.companyId, membership!.id, { membershipRole: "viewer" });
     expect((await grantsOf(created.requestId))[0]!.status).toBe("revoked");
-    await expect(assertOpenwaRunMay(db, runA2.run, "external_tools")).rejects.toMatchObject({ status: 403 });
     const wakeA3 = await admitted(t, { chatId: jid(MEMBER_A), body: "lagi" });
     expect((await runStart(t, wakeA3, { requesterPrincipalId: wakeA3.delivery.principalId })).openwa.grantIds).toEqual([]);
   }, 120_000);

@@ -54,7 +54,7 @@ import { issueThreadInteractionService } from "./issue-thread-interactions.js";
 import { toolAccessService } from "./tool-access.js";
 import { toolAccessPolicyService } from "./tool-access-policy.js";
 import { captureRunIdentity } from "./run-identity.js";
-import { assertOpenwaRunMay, restoreOpenwaGrant } from "./openwa/authority.js";
+import { noteOpenwaRunAction } from "./openwa/authority.js";
 import { resolveManagedGitHubIdentitySelection } from "./git-credentials.js";
 
 type ConnectionRunClaims = Pick<RuntimeToolsTokenClaims, "sub" | "company_id" | "run_id" | "responsible_user_id">;
@@ -679,7 +679,6 @@ export function connectionIntentService(db: Db) {
     options: { purpose?: "ai" | "channel"; selectionInteractionId?: string; targetService?: string; connectionId?: string; toolNames?: string[] } = {},
   ): Promise<ConnectionRequestResult> {
     const context = await loadRunContext(claims);
-    if (options.purpose !== "ai") await assertOpenwaRunMay(db, context.run, "external_tools", { consume: false, window: false });
     return requestWithContext(context, serviceSlug, options);
   }
 
@@ -792,7 +791,7 @@ export function connectionIntentService(db: Db) {
         throw conflict("The user declined this connection. Pursue alternatives; do not request it again in this continuation.");
       }
     }
-    const consumedGrantId = options.purpose !== "ai" ? await assertOpenwaRunMay(db, context.run, "external_tools", { window: false }) : null;
+    if (options.purpose !== "ai") noteOpenwaRunAction(db, context.run, { seam: "connection_request", category: "external_tools" });
     const interaction = await interactions.createConnectionIntent(
       context.issue,
       {
@@ -814,10 +813,7 @@ export function connectionIntentService(db: Db) {
         addresseeUserId: context.run.responsibleUserId!,
         idempotencyKey: `connection-intent:${context.run.id}:${context.run.responsibleUserId}:${app.slug}${upstreamService ? `:${upstreamService.slug}` : ""}${options.purpose ? `:${options.purpose}` : ""}${accessRequest ? `:access:${createHash("sha256").update(JSON.stringify(accessRequest)).digest("hex")}` : ""}`,
       },
-    ).catch(async (error: unknown) => {
-      if (consumedGrantId) await restoreOpenwaGrant(db, { companyId: context.run.companyId, runId: context.run.id, grantId: consumedGrantId });
-      throw error;
-    });
+    );
     if (interaction.status !== "pending") throw conflict("This connection request has already been resolved. Follow its recorded outcome.");
     await logActivity(db, {
       companyId: context.run.companyId, actorType: "agent", actorId: context.agent.id,

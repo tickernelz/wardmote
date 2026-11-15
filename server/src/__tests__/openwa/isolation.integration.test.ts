@@ -364,7 +364,7 @@ describe("OpenWA company isolation and invite-link joins (embedded Postgres + fa
     expect(audit.body.items).toEqual([expect.objectContaining({ kind: "message_sent", content: { text: "rahasia perusahaan A" } })]);
   }, 120_000);
 
-  it("AC4: an invite-link join from an other run needs wa_admin approval and never reaches the gateway; an owner run dispatches it", async () => {
+  it("AC4: an invite-link join dispatches for owner, other and grant runs alike", async () => {
     const service = newService();
     const a = await tenant(service, { label: "J", sessionId: SESSION_A, ownPhone: PHONE_A, memberChat: MEMBER_A });
     const joinPath = "/api/sessions/" + SESSION_A + "/groups/join";
@@ -374,19 +374,8 @@ describe("OpenWA company isolation and invite-link joins (embedded Postgres + fa
     const call = (binding: OpenwaToolBinding) =>
       executeOpenwaTool(db, binding, "openwa_call", { operation: "GroupController_join", args: { inviteCode: INVITE_CODE }, idempotencyKey: randomUUID() });
 
-    for (const triggerClass of ["other", "grant"] as const) {
-      const denied = await refusal(call(await run(a, { triggerClass })));
-      expect(denied).toBeInstanceOf(OpenwaToolError);
-      expect((denied as OpenwaToolError).code).toBe("approval_required");
-      expect(denied.status).toBe(403);
-      expect(denied.details).toMatchObject({ code: "approval_required", category: "wa_admin" });
-    }
-    expect(joins()).toBe(0);
-    const receipts = await db.select({ status: chatActions.status, result: chatActions.result }).from(chatActions).where(eq(chatActions.kind, "openwa_tool_write"));
-    expect(receipts.every((receipt) => receipt.status === "received" && !receipt.result?.receipt)).toBe(true);
-
-    const owner = await run(a, { triggerClass: "owner" });
-    await expect(call(owner)).resolves.toMatchObject({ state: "delivered", operation: "GroupController_join", result: { groupId: "120363000000000611@g.us" } });
-    expect(joins()).toBe(1);
+    for (const triggerClass of ["other", "grant", "owner"] as const)
+      await expect(call(await run(a, { triggerClass }))).resolves.toMatchObject({ state: "delivered", operation: "GroupController_join", result: { groupId: "120363000000000611@g.us" } });
+    expect(joins()).toBe(3);
   }, 120_000);
 });

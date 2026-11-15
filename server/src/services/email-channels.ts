@@ -53,7 +53,6 @@ import { instanceSettingsService } from "./instance-settings.js";
 import { toolAccessPolicyService } from "./tool-access-policy.js";
 import type { heartbeatService } from "./heartbeat.js";
 import type { StorageService } from "../storage/types.js";
-import { assertOpenwaRunIdMay, assertOpenwaRunMay } from "./openwa/authority.js";
 import {
   getMaxAttachmentBytes,
   isAllowedContentType,
@@ -587,7 +586,6 @@ export function emailChannelService(db: Db, options: EmailChannelOptions) {
             (task.executionRunId !== run.id && task.checkoutRunId !== run.id)))
       )
         throw forbidden("Email action does not belong to this task run");
-      if (accepting) await assertOpenwaRunMay(db, run, "external_tools", { consume: false });
     }
     return task;
   }
@@ -1547,8 +1545,6 @@ export function emailChannelService(db: Db, options: EmailChannelOptions) {
           throw conflict("Email idempotency key conflict");
         return;
       }
-      if (actor.agentId && actor.runId)
-        await assertOpenwaRunIdMay(tx as unknown as Db, { companyId, runId: actor.runId }, "external_tools");
       if (!conversation) {
         const task = await issueService(db).create(
           companyId,

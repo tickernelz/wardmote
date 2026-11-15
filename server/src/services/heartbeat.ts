@@ -596,7 +596,6 @@ import {
   clearOpenwaRunContext,
   isOpenwaConversationIssue,
   openwaAdmissionClasses,
-  openwaHostGitHubAllowed,
   resolveOpenwaRunContext,
   type OpenwaRunContext,
 } from "./openwa/authority.js";
@@ -3407,7 +3406,6 @@ export function heartbeatService(
         },
       );
       const useHostGitHub =
-        openwaHostGitHubAllowed(openwaRunContext) &&
         !githubSelection.configured &&
         trustPreset.kind === "standard" &&
         ["local", "ssh"].includes(

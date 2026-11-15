@@ -133,15 +133,15 @@ describe("OpenWA in-flight table (spec 7.3)", () => {
   const owner = { triggerClass: "owner" as const, event: "message" };
   const other = { triggerClass: "other" as const, event: "message" };
   const cases: Array<[string, Parameters<typeof decideOpenwaInflight>[0], "steer" | "queue"]> = [
-    ["owner message during an owner full run", { inflightMode: "steer", incoming: owner, run: { triggerClass: "owner", profile: "full" } }, "steer"],
-    ["owner message during a member read_only run", { inflightMode: "steer", incoming: owner, run: { triggerClass: "other", profile: "read_only" } }, "steer"],
-    ["owner message during a grant run", { inflightMode: "steer", incoming: owner, run: { triggerClass: "grant", profile: "read_only" } }, "steer"],
-    ["member message during a member read_only run", { inflightMode: "steer", incoming: other, run: { triggerClass: "other", profile: "read_only" } }, "steer"],
-    ["member message during an owner full run", { inflightMode: "steer", incoming: other, run: { triggerClass: "owner", profile: "full" } }, "queue"],
-    ["member message during a grant run", { inflightMode: "steer", incoming: other, run: { triggerClass: "grant", profile: "read_only" } }, "queue"],
-    ["approval reply", { inflightMode: "steer", incoming: { triggerClass: "owner", event: "approval_reply" }, run: { triggerClass: "owner", profile: "full" } }, "queue"],
-    ["owner message with inflight_mode queue", { inflightMode: "queue", incoming: owner, run: { triggerClass: "owner", profile: "full" } }, "queue"],
-    ["member message with inflight_mode queue", { inflightMode: "queue", incoming: other, run: { triggerClass: "other", profile: "read_only" } }, "queue"],
+    ["owner message during an owner full run", { inflightMode: "steer", incoming: owner, run: { triggerClass: "owner", senderClass: "owner" } }, "steer"],
+    ["owner message during a member read_only run", { inflightMode: "steer", incoming: owner, run: { triggerClass: "other", senderClass: "non_owner" } }, "steer"],
+    ["owner message during a grant run", { inflightMode: "steer", incoming: owner, run: { triggerClass: "grant", senderClass: "non_owner" } }, "steer"],
+    ["member message during a member read_only run", { inflightMode: "steer", incoming: other, run: { triggerClass: "other", senderClass: "non_owner" } }, "steer"],
+    ["member message during an owner full run", { inflightMode: "steer", incoming: other, run: { triggerClass: "owner", senderClass: "owner" } }, "queue"],
+    ["member message during a grant run", { inflightMode: "steer", incoming: other, run: { triggerClass: "grant", senderClass: "non_owner" } }, "queue"],
+    ["approval reply", { inflightMode: "steer", incoming: { triggerClass: "owner", event: "approval_reply" }, run: { triggerClass: "owner", senderClass: "owner" } }, "queue"],
+    ["owner message with inflight_mode queue", { inflightMode: "queue", incoming: owner, run: { triggerClass: "owner", senderClass: "owner" } }, "queue"],
+    ["member message with inflight_mode queue", { inflightMode: "queue", incoming: other, run: { triggerClass: "other", senderClass: "non_owner" } }, "queue"],
   ];
   it.each(cases)("%s", (_name, input, expected) => {
     expect(decideOpenwaInflight(input)).toBe(expected);

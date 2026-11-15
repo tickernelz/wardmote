@@ -6,7 +6,7 @@ import { isCompanyOwnerAgent } from "@tickernelz/wardmote-shared";
 import { forbidden, HttpError } from "../errors.js";
 import { attentionService } from "./attention.js";
 import { boardAuthService } from "./board-auth.js";
-import { openwaRunProfile, readOpenwaRunContext } from "./openwa/authority.js";
+import { isOpenwaConversationIssue, readOpenwaRunContext } from "./openwa/authority.js";
 import { isOpenAttentionItem, relayStateByItem } from "./owner-decision-relay.js";
 
 export const DECISIONS_DESK_FORBIDDEN_CODE = "decisions_desk_forbidden";
@@ -76,9 +76,10 @@ export async function resolveDeskReader(db: Db, input: { companyId: string; acto
   }
   const context = record(run.contextSnapshot);
   const openwa = readOpenwaRunContext(context);
-  const profile = await openwaRunProfile(db, { id: run.id, companyId: run.companyId, contextSnapshot: context });
-  const notOwnerRun = () => denied("not_owner_run", "Only a full-profile run started by the owner's own message can read the Decisions desk");
-  if (profile !== "full" || (openwa && openwa.triggerClass !== "owner")) throw notOwnerRun();
+  const notOwnerRun = () => denied("not_owner_run", "Only a run started by the owner's own message can read the Decisions desk");
+  if (openwa && openwa.triggerClass !== "owner") throw notOwnerRun();
+  const issueId = typeof context.issueId === "string" ? context.issueId : typeof context.taskId === "string" ? context.taskId : null;
+  if (!openwa && issueId && (await isOpenwaConversationIssue(db, run.companyId, issueId))) throw notOwnerRun();
   if (!openwa && !isCompanyOwnerAgent(actor) && !(await wokenByOwnComment(db, { companyId, userId, commentIds: wakeCommentIds(context) }))) {
     throw notOwnerRun();
   }
