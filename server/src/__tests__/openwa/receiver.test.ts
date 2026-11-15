@@ -31,7 +31,7 @@ describe("OpenWA receiver", () => {
     for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   });
 
-  async function harness(options: { liveBufferLimit?: number; restLatencyMs?: number; intakeAfter?: number; seed?: (gateway: FakeOpenwaGateway, state: OpenwaState) => Promise<void> } = {}) {
+  async function harness(options: { liveBufferLimit?: number; restLatencyMs?: number; intakeAfter?: number; sessionReconcileIntervalMs?: number; seed?: (gateway: FakeOpenwaGateway, state: OpenwaState) => Promise<void> } = {}) {
     const gateway = new FakeOpenwaGateway({ sessionId: SESSION_ID, ownPhone: OWN_PHONE, restLatencyMs: options.restLatencyMs });
     await gateway.start();
     cleanups.push(() => gateway.close());
@@ -39,6 +39,7 @@ describe("OpenWA receiver", () => {
     await options.seed?.(gateway, state);
     const admitted: Array<{ event: OpenwaIngressEvent; key: string | null }> = [];
     const failures: unknown[] = [];
+    const sessionStatuses: Array<[string, string]> = [];
     let live = 0;
     const receiver = new OpenwaReceiver({
       gateway: createOpenwaGatewayClient({ baseUrl: gateway.baseUrl, apiKey: FAKE_OPENWA_KEY, sessionId: SESSION_ID }),
@@ -57,9 +58,13 @@ describe("OpenWA receiver", () => {
       live: async () => {
         live++;
       },
+      sessionStatus: async (status, source) => {
+        sessionStatuses.push([status, source]);
+      },
+      sessionReconcileIntervalMs: options.sessionReconcileIntervalMs,
     });
     cleanups.push(() => receiver.close());
-    return { gateway, state, receiver, admitted, failures, liveCount: () => live };
+    return { gateway, state, receiver, admitted, failures, sessionStatuses, liveCount: () => live };
   }
 
   it("subscribes to the spec event set with the operator key", async () => {
@@ -188,6 +193,32 @@ describe("OpenWA receiver", () => {
     expect(h.failures).toEqual([]);
     expect(new Set(h.admitted.map((entry) => entry.key)).size).toBe(h.admitted.length);
     expect(h.admitted.length).toBe(149);
+  });
+
+  it("reads the session status over REST after every subscribe and reconciles a missed transition without writing in steady state", async () => {
+    const h = await harness({ sessionReconcileIntervalMs: 50 });
+    h.receiver.start();
+    await until(() => h.sessionStatuses.length === 1);
+    expect(h.sessionStatuses).toEqual([["ready", "reconnect"]]);
+
+    h.gateway.ownSessionStatus = "disconnected";
+    await until(() => h.sessionStatuses.length === 2);
+    expect(h.sessionStatuses[1]).toEqual(["disconnected", "reconcile"]);
+
+    h.gateway.ownSessionStatus = "ready";
+    h.gateway.emit("session.status", { sessionId: SESSION_ID, status: "ready" });
+    await until(() => h.admitted.some((entry) => entry.event.event === "session.status"));
+    const reads = h.receiver.stats.sessionStatusReads;
+    await until(() => h.receiver.stats.sessionStatusReads >= reads + 4);
+    expect(h.sessionStatuses).toHaveLength(2);
+    expect(h.receiver.stats.sessionStatusApplied).toBe(2);
+
+    h.gateway.killSocket();
+    h.gateway.restartSocket();
+    await until(() => h.liveCount() === 2);
+    await until(() => h.sessionStatuses.length === 3);
+    expect(h.sessionStatuses[2]).toEqual(["ready", "reconnect"]);
+    expect(h.receiver.stats.sessionStatusErrors).toBe(0);
   });
 
   it("halts without admitting when the event socket is refused for credentials", async () => {

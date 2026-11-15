@@ -5,7 +5,7 @@ import { PhotonState } from "./photon/state.js";
 import { PhotonReceiver } from "./photon/receiver.js";
 import { OpenwaChatAdapter } from "./openwa/adapter.js";
 import { createOpenwaGatewayClient, type OpenwaGatewayClient } from "./openwa/gateway.js";
-import { OpenwaReceiver, type OpenwaIngressEvent } from "./openwa/receiver.js";
+import { OpenwaReceiver, type OpenwaIngressEvent, type OpenwaSessionStatusSource } from "./openwa/receiver.js";
 import { OpenwaState, type OpenwaIngestCursor } from "./openwa/state.js";
 import { photonAttachmentLocator, photonAttachmentLocatorSchema, downloadPhotonAttachment, type PhotonAttachmentLocator } from "./photon/attachments.js";
 import type { LiveEvent as PhotonEvent } from "@photon-ai/advanced-imessage";
@@ -480,6 +480,7 @@ export interface ChatSdkRuntimeCallbacks {
   onOpenwaBeforeCatchUp?(gateway: OpenwaGatewayClient): Promise<void>;
   onOpenwaLive?(): Promise<void>;
   onOpenwaFailure?(error: unknown): Promise<void>;
+  onOpenwaSessionStatus?(status: string, source: OpenwaSessionStatusSource): Promise<void>;
   onMessage(event: ChatSdkMessageCallbackEvent): Promise<void> | void;
   onTelegramGenerationStopped?(
     event: ChatSdkCallbackEvent<TelegramGenerationStoppedProof>,
@@ -2286,7 +2287,7 @@ export class ChatSdkEndpointRuntime {
         sessionId: config.credentials.sessionId, intakeAfter: config.intakeAfter,
         assertOwned: async () => { this.assertNotRetired(); await callbacks.onOpenwaAssertOwned!(); },
         admit: callbacks.onOpenwaEvent, commitCursor: callbacks.onOpenwaCursor, failure: callbacks.onOpenwaFailure,
-        beforeCatchUp: () => callbacks.onOpenwaBeforeCatchUp!(adapter.gateway), live: callbacks.onOpenwaLive });
+        beforeCatchUp: () => callbacks.onOpenwaBeforeCatchUp!(adapter.gateway), live: callbacks.onOpenwaLive, sessionStatus: callbacks.onOpenwaSessionStatus });
       this.openwaReceiver.start();
     }
     if (this.provider === "discord" && this.discordGatewayEnabled) {
