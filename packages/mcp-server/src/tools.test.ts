@@ -397,6 +397,7 @@ describe("wardmote MCP tools", () => {
         rejectLabel: "Request changes",
         rejectRequiresReason: true,
         supersedeOnUserComment: true,
+        destructive: false,
         target: {
           type: "issue_document",
           key: "plan",
@@ -422,6 +423,7 @@ describe("wardmote MCP tools", () => {
         rejectLabel: "Request changes",
         rejectRequiresReason: true,
         supersedeOnUserComment: true,
+        destructive: false,
         target: {
           type: "issue_document",
           key: "plan",
@@ -665,6 +667,19 @@ describe("wardmote MCP tools", () => {
     expect(response.content[0]?.text).toContain("issueId");
   });
 
+  it("refuses an agent confirmation card that does not say whether it is destructive", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "interaction-1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await getTool("wardmoteRequestConfirmation").execute({
+      issueId: "PAP-1135",
+      payload: { version: 1, prompt: "Ship it?" },
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(response.content[0]?.text).toContain("destructive");
+  });
+
   it("sends the resolver audience with an interaction", async () => {
     const fetchMock = vi.fn().mockResolvedValue(mockJsonResponse({ id: "interaction-1" }));
     vi.stubGlobal("fetch", fetchMock);
@@ -673,7 +688,7 @@ describe("wardmote MCP tools", () => {
       issueId: "PAP-1135",
       resolverPolicy: "human_only",
       addresseeAgentId: "44444444-4444-4444-4444-444444444444",
-      payload: { version: 1, prompt: "Ship it?" },
+      payload: { version: 1, prompt: "Ship it?", destructive: false },
     });
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];

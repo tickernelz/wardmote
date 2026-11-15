@@ -20,7 +20,7 @@ import {
   type AiConnectionBinding,
   type AiConnectionList,
 } from "@tickernelz/wardmote-shared";
-import { assertBoard, assertBoardOrAgentAuthority, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertBoard, assertBoardOrAgentAuthority, assertCompanyAccess, companyOwnerAgentHasPermission, getActorInfo } from "./authz.js";
 import { forbidden, notFound, unprocessable } from "../errors.js";
 import { accessService } from "../services/access.js";
 import { logActivity } from "../services/activity-log.js";
@@ -35,6 +35,7 @@ export function responsibleUserForAiRequest(req: Request): string | null {
 }
 
 export async function canManageAiConnections(db: Db, req: Request, companyId: string): Promise<boolean> {
+  if (await companyOwnerAgentHasPermission(req, accessService(db), companyId, "tools:manage_connections")) return true;
   const membership = req.actor.memberships?.find((m) => m.companyId === companyId && m.status === "active");
   if (membership?.membershipRole === "viewer") return false;
   return req.actor.source === "local_implicit" || Boolean(req.actor.isInstanceAdmin)
@@ -115,6 +116,7 @@ export async function assertAiConnectionCreateAccess(
 export async function canInstallSharedAiConnectionForNewAgent(
   db: Db, req: Request, companyId: string, binding: AiConnectionBinding,
 ): Promise<boolean> {
+  if (binding.mode === "shared" && await companyOwnerAgentHasPermission(req, accessService(db), companyId, "tools:manage_connections")) return true;
   if (req.actor.type !== "board" || binding.mode !== "shared") return false;
   assertCompanyAccess(req, companyId);
   const member = req.actor.memberships?.find(m => m.companyId === companyId && m.status === "active");

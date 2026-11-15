@@ -13,6 +13,7 @@ import {
   chatOwnerApprovalRequests,
   heartbeatRuns,
   issueAttachments,
+  issues,
   type Db,
 } from "@tickernelz/wardmote-db";
 import {
@@ -41,7 +42,10 @@ import { logOpenwaActivity, recordOpenwaAudit } from "./audit.js";
 import {
   OpenwaApprovalRequiredError,
   assertOpenwaRunMay,
+  isOpenwaConversationTreeIssue,
   openwaHeldGrantValid,
+  openwaLiveWindowRoot,
+  openwaMemberWindowRoot,
   openwaRunProfile,
   readOpenwaRunContext,
   restoreOpenwaGrant,
@@ -774,7 +778,17 @@ async function assertSendAllowed(ctx: ToolContext, target: Target, heldGrant: st
   if (!target.isOrigin && !(ctx.completion && target.ownerReport)) {
     if (heldGrant && (await openwaHeldGrantValid(ctx.db, { companyId: ctx.endpoint.companyId, grantId: heldGrant }))) return null;
     try {
-      return await assertOpenwaRunMay(ctx.db, ctx.run, "cross_chat_send");
+      const targetConversations = await ctx.db
+        .select({ issueId: chatConversations.issueId })
+        .from(chatConversations)
+        .where(and(
+          eq(chatConversations.companyId, ctx.endpoint.companyId),
+          eq(chatConversations.endpointId, ctx.endpoint.id),
+          eq(chatConversations.externalConversationId, chatRef(ctx, target.chatId)),
+        ));
+      return await assertOpenwaRunMay(ctx.db, ctx.run, "cross_chat_send", {
+        windowIssueIds: targetConversations.map((conversation) => conversation.issueId),
+      });
     } catch (error) {
       if (error instanceof OpenwaApprovalRequiredError)
         throw new OpenwaToolError(403, "approval_required", "Sending to a chat other than the origin chat needs owner approval", {
@@ -793,22 +807,31 @@ async function assertSendAllowed(ctx: ToolContext, target: Target, heldGrant: st
   return null;
 }
 
+async function attachmentIssueSendable(ctx: ToolContext, issueId: string): Promise<boolean> {
+  if (issueId === ctx.binding.issueId || issueId === ctx.conversation.issueId) return true;
+  const companyId = ctx.endpoint.companyId;
+  const [issue] = await ctx.db
+    .select({ visibility: issues.visibility })
+    .from(issues)
+    .where(and(eq(issues.companyId, companyId), eq(issues.id, issueId)))
+    .limit(1);
+  if (!issue || issue.visibility === "private") return false;
+  if (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: ctx.conversation.issueId, issueKey: issueId })) return true;
+  const windowRoot = ctx.profile === "full"
+    ? await openwaLiveWindowRoot(ctx.db, companyId, ctx.conversation.issueId)
+    : await openwaMemberWindowRoot(ctx.db, ctx.run);
+  return windowRoot !== null && (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: windowRoot, issueKey: issueId }));
+}
+
 async function attachmentBase64(ctx: ToolContext, attachmentId: string, storage: StorageService | undefined) {
-  const issueIds = [...new Set([ctx.binding.issueId, ctx.conversation.issueId])];
   const [row] = await ctx.db
-    .select({ asset: assets })
+    .select({ asset: assets, issueId: issueAttachments.issueId })
     .from(issueAttachments)
     .innerJoin(assets, and(eq(assets.id, issueAttachments.assetId), eq(assets.companyId, ctx.endpoint.companyId)))
-    .where(
-      and(
-        eq(issueAttachments.id, attachmentId),
-        eq(issueAttachments.companyId, ctx.endpoint.companyId),
-        inArray(issueAttachments.issueId, issueIds),
-      ),
-    )
+    .where(and(eq(issueAttachments.id, attachmentId), eq(issueAttachments.companyId, ctx.endpoint.companyId)))
     .limit(1);
-  if (!row || row.asset.byteSize > getMaxAttachmentBytes())
-    throw new OpenwaToolError(422, "attachment_unavailable", "Media must be an attachment of this task within the attachment size limit");
+  if (!row || row.asset.byteSize > getMaxAttachmentBytes() || !(await attachmentIssueSendable(ctx, row.issueId)))
+    throw new OpenwaToolError(422, "attachment_unavailable", "Media must be an attachment of this chat's task tree, or of a live autonomy window's tree, within the attachment size limit");
   const stored = await (storage ?? getStorageService()).getObject(ctx.endpoint.companyId, row.asset.objectKey);
   const chunks: Buffer[] = [];
   let total = 0;

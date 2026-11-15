@@ -2654,6 +2654,8 @@ export function authorizationService(db: Db | DbTransaction) {
       keyScope: actor.keyScope ?? null,
     };
     if (!isCompanyOwnerAgent(candidate)) return null;
+    const trust = await resolveActorTrust({ actorAgent, actor, companyId: actor.companyId, resource: input.resource });
+    if (trust.kind === "low_trust_review") return null;
     actor.exercisedAgentAuthority = {
       capability: "company:owner",
       reason: "agent_role_ceo",

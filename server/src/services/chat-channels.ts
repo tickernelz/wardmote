@@ -69,7 +69,7 @@ import { openwaMediaService } from "./openwa/media.js";
 import { openwaLateTranscriptListener, type OpenwaLateTranscriptHook } from "./openwa/late-transcripts.js";
 import type { OpenwaInboundEvent } from "./openwa/receiver.js";
 import { listOpenwaAudit, logOpenwaActivity, openwaAuditRetentionDays } from "./openwa/audit.js";
-import { createOpenwaAdmission, openwaAdmitInput, openwaInboundDecoration, parseOpenwaDecoration, recordOpenwaTriggerAdmitted, type OpenwaAdmissionDecoration, type OpenwaAdmitInput, type OpenwaTimerHooks } from "./openwa/admission.js";
+import { createOpenwaAdmission, openwaAdmitInput, openwaInboundDecoration, parseOpenwaDecoration, recordOpenwaTriggerAdmitted, recordOpenwaTriggerFiltered, type OpenwaAdmissionDecoration, type OpenwaAdmitInput, type OpenwaTimerHooks } from "./openwa/admission.js";
 import { createOpenwaPolicyCache, openwaSenderRole } from "./openwa/policy.js";
 import {
   activeOpenwaScheduledWakes,
@@ -1761,12 +1761,21 @@ function openwaDestinationAllowed(
   return resource.enabled || decoration.event === "group_added";
 }
 
+function openwaReconnectKeepsActive(endpoint: Pick<EndpointRow, "status" | "setup">): boolean {
+  if (endpoint.status === "active") return true;
+  return endpoint.status === "attention" && (endpoint.setup.step === "complete" || Boolean((endpoint.setup as { activatedAt?: string | null }).activatedAt));
+}
+
+const OPENWA_SETUP_OWNER_ONLY_REASON = "Only an endpoint owner can send the OpenWA setup test message";
+const OPENWA_SETUP_DROPPING_HEALTH =
+  "Setup is waiting for an owner test message; messages from other senders are dropped until setup is finished";
+
 function openwaFilterReason(
   endpoint: Pick<EndpointRow, "status">,
   authorization: { role: string; allowed: boolean },
 ): string {
   if (endpoint.status === "verifying" && authorization.role !== "owner")
-    return "Only an endpoint owner can send the OpenWA setup test message";
+    return OPENWA_SETUP_OWNER_ONLY_REASON;
   if (authorization.role === "denylisted") return "Sender is on the OpenWA denylist";
   return "Sender is outside the OpenWA allowlist";
 }
@@ -10189,7 +10198,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       keepOpenwaEndpointActive =
         endpoint.provider === "openwa" &&
         input.action === "reconnect" &&
-        endpoint.status === "active" &&
+        openwaReconnectKeepsActive(endpoint) &&
         (identity.providerAccountId ?? null) === endpoint.providerAccountId &&
         (identity.botExternalId ?? null) === endpoint.botExternalId &&
         (await resolveCredentials(endpoint)
@@ -10257,7 +10266,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           if (!actorUserId) throw forbidden("An authenticated connection owner is required to install phone tools");
           await syncSpekoVoiceTools(tx, endpoint, actorUserId, true, options.allowLocalVoiceBoard === true);
         }
-        const stayActive = keepOpenwaEndpointActive && current.status === "active";
+        const stayActive = keepOpenwaEndpointActive && current.status === endpoint.status;
         const observedSlackUrl = (current.setup as InternalSetupState).slackCallbackSurfaces?.events?.url;
         const preserveSlackVerification = current.setup.slackSetupMethod === "automatic"
           && (current.setup as InternalSetupState).slackVerificationSigningFingerprint === createHash("sha256").update(credentials.signingSecret ?? "").digest("hex")
@@ -10281,8 +10290,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             lastError: null,
             ...(stayActive
               ? {
+                  healthMessage: "Connected",
                   setup: {
                     ...current.setup,
+                    step: "complete",
                     ...(endpoint.provider === "github" ? { github: { ...current.setup.github, stage: current.setup.github?.stage ?? "connect", appOwnerType: identity.githubOwnerType, appOwnerLogin: identity.githubOwnerLogin } } : {}),
                     runtimeGeneration: runtimeGeneration(current.setup) + 1,
                   } as InternalSetupState,
@@ -16536,7 +16547,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                 : "Message did not address the agent or an active task thread";
         await db.transaction(async (tx) => {
           await notifyChatDeliveryWork(tx);
-          return tx
+          await tx
             .update(chatDeliveries)
             .set({
               state: "filtered",
@@ -16548,6 +16559,22 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               updatedAt: new Date(),
             })
             .where(eq(chatDeliveries.id, activeDelivery.id));
+          if (!openwaDecoration) return;
+          await recordOpenwaTriggerFiltered(tx, {
+            companyId: endpoint.companyId,
+            endpointId: endpoint.id,
+            deliveryId: activeDelivery.id,
+            decoration: openwaDecoration,
+            reason: filteredReason,
+            endpointStatus: endpoint.status,
+            text: message.text,
+            retentionDays: openwaAuditRetentionDays(endpoint.policy),
+          });
+          if (filteredReason === OPENWA_SETUP_OWNER_ONLY_REASON)
+            await tx
+              .update(chatEndpoints)
+              .set({ healthMessage: OPENWA_SETUP_DROPPING_HEALTH, updatedAt: new Date() })
+              .where(and(eq(chatEndpoints.id, endpoint.id), eq(chatEndpoints.status, "verifying")));
         });
         return;
       }

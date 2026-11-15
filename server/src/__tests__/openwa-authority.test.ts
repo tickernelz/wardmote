@@ -18,6 +18,7 @@ import {
   chatIdentityLinks,
   chatOwnerApprovalRequests,
   chatOwnerGrants,
+  issueAutonomyWindows,
   chatTaskHandoffs,
   companies,
   companyMemberships,
@@ -895,6 +896,77 @@ describeEmbeddedPostgres("OpenWA run authority", () => {
       const runRow = { id: run.runId, companyId: seed.companyId, contextSnapshot: run.contextSnapshot };
       for (const category of ["external_tools", "create_task", "cross_chat_send"] as const)
         await expect(assertOpenwaRunMay(db, runRow, category)).rejects.toMatchObject({ status: 403, category });
+    });
+
+    it("lifts non-destructive categories for an allow-listed member run inside a live autonomy window's tree, and drops them when the window closes", async () => {
+      const seed = await seedCompany(db);
+      const root = await seedPlainIssue(db, seed);
+      const sibling = randomUUID();
+      await db.insert(issues).values({ id: sibling, companyId: seed.companyId, parentId: root, title: "Window sibling", status: "todo" });
+      await db.update(issues).set({ parentId: root }).where(eq(issues.id, seed.issueId));
+      const outside = await seedPlainIssue(db, seed);
+      const member = await seedPrincipal(db, seed, "628666000999@c.us");
+      const deliveryId = await seedDelivery(db, seed, { principalId: member.principalId, triggerClass: "other" });
+      const run = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "other", deliveryIds: [deliveryId] }) });
+      const runRow = { id: run.runId, companyId: seed.companyId, contextSnapshot: run.contextSnapshot };
+      const auth = { Authorization: `Bearer ${jwt(seed, run.runId)}` };
+
+      const before = await request(app()).post(`/api/issues/${sibling}/share-link`).set(auth).send({});
+      expect(before.status).toBe(403);
+      expect(before.body).toMatchObject({ code: "openwa_approval_required", details: { category: "external_tools" } });
+      await expect(assertOpenwaRunMay(db, runRow, "external_tools")).rejects.toMatchObject({ status: 403 });
+
+      const [window] = await db.insert(issueAutonomyWindows).values({
+        companyId: seed.companyId, rootIssueId: root, grantedByUserId: BOARD_USER, grantedVia: "whatsapp", expiresAt: new Date(Date.now() + 3_600_000),
+      }).returning();
+      const lifted = [
+        await request(app()).post(`/api/issues/${sibling}/share-link`).set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/children`).set(auth).send({ title: "child" }),
+        await request(app()).post(`/api/issues/${sibling}/comments`).set(auth).send({ body: "progress" }),
+        await request(app()).post(`/api/companies/${seed.companyId}/issues`).set(auth).send({ title: "child", parentId: sibling }),
+      ];
+      expect(lifted.map((res) => res.status)).toEqual([201, 201, 201, 201]);
+      await expect(assertOpenwaRunMay(db, runRow, "external_tools")).resolves.toBeNull();
+      await expect(assertOpenwaRunMay(db, runRow, "create_task")).resolves.toBeNull();
+      await expect(assertOpenwaRunMay(db, runRow, "cross_chat_send", { windowIssueIds: [sibling] })).resolves.toBeNull();
+
+      const stillDenied = [
+        await request(app()).post(`/api/issues/${outside}/share-link`).set(auth).send({}),
+        await request(app()).delete(`/api/issues/${sibling}`).set(auth).send({}),
+        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ status: "cancelled" }),
+        await request(app()).post(`/api/companies/${seed.companyId}/issues`).set(auth).send({ title: "top level" }),
+        await request(app()).post(`/api/companies/${seed.companyId}/issues`).set(auth).send({ title: "elsewhere", parentId: outside }),
+        await request(app()).post("/api/agents/me/secret-proposals").set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/access-grants`).set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/low-trust/promotions`).set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/interactions/${randomUUID()}/accept`).set(auth).send({}),
+        await request(app()).patch(`/api/issues/${sibling}/model-override`).set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/admin/force-release`).set(auth).send({}),
+        await request(app()).post(`/api/issues/${sibling}/continue-for-owner`).set(auth).send({}),
+        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ parentId: null }),
+        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ title: "renamed" }),
+        await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ projectId: randomUUID() }),
+      ];
+      expect(stillDenied.map((res) => res.status)).toEqual(Array(15).fill(403));
+      const delegated = await request(app()).patch(`/api/issues/${sibling}`).set(auth).send({ assigneeAgentId: seed.agentId, status: "todo" });
+      expect(delegated.status).toBe(200);
+      await expect(assertOpenwaRunMay(db, runRow, "cross_chat_send", { windowIssueIds: [outside] })).rejects.toMatchObject({ status: 403 });
+      await expect(assertOpenwaRunMay(db, runRow, "cross_chat_send")).rejects.toMatchObject({ status: 403 });
+      await expect(assertOpenwaRunMay(db, runRow, "wa_admin")).rejects.toMatchObject({ status: 403 });
+      await expect(assertOpenwaRunMay(db, runRow, "external_tools", { destructive: true })).rejects.toMatchObject({ status: 403 });
+      await expect(assertOpenwaRunMay(db, runRow, "external_tools", { window: false })).rejects.toMatchObject({ status: 403 });
+
+      const stranger = await seedPrincipal(db, seed, "628777000999@c.us");
+      const strangerDelivery = await seedDelivery(db, seed, { principalId: stranger.principalId, triggerClass: "other" });
+      await db.update(chatDeliveries).set({ principalRole: "outside_allowlist" }).where(eq(chatDeliveries.id, strangerDelivery));
+      const strangerRun = await seedRun(db, seed, { profile: "read_only", openwa: openwaContext(seed, { triggerClass: "other", deliveryIds: [strangerDelivery] }) });
+      const strangerShare = await request(app()).post(`/api/issues/${sibling}/share-link`).set({ Authorization: `Bearer ${jwt(seed, strangerRun.runId)}` }).send({});
+      expect(strangerShare.status).toBe(403);
+
+      await db.update(issueAutonomyWindows).set({ status: "revoked", closedAt: new Date() }).where(eq(issueAutonomyWindows.id, window!.id));
+      const after = await request(app()).post(`/api/issues/${sibling}/share-link`).set(auth).send({});
+      expect(after.status).toBe(403);
+      await expect(assertOpenwaRunMay(db, runRow, "external_tools")).rejects.toMatchObject({ status: 403 });
     });
 
     it("never treats another company's issue as part of the conversation tree", async () => {

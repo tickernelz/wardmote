@@ -12,7 +12,7 @@ import {
   createToolMcpGatewayTokenSchema,
   updateToolMcpGatewaySchema,
 } from "@tickernelz/wardmote-shared/validators/tool-access";
-import { assertBoard, assertBoardOrAgent, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertBoard, assertBoardOrAgent, assertCompanyAccess, companyOwnerAgentHasPermission, getActorInfo } from "./authz.js";
 import { ToolGatewayHttpError, type ToolGatewayService } from "../services/tool-gateway.js";
 import { forbidden, HttpError } from "../errors.js";
 import { accessService } from "../services/index.js";
@@ -353,6 +353,7 @@ export function toolGatewayRoutes(db: Db, toolGateway: ToolGatewayService) {
   async function assertBoardPermission(req: import("express").Request, companyId: string, permissionKey: PermissionKey) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
+    if (await companyOwnerAgentHasPermission(req, access, companyId, permissionKey)) return;
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
     if (req.actor.userId && await access.canUser(companyId, req.actor.userId, permissionKey)) return;
     throw forbidden(`Missing permission: ${permissionKey}`);

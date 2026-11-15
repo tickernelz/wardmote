@@ -99,7 +99,7 @@ import {
   collapseDuplicatePendingHumanJoinRequests,
   findReusableHumanJoinRequest,
 } from "../lib/join-request-dedupe.js";
-import { assertAuthenticated, assertCompanyAccess, getActorInfo, isCompanyOwnerAgentActor, recordAgentAuthority } from "./authz.js";
+import { assertAuthenticated, assertCompanyAccess, companyOwnerAgentHasPermission, getActorInfo, isCompanyOwnerAgentActor, recordAgentAuthority } from "./authz.js";
 import {
   AGENT_MEMBER_AUTHORITY_PERMISSION_KEYS,
   agentRoleHasAuthority,
@@ -3643,7 +3643,12 @@ export function accessRoutes(
       await assertCompanyPermission(req, companyId, "users:manage_permissions");
       const memberToUpdate = await access.getMemberById(companyId, memberId);
       if (!memberToUpdate) throw notFound("Member not found");
-      await assertCanManageCompanyMember(req, access, companyId, memberToUpdate);
+      if (memberToUpdate.principalType === "agent") {
+        const owner = req.actor.type === "board"
+          ? (await resolveActorHumanRole(req, access, companyId)) === "owner"
+          : await companyOwnerAgentHasPermission(req, access, companyId, "users:manage_permissions");
+        if (!owner) throw forbidden("Only a company owner or the CEO agent can change agent permissions.");
+      } else await assertCanManageCompanyMember(req, access, companyId, memberToUpdate);
       const updated = await access.setMemberPermissions(
         companyId,
         memberId,
@@ -3666,6 +3671,10 @@ export function accessRoutes(
           grantCount: req.body.grants?.length ?? 0,
         },
       });
+      if (updated.principalType === "agent") {
+        res.json({ ...updated, grants: await access.listPrincipalGrants(companyId, "agent", updated.principalId) });
+        return;
+      }
       const member = (await loadCompanyMemberRecords(db, companyId)).find(
         (entry) => entry.id === memberId,
       );

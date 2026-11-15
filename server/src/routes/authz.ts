@@ -4,6 +4,7 @@ import {
   agentRoleHasAuthority,
   isCompanyOwnerAgent,
   type AgentAuthorityCapability,
+  type PermissionKey,
   type SecretBindingTargetType,
 } from "@tickernelz/wardmote-shared";
 import { forbidden, HttpError, unauthorized } from "../errors.js";
@@ -57,6 +58,28 @@ export function assertBoard(req: Request) {
     return;
   }
   throw forbidden("Board access required");
+}
+
+type CompanyOwnerDecisionAccess = {
+  decide(input: {
+    actor: Request["actor"];
+    action: PermissionKey;
+    resource: { type: "company"; companyId: string };
+  }): Promise<{ allowed: boolean; reason: string }>;
+};
+
+/** True when a CEO agent holds this company permission through the authorization engine's owner-equivalent rule. */
+export async function companyOwnerAgentHasPermission(
+  req: Request,
+  access: CompanyOwnerDecisionAccess,
+  companyId: string,
+  permissionKey: PermissionKey,
+): Promise<boolean> {
+  if (!isCompanyOwnerAgent(req.actor) || req.actor.companyId !== companyId) return false;
+  const decision = await access.decide({ actor: req.actor, action: permissionKey, resource: { type: "company", companyId } });
+  if (!decision.allowed || decision.reason !== "allow_agent_role_ceo") return false;
+  recordCompanyOwnerAuthority(req);
+  return true;
 }
 
 export function hasBoardOrgAccess(req: Request) {

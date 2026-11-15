@@ -16,7 +16,7 @@ import {
   projects,
   userInboxAgentPolicies,
 } from "@tickernelz/wardmote-db";
-import { LOW_TRUST_REVIEW_PRESET, type PermissionKey } from "@tickernelz/wardmote-shared";
+import { LOW_TRUST_REVIEW_PRESET, PERMISSION_KEYS, type PermissionKey } from "@tickernelz/wardmote-shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -2014,6 +2014,59 @@ describeEmbeddedPostgres("authorization service", () => {
         scope: { targetAgentId: paused.target.id, requiresChangeGrant: true },
       });
       expect(pausedDecision.reason).not.toBe("allow_agent_role_ceo");
+    });
+
+    it("allows every company permission key to a CEO through decide, while principal grants stay grant-only", async () => {
+      const f = await ceoFixture();
+      const authz = authorizationService(db);
+      for (const permissionKey of PERMISSION_KEYS) {
+        const ceo = await authz.decide({
+          actor: f.actorFor(f.ceo.id, { onBehalfOfUserId: null }),
+          action: permissionKey,
+          resource: { type: "company", companyId: f.company.id },
+        });
+        expect(ceo, permissionKey).toMatchObject({ allowed: true, reason: "allow_agent_role_ceo" });
+        for (const principalId of [f.ceo.id, f.engineer.id]) {
+          const grant = await authz.decidePrincipalGrant({
+            companyId: f.company.id, principalType: "agent", principalId, action: permissionKey, permissionKey,
+          });
+          expect(grant.allowed, permissionKey).toBe(false);
+        }
+      }
+      const foreign = await authz.decide({
+        actor: f.actorFor(f.ceo.id, { onBehalfOfUserId: null }),
+        action: "tools:manage_connections",
+        resource: { type: "company", companyId: f.otherCompany.id },
+      });
+      expect(foreign.allowed).toBe(false);
+    });
+
+    it("keeps a low-trust review boundary on a CEO agent instead of owner-equivalent access", async () => {
+      const f = await ceoFixture();
+      const boundary = await createProject(db, f.company.id, "Boundary");
+      await db.update(agents).set({
+        permissions: {
+          trustPreset: "low_trust_review",
+          authorizationPolicy: { trustBoundary: { mode: "low_trust_review", companyId: f.company.id, projectIds: [boundary.id] } },
+        },
+      }).where(eq(agents.id, f.ceo.id));
+      const decision = await authorizationService(db).decide({
+        actor: f.actorFor(f.ceo.id),
+        action: "agent_instructions:update",
+        resource: { type: "agent", companyId: f.company.id, agentId: f.target.id },
+        scope: { targetAgentId: f.target.id, requiresChangeGrant: true },
+      });
+      expect(decision.reason).not.toBe("allow_agent_role_ceo");
+      expect(decision.allowed).toBe(false);
+      for (const action of ["tools:manage_connections", "users:manage_permissions", "audit:view_agent_actions"] as const) {
+        const companyDecision = await authorizationService(db).decide({
+          actor: f.actorFor(f.ceo.id, { onBehalfOfUserId: null }),
+          action,
+          resource: { type: "company", companyId: f.company.id },
+        });
+        expect(companyDecision.allowed, action).toBe(false);
+        expect(companyDecision.reason, action).not.toBe("allow_agent_role_ceo");
+      }
     });
   });
 

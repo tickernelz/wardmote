@@ -293,7 +293,7 @@ const createAskUserQuestionsToolSchema = z.object({
 const createRequestConfirmationToolSchema = z.object({
   ...interactionToolFields,
   continuationPolicy: issueThreadInteractionContinuationPolicySchema.optional().default("none"),
-  payload: requestConfirmationPayloadSchema,
+  payload: requestConfirmationPayloadSchema.extend({ destructive: z.boolean().describe("Required. false for a routine step a live autonomy window may accept for its owner; true for force-push, history rewrite, data loss, or secrets, which always waits for a person.") }),
 });
 
 const createRequestCheckboxConfirmationToolSchema = z.object({

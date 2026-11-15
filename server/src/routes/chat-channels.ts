@@ -54,6 +54,7 @@ import {
 import {
   assertBoard,
   assertCompanyAccess,
+  companyOwnerAgentHasPermission,
   getAccessibleResource,
   getActorInfo,
 } from "./authz.js";
@@ -151,6 +152,7 @@ export function chatChannelRoutes(db: Db, options: ChatChannelRouteOptions) {
   ) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
+    if (await companyOwnerAgentHasPermission(req, access, companyId, "tools:manage_connections")) return;
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)
       return;
     const userId = req.actor.userId;
