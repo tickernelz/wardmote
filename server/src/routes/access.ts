@@ -3643,7 +3643,10 @@ export function accessRoutes(
       await assertCompanyPermission(req, companyId, "users:manage_permissions");
       const memberToUpdate = await access.getMemberById(companyId, memberId);
       if (!memberToUpdate) throw notFound("Member not found");
-      await assertCanManageCompanyMember(req, access, companyId, memberToUpdate);
+      if (memberToUpdate.principalType === "agent") {
+        if ((await resolveActorHumanRole(req, access, companyId)) !== "owner")
+          throw forbidden("Only a company owner or the CEO agent can change agent permissions.");
+      } else await assertCanManageCompanyMember(req, access, companyId, memberToUpdate);
       const updated = await access.setMemberPermissions(
         companyId,
         memberId,
@@ -3666,6 +3669,10 @@ export function accessRoutes(
           grantCount: req.body.grants?.length ?? 0,
         },
       });
+      if (updated.principalType === "agent") {
+        res.json({ ...updated, grants: await access.listPrincipalGrants(companyId, "agent", updated.principalId) });
+        return;
+      }
       const member = (await loadCompanyMemberRecords(db, companyId)).find(
         (entry) => entry.id === memberId,
       );

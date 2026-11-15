@@ -9,7 +9,7 @@ import {
 } from "@tickernelz/wardmote-shared";
 import type { Db } from "@tickernelz/wardmote-db";
 import { validate } from "../middleware/validate.js";
-import { assertBoard, assertCompanyAccess, hasCompanyAccess } from "./authz.js";
+import { assertBoard, assertCompanyAccess, companyOwnerAgentHasPermission, hasCompanyAccess } from "./authz.js";
 import { emailConnectionService } from "../services/email-connections.js";
 import { accessService } from "../services/access.js";
 import { badRequest, forbidden, HttpError, notFound } from "../errors.js";
@@ -89,6 +89,7 @@ export function emailRoutes(db: Db, service: EmailChannelService) {
     if (!hasCompanyAccess(req, companyId))
       throw notFound("Email inbox not found");
     assertCompanyAccess(req, companyId);
+    if (await companyOwnerAgentHasPermission(req, accessService(db), companyId, "tools:manage_connections")) return;
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)
       return;
     if (

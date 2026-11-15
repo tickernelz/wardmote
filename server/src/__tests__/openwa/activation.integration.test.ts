@@ -32,7 +32,7 @@ import { resolveChatRunPresentationAuthorizationReason } from "../../services/ch
 import { instanceSettingsService } from "../../services/instance-settings.js";
 import { secretService } from "../../services/secrets.js";
 import { issueService } from "../../services/issues.js";
-import { applyOpenwaRunContext, resolveOpenwaRunContext } from "../../services/openwa/authority.js";
+import { applyOpenwaRunContext, assertOpenwaRestAllowed, resolveOpenwaRunContext } from "../../services/openwa/authority.js";
 import { OPENWA_WAKE_CONTEXT_KEY, buildOpenwaRunGuidance, type OpenwaWakeEvent } from "../../services/openwa/guidance.js";
 import { executeOpenwaTool } from "../../services/openwa/tools.js";
 import { chatChannelRoutes } from "../../routes/chat-channels.js";
@@ -418,6 +418,49 @@ describe("OpenWA activation through the owner test DM (embedded Postgres + fake 
       .from(chatActions)
       .where(and(eq(chatActions.deliveryId, member.delivery.id), eq(chatActions.kind, "inbound_wakeup")));
     expect(memberWake).toHaveLength(1);
+  }, 120_000);
+
+  it("lets a CEO agent run the connection-manager routes, refuses a non-CEO agent, and still blocks a CEO run whose OpenWA profile is read_only", async () => {
+    const t = await setup();
+    await request(t.app)
+      .post("/api/chat-endpoints/" + t.endpointId + "/setup")
+      .send({
+        action: "configure",
+        credentials: { apiKey: FAKE_OPENWA_KEY },
+        openwa: { baseUrl: t.gateway.baseUrl, sessionId: SESSION_ID, numberMode: "agent_number", attestations: { pacing: true, soleClient: true } },
+      })
+      .expect(200);
+    const agentApp = async (role: string) => {
+      const [agent] = await db
+        .insert(agents)
+        .values({ companyId: t.companyId, name: role + " agent", role, status: "idle", adapterType: "omp_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} })
+        .returning();
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        req.actor = { type: "agent", agentId: agent!.id, companyId: t.companyId, agentRole: role, agentStatus: "idle", source: "agent_jwt" } as never;
+        next();
+      });
+      app.use("/api", chatChannelRoutes(db, { heartbeat: { wakeup: async () => undefined } as never, service: t.service }));
+      app.use(errorHandler);
+      return app;
+    };
+
+    const ceo = await request(await agentApp("ceo")).post("/api/chat-endpoints/" + t.endpointId + "/test").send({});
+    expect(ceo.status).toBe(409);
+    expect(ceo.body.details).toMatchObject({ code: "chat_test_message_missing" });
+    const engineer = await request(await agentApp("engineer")).post("/api/chat-endpoints/" + t.endpointId + "/test").send({});
+    expect(engineer.status).toBe(403);
+
+    await expect(assertOpenwaRestAllowed(db, {
+      run: {
+        id: randomUUID(),
+        companyId: t.companyId,
+        contextSnapshot: { wardmoteOpenwa: { endpointId: t.endpointId, chatKey: jid(MEMBER_PHONE), triggerClass: "other", profile: "read_only" } },
+      },
+      method: "POST",
+      path: "/api/chat-endpoints/" + t.endpointId + "/test",
+    })).rejects.toMatchObject({ status: 403, details: { code: "openwa_approval_required" } });
   }, 120_000);
 
   it("returns an endpoint in session-health attention to active when the wizard reconnects the same session and key, so members are admitted again", async () => {

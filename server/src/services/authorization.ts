@@ -892,6 +892,19 @@ export function authorizationService(db: Db | DbTransaction) {
     permissionKey: PermissionKey;
     scope?: Record<string, unknown> | null;
   }): Promise<PrincipalGrantDecision> {
+    if (input.principalType === "agent") {
+      const agent = await loadAgent(input.principalId);
+      if (
+        agent?.companyId === input.companyId &&
+        isCompanyOwnerAgent({ type: "agent", agentId: agent.id, agentRole: agent.role, agentStatus: agent.status })
+      ) {
+        return allow({
+          action: input.action,
+          reason: "allow_agent_role_ceo",
+          explanation: "Allowed as owner-equivalent CEO agent access inside its own company.",
+        });
+      }
+    }
     const membership = await getActiveMembership(input.companyId, input.principalType, input.principalId);
     if (!membership) {
       return deny({
@@ -2654,6 +2667,8 @@ export function authorizationService(db: Db | DbTransaction) {
       keyScope: actor.keyScope ?? null,
     };
     if (!isCompanyOwnerAgent(candidate)) return null;
+    const trust = await resolveActorTrust({ actorAgent, actor, companyId: actor.companyId, resource: input.resource });
+    if (trust.kind === "low_trust_review") return null;
     actor.exercisedAgentAuthority = {
       capability: "company:owner",
       reason: "agent_role_ceo",

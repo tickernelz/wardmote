@@ -54,7 +54,7 @@ import {
   updateToolProfileWithEntriesSchema,
 } from "@tickernelz/wardmote-shared";
 import { validate } from "../middleware/validate.js";
-import { getActorInfo, assertBoard, assertCompanyAccess, assertInstanceAdmin, getAccessibleResource, hasCompanyAccess } from "./authz.js";
+import { companyOwnerAgentHasPermission, getActorInfo, assertBoard, assertCompanyAccess, assertInstanceAdmin, getAccessibleResource, hasCompanyAccess, isCompanyOwnerAgentActor } from "./authz.js";
 import { badRequest, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { accessService, logActivity, toolAccessPolicyService, toolAccessService, vercelConnectIntegrationStatus } from "../services/index.js";
 import { ToolGatewayHttpError, type ToolGatewayService } from "../services/tool-gateway.js";
@@ -434,6 +434,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   async function assertBoardToolPermission(req: Request, companyId: string, permissionKey: PermissionKey) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
+    if (await companyOwnerAgentHasPermission(req, access, companyId, permissionKey)) return;
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
     const userId = req.actor.userId;
     if (userId && await access.hasPermission(companyId, "user", userId, permissionKey)) return;
@@ -443,7 +444,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   function activeToolMembership(req: Request, companyId: string) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return null;
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin || isCompanyOwnerAgentActor(req)) return null;
     const membership = Array.isArray(req.actor.memberships)
       ? req.actor.memberships.find((item) => item.companyId === companyId)
       : null;
@@ -459,6 +460,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
   async function isToolConnectionManager(req: Request, companyId: string) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
+    if (await companyOwnerAgentHasPermission(req, access, companyId, "tools:manage_connections")) return true;
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return true;
     return Boolean(req.actor.userId && await access.hasPermission(
       companyId,
@@ -521,7 +523,7 @@ function connectorEnrollmentPrincipal(req: Request): string {
     isViewer: boolean;
     isActive: boolean;
   } {
-    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) {
+    if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin || isCompanyOwnerAgentActor(req)) {
       return { unrestricted: true, role: null, isViewer: false, isActive: true };
     }
     const membership = Array.isArray(req.actor.memberships)
@@ -623,6 +625,9 @@ function connectorEnrollmentPrincipal(req: Request): string {
   async function assertBoardAnyToolPermission(req: Request, companyId: string, permissionKeys: PermissionKey[]) {
     assertBoard(req);
     assertCompanyAccess(req, companyId);
+    for (const permissionKey of permissionKeys) {
+      if (await companyOwnerAgentHasPermission(req, access, companyId, permissionKey)) return;
+    }
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
     const userId = req.actor.userId;
     if (userId) {

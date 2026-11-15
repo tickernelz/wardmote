@@ -15,7 +15,7 @@ import { connectionIntentService } from "../services/connection-intents.js";
 import { logActivity } from "../services/activity-log.js";
 import { accessService } from "../services/access.js";
 import type { heartbeatService } from "../services/heartbeat.js";
-import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertBoard, assertCompanyAccess, companyOwnerAgentHasPermission } from "./authz.js";
 import { exportGitHubOperationCredentials } from "../services/github-operation-credentials.js";
 
 function bearer(req: Request) {
@@ -152,6 +152,7 @@ export function connectionIntentBoardRoutes(db: Db, heartbeat: Heartbeat) {
 
   async function canManageCompanyConnections(req: Request, companyId: string) {
     if (bypassCurrentMembershipCheck(req)) return true;
+    if (await companyOwnerAgentHasPermission(req, access, companyId, "tools:manage_connections")) return true;
     return Boolean(req.actor.userId && await access.hasPermission(
       companyId,
       "user",

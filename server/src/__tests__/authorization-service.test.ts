@@ -16,7 +16,7 @@ import {
   projects,
   userInboxAgentPolicies,
 } from "@tickernelz/wardmote-db";
-import { LOW_TRUST_REVIEW_PRESET, type PermissionKey } from "@tickernelz/wardmote-shared";
+import { LOW_TRUST_REVIEW_PRESET, PERMISSION_KEYS, type PermissionKey } from "@tickernelz/wardmote-shared";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -2014,6 +2014,51 @@ describeEmbeddedPostgres("authorization service", () => {
         scope: { targetAgentId: paused.target.id, requiresChangeGrant: true },
       });
       expect(pausedDecision.reason).not.toBe("allow_agent_role_ceo");
+    });
+
+    it("grants every company permission key to a CEO principal without membership or grants, and none to a non-CEO agent", async () => {
+      const f = await ceoFixture();
+      const authz = authorizationService(db);
+      for (const permissionKey of PERMISSION_KEYS) {
+        const ceo = await authz.decidePrincipalGrant({
+          companyId: f.company.id, principalType: "agent", principalId: f.ceo.id, action: permissionKey, permissionKey,
+        });
+        expect(ceo, permissionKey).toMatchObject({ allowed: true, reason: "allow_agent_role_ceo" });
+        const engineer = await authz.decidePrincipalGrant({
+          companyId: f.company.id, principalType: "agent", principalId: f.engineer.id, action: permissionKey, permissionKey,
+        });
+        expect(engineer.allowed, permissionKey).toBe(false);
+      }
+      const foreign = await authz.decidePrincipalGrant({
+        companyId: f.otherCompany.id, principalType: "agent", principalId: f.ceo.id,
+        action: "tools:manage_connections", permissionKey: "tools:manage_connections",
+      });
+      expect(foreign.allowed).toBe(false);
+      const paused = await ceoFixture("paused");
+      const pausedGrant = await authz.decidePrincipalGrant({
+        companyId: paused.company.id, principalType: "agent", principalId: paused.ceo.id,
+        action: "tools:manage_connections", permissionKey: "tools:manage_connections",
+      });
+      expect(pausedGrant.allowed).toBe(false);
+    });
+
+    it("keeps a low-trust review boundary on a CEO agent instead of owner-equivalent access", async () => {
+      const f = await ceoFixture();
+      const boundary = await createProject(db, f.company.id, "Boundary");
+      await db.update(agents).set({
+        permissions: {
+          trustPreset: "low_trust_review",
+          authorizationPolicy: { trustBoundary: { mode: "low_trust_review", companyId: f.company.id, projectIds: [boundary.id] } },
+        },
+      }).where(eq(agents.id, f.ceo.id));
+      const decision = await authorizationService(db).decide({
+        actor: f.actorFor(f.ceo.id),
+        action: "agent_instructions:update",
+        resource: { type: "agent", companyId: f.company.id, agentId: f.target.id },
+        scope: { targetAgentId: f.target.id, requiresChangeGrant: true },
+      });
+      expect(decision.reason).not.toBe("allow_agent_role_ceo");
+      expect(decision.allowed).toBe(false);
     });
   });
 

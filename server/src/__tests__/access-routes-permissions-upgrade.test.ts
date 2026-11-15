@@ -61,6 +61,26 @@ async function createApp(db: Db, companyId: string, userId: string) {
   return app;
 }
 
+async function createAppAs(db: Db, actor: Express.Request["actor"]) {
+  const { accessRoutes } = await import("../routes/access.js");
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.actor = actor;
+    next();
+  });
+  app.use("/api", accessRoutes(db, {
+    deploymentMode: "authenticated",
+    deploymentExposure: "private",
+    bindHost: "127.0.0.1",
+    allowedHostnames: [],
+  }));
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    res.status(err.status ?? 500).json({ error: err.message ?? "Internal server error" });
+  });
+  return app;
+}
+
 async function createCompanyWithOwner(db: Db) {
   const company = await db
     .insert(companies)
@@ -132,6 +152,41 @@ describeEmbeddedPostgres("access routes permissions upgrade compatibility", () =
       .then((rows) => rows[0]!);
     expect(unchanged.membershipRole).toBe("owner");
   }, 10_000);
+
+  it("lets the CEO agent set any grant on an agent member and refuses a non-owner board user", async () => {
+    const { company } = await createCompanyWithOwner(db);
+    const [ceo, worker] = await db
+      .insert(agents)
+      .values(["ceo", "engineer"].map((role) => ({
+        companyId: company.id, name: role, role, status: "idle", adapterType: "process", adapterConfig: {}, runtimeConfig: {}, permissions: {},
+      })))
+      .returning();
+    const workerMember = await db
+      .insert(companyMemberships)
+      .values({ companyId: company.id, principalType: "agent", principalId: worker!.id, status: "active", membershipRole: "member" })
+      .returning()
+      .then((rows) => rows[0]!);
+    const operatorId = `operator-${randomUUID()}`;
+    await db.insert(companyMemberships).values({ companyId: company.id, principalType: "user", principalId: operatorId, status: "active", membershipRole: "operator" });
+    await db.insert(principalPermissionGrants).values({ companyId: company.id, principalType: "user", principalId: operatorId, permissionKey: "users:manage_permissions" });
+    const grants = { grants: [{ permissionKey: "tools:manage_connections" }] };
+
+    const operator = await request(await createAppAs(db, {
+      type: "board", userId: operatorId, source: "session", companyIds: [company.id],
+      memberships: [{ companyId: company.id, membershipRole: "operator", status: "active" }], isInstanceAdmin: false,
+    } as never)).patch(`/api/companies/${company.id}/members/${workerMember.id}/permissions`).send(grants);
+    expect(operator.status, JSON.stringify(operator.body)).toBe(403);
+
+    const res = await request(await createAppAs(db, {
+      type: "agent", agentId: ceo!.id, companyId: company.id, agentRole: "ceo", agentStatus: "idle", source: "agent_jwt",
+    } as never)).patch(`/api/companies/${company.id}/members/${workerMember.id}/permissions`).send(grants);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const stored = await db
+      .select({ permissionKey: principalPermissionGrants.permissionKey })
+      .from(principalPermissionGrants)
+      .where(and(eq(principalPermissionGrants.principalType, "agent"), eq(principalPermissionGrants.principalId, worker!.id)));
+    expect(stored).toEqual([{ permissionKey: "tools:manage_connections" }]);
+  }, 20_000);
 
   it("keeps custom grants when the role-only member route changes a member role", async () => {
     const { company, owner } = await createCompanyWithOwner(db);

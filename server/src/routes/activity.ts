@@ -4,7 +4,7 @@ import type { Db } from "@tickernelz/wardmote-db";
 import { normalizeIssueIdentifier } from "@tickernelz/wardmote-shared";
 import { validate } from "../middleware/validate.js";
 import { activityService } from "../services/activity.js";
-import { assertAuthenticated, assertBoard, assertCompanyAccess, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
+import { assertAuthenticated, assertBoard, assertCompanyAccess, companyOwnerAgentHasPermission, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 import { accessService, heartbeatService, issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
 import { badRequest, forbidden } from "../errors.js";
@@ -140,6 +140,7 @@ export function activityRoutes(db: Db) {
   const runRedactions = createRunSecretRedactionRegistry(db);
 
   async function hasAgentAuditPermission(req: import("express").Request, companyId: string) {
+    if (await companyOwnerAgentHasPermission(req, access, companyId, "audit:view_agent_actions")) return true;
     if (req.actor.type !== "board") return false;
     if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return true;
     return Boolean(

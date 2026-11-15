@@ -6,7 +6,7 @@ import { forbidden, notFound } from "../errors.js";
 import { accessService, instanceSettingsService, logActivity } from "../services/index.js";
 import { builtInAgentService } from "../services/built-in-agents.js";
 import { authorizationDeniedDetails } from "../services/authorization.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyAccess, companyOwnerAgentHasPermission, getActorInfo } from "./authz.js";
 import type { BuiltInAgentState } from "../services/built-in-agents.js";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -95,6 +95,7 @@ export function builtInAgentRoutes(db: Db) {
 
   async function assertCanControlBuiltInRoutine(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
+    if (await companyOwnerAgentHasPermission(req, access, companyId, "tasks:assign")) return;
     if (req.actor.type !== "board") {
       throw forbidden("Only board operators can control built-in routines.");
     }
