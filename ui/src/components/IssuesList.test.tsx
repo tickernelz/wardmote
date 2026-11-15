@@ -2854,22 +2854,33 @@ describe("IssuesList", () => {
   });
 
   it.each([
-    ["list view", {}, undefined, true],
-    ["the Live filter", { liveOnly: true }, undefined, false],
-    ["an active search", {}, "needle", false],
-    ["board view", { viewMode: "board" }, undefined, false],
-  ] as const)("renders the list header slot only when appropriate: %s", async (_label, storedViewState, search, visible) => {
+    ["list view", {}, undefined, "list", "none"],
+    ["the Live filter", { liveOnly: true }, undefined, null, "none"],
+    ["an active search", {}, "needle", "list", "needle:yes,other:no"],
+    ["a status filter", { statuses: ["todo"] }, undefined, "list", "needle:yes,other:no"],
+    ["board view", { viewMode: "board" }, undefined, "board", "none"],
+  ] as const)("hands the header the view and the board filters: %s", async (_label, storedViewState, search, view, matches) => {
     localStorage.setItem("wardmote:test-issues:company-1", JSON.stringify(storedViewState));
+    const needle = createIssue({ id: "issue-a", title: "needle task", status: "todo" });
+    const other = createIssue({ id: "issue-b", title: "other task", status: "in_progress" });
 
     const { root } = renderWithQueryClient(
       <IssuesList
-        issues={[createIssue({ id: "issue-a", title: "needle task" })]}
+        issues={[needle]}
         agents={[]}
         projects={[]}
         viewStateKey="wardmote:test-issues"
         rowPresentation="task"
         initialSearch={search}
-        listHeader={<div data-testid="list-header">Live now</div>}
+        listHeader={({ viewMode, issueFilter }) => (
+          <div
+            data-testid="list-header"
+            data-view={viewMode}
+            data-matches={issueFilter ? `needle:${issueFilter(needle) ? "yes" : "no"},other:${issueFilter(other) ? "yes" : "no"}` : "none"}
+          >
+            Live now
+          </div>
+        )}
         onUpdateIssue={() => undefined}
       />,
       container,
@@ -2881,7 +2892,9 @@ describe("IssuesList", () => {
           || container.textContent?.includes("No tasks match the current filters or search."),
       ).toBe(true);
     });
-    expect(container.querySelector("[data-testid='list-header']") !== null).toBe(visible);
+    const header = container.querySelector<HTMLElement>("[data-testid='list-header']");
+    expect(header?.dataset.view ?? null).toBe(view);
+    if (header) expect(header.dataset.matches).toBe(matches);
 
     act(() => {
       root.unmount();
@@ -2930,7 +2943,7 @@ describe("IssuesList", () => {
         agents={[]}
         projects={[]}
         viewStateKey="wardmote:test-issues"
-        listHeader={<div data-testid="list-header">Live now</div>}
+        listHeader={() => <div data-testid="list-header">Live now</div>}
         onUpdateIssue={() => undefined}
       />
     );

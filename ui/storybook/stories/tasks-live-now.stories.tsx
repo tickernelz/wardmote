@@ -1,11 +1,13 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { Issue } from "@tickernelz/wardmote-shared";
 import type { LiveRunForIssue } from "@/api/heartbeats";
-import { TasksLiveNowSection, liveNowCollapsedStorageKey } from "@/components/TasksLiveNowSection";
+import { TasksLiveNowSection, liveNowCollapsedStorageKey, liveNowDensityStorageKey } from "@/components/TasksLiveNowSection";
 import { storybookIssues } from "../fixtures/wardmoteData";
 
 const EXPANDED_COMPANY_ID = "company-live-now-expanded";
 const COLLAPSED_COMPANY_ID = "company-live-now-collapsed";
+const COMPACT_COMPANY_ID = "company-live-now-compact";
+const BOARD_COMPANY_ID = "company-live-now-board";
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const seconds = (count: number) => count * 1000;
@@ -114,10 +116,10 @@ const liveRuns: LiveRunForIssue[] = [
   }),
 ];
 
-function LiveNowStage({ companyId }: { companyId: string }) {
+function LiveNowStage({ companyId, view = "list" }: { companyId: string; view?: "list" | "board" }) {
   return (
     <div className="min-h-screen bg-bg p-4 text-ink sm:p-6">
-      <TasksLiveNowSection companyId={companyId} liveRuns={liveRuns} issues={issues} />
+      <TasksLiveNowSection companyId={companyId} liveRuns={liveRuns} issues={issues} view={view} />
     </div>
   );
 }
@@ -136,6 +138,18 @@ export const Expanded: Story = {
   beforeEach: () => {
     window.localStorage.removeItem(liveNowCollapsedStorageKey(EXPANDED_COMPANY_ID));
   },
+};
+
+export const Compact: Story = {
+  args: { companyId: COMPACT_COMPANY_ID },
+  beforeEach: () => {
+    window.localStorage.setItem(liveNowDensityStorageKey(COMPACT_COMPANY_ID), "compact");
+    return () => window.localStorage.removeItem(liveNowDensityStorageKey(COMPACT_COMPANY_ID));
+  },
+};
+
+export const Board: Story = {
+  args: { companyId: BOARD_COMPANY_ID, view: "board" },
 };
 
 export const Collapsed: Story = {

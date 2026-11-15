@@ -61,6 +61,7 @@ import { cn, formatDurationMs, formatTokens } from "../lib/utils";
 import { SHOW_TASK_PRIORITY_UI } from "../lib/ui-flags";
 import { collectSubtreeLiveCounts, isLiveIssueRun } from "../lib/liveIssueIds";
 import type { LiveRunForIssue } from "../api/heartbeats";
+import { buildLiveNowEntries } from "./live-now/useLiveNowModel";
 import {
   InboxIssueMetaLeading,
   InboxIssueTrailingColumns,
@@ -636,8 +637,13 @@ interface IssuesListProps {
    * the merged Tasks surface uses to put its Views control there (PAP-670).
    */
   toolbarContext?: ReactNode;
-  listHeader?: ReactNode;
+  listHeader?: (context: IssuesListHeaderContext) => ReactNode;
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
+}
+
+export interface IssuesListHeaderContext {
+  viewMode: "list" | "board";
+  issueFilter: ((issue: Issue) => boolean) | null;
 }
 
 function LegacyIssuesToolbar({ context, search, controls }: CollectionToolbarProps) {
@@ -1411,6 +1417,32 @@ function StreamlinedIssuesList({
   }, [checklistAffordanceEnabled, filtered, issueById, viewState.nestingEnabled]);
 
   const activeFilterCount = countActiveIssueFilters(viewState, enableRoutineVisibilityFilter);
+  const headerIssueFilter = useMemo(() => {
+    if (activeFilterCount === 0 && !issueSearchActive) return null;
+    const terms = localSearchTerms(issueSearchText);
+    const searchHitIds = issueSearchActive ? new Set(searchScopedIssues.map((issue) => issue.id)) : null;
+    return (issue: Issue) =>
+      applyIssueFilters([issue], viewState, currentUserId, enableRoutineVisibilityFilter, liveIssueIds, issueFilterContext).length > 0
+      && (searchHitIds === null
+        || searchHitIds.has(issue.id)
+        || (issueMatchesLocalSearchTerms(issue, terms) && issueMatchesSearchFilters(issue, parsedIssueSearch.filters)));
+  }, [
+    activeFilterCount,
+    currentUserId,
+    enableRoutineVisibilityFilter,
+    issueFilterContext,
+    issueSearchActive,
+    issueSearchText,
+    liveIssueIds,
+    parsedIssueSearch.filters,
+    searchScopedIssues,
+    viewState,
+  ]);
+  const boardLiveRunsByIssueId = useMemo(() => {
+    if (viewState.viewMode !== "board") return undefined;
+    const statusById = new Map(sourceIssues.map((issue) => [issue.id, issue.status]));
+    return new Map(buildLiveNowEntries(liveRuns, statusById).map((entry) => [entry.issueId, entry.runs]));
+  }, [liveRuns, sourceIssues, viewState.viewMode]);
   const boardHighVolume = viewState.viewMode === "board" && filtered.length > KANBAN_BOARD_HIGH_VOLUME_THRESHOLD;
   const boardCompactCards =
     viewState.boardCardDensity === "compact"
@@ -1914,8 +1946,7 @@ function StreamlinedIssuesList({
   }, [showsListRows]);
 
   const listHeaderRef = useRef<HTMLDivElement | null>(null);
-  const showListHeader = Boolean(listHeader) && viewState.viewMode === "list" && !viewState.liveOnly
-    && normalizedIssueSearch.length === 0;
+  const showListHeader = Boolean(listHeader) && !viewState.liveOnly;
   useLayoutEffect(() => {
     const header = listHeaderRef.current;
     if (!showListHeader || !header || typeof ResizeObserver === "undefined") return;
@@ -2364,7 +2395,9 @@ function StreamlinedIssuesList({
         )}
       />
 
-      {showListHeader ? <div ref={listHeaderRef}>{listHeader}</div> : null}
+      {showListHeader && listHeader ? (
+        <div ref={listHeaderRef}>{listHeader({ viewMode: viewState.viewMode, issueFilter: headerIssueFilter })}</div>
+      ) : null}
       {(isLoading || externalObjectFilterLoading) && <PageSkeleton variant="issues-list" />}
       {error && <p className="text-sm text-bad">{error.message}</p>}
       {remoteIssueSearchActive && searchedIssues.length === ISSUE_SEARCH_RESULT_LIMIT && (
@@ -2391,6 +2424,7 @@ function StreamlinedIssuesList({
           issues={filtered}
           agents={agents}
           liveIssueIds={liveIssueIds}
+          liveRunsByIssueId={boardLiveRunsByIssueId}
           compactCards={boardCompactCards}
           collapsedStatuses={boardCollapsedStatuses}
           initialVisibleCount={viewState.boardColumnPageSize}
