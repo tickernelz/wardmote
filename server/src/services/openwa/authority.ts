@@ -810,7 +810,7 @@ function sendersMayUseWindow(roles: readonly (string | null)[]): boolean {
 
 const WINDOW_ANCESTRY_MAX_DEPTH = 64;
 
-/** Root of the usable live autonomy window over the issue or one of its ancestors, in one query. */
+/** Root of the usable live autonomy window over the issue or one of its ancestors. */
 export async function openwaLiveWindowRoot(db: Db, companyId: string, issueId: string): Promise<string | null> {
   const [anyLive] = await db
     .select({ id: issueAutonomyWindows.id })
