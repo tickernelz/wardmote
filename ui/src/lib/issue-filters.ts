@@ -37,6 +37,7 @@ export type IssueFilterState = {
    */
   externalObjectStatuses: string[];
   hideRoutineExecutions: boolean;
+  showHiddenTasks: boolean;
 };
 
 export const defaultIssueFilterState: IssueFilterState = {
@@ -50,6 +51,7 @@ export const defaultIssueFilterState: IssueFilterState = {
   liveOnly: false,
   externalObjectStatuses: [],
   hideRoutineExecutions: false,
+  showHiddenTasks: false,
 };
 
 export const externalObjectFilterOrder = [
@@ -116,6 +118,7 @@ export function normalizeIssueFilterState(value: unknown): IssueFilterState {
     liveOnly: candidate.liveOnly === true,
     externalObjectStatuses: normalizeIssueFilterValueArray(candidate.externalObjectStatuses),
     hideRoutineExecutions: candidate.hideRoutineExecutions === true,
+    showHiddenTasks: candidate.showHiddenTasks === true,
   };
 }
 
@@ -270,6 +273,7 @@ export function applyIssueFilters(
 export function countActiveIssueFilters(
   state: IssueFilterState,
   enableRoutineVisibilityFilter = false,
+  enableHiddenTasksFilter = false,
 ): number {
   let count = 0;
   if (state.statuses.length > 0) count += 1;
@@ -282,5 +286,6 @@ export function countActiveIssueFilters(
   if (state.liveOnly) count += 1;
   if (state.externalObjectStatuses.length > 0) count += 1;
   if (enableRoutineVisibilityFilter && state.hideRoutineExecutions) count += 1;
+  if (enableHiddenTasksFilter && state.showHiddenTasks) count += 1;
   return count;
 }

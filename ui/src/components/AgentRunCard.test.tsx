@@ -4,11 +4,7 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ActiveAgentsPanel, AgentRunCard } from "./ActiveAgentsPanel";
-
-const mockHeartbeatsApi = vi.hoisted(() => ({
-  liveRunsForCompany: vi.fn(),
-}));
+import { AgentRunCard } from "./AgentRunCard";
 
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -23,23 +19,12 @@ vi.mock("@/lib/router", () => ({
   ),
 }));
 
-vi.mock("../api/heartbeats", () => ({
-  heartbeatsApi: mockHeartbeatsApi,
-}));
-
 vi.mock("../api/issues", () => ({
   issuesApi: mockIssuesApi,
 }));
 
 vi.mock("./RunChatSurface", () => ({
   RunChatSurface: () => <div>Run output</div>,
-}));
-
-vi.mock("./transcript/useLiveRunTranscripts", () => ({
-  useLiveRunTranscripts: () => ({
-    transcriptByRun: new Map(),
-    hasOutputForRun: () => false,
-  }),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,20 +35,6 @@ async function flushReact() {
     await Promise.resolve();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   });
-}
-
-async function waitForMicrotaskAssertion(assertion: () => void, attempts = 20) {
-  let lastError: unknown;
-  for (let index = 0; index < attempts; index += 1) {
-    await flushReact();
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError;
 }
 
 function createRun(index: number) {
@@ -95,37 +66,12 @@ function withQueryClient(node: ReactNode) {
   );
 }
 
-function createIssue(id: string, identifier: string, title: string) {
-  return {
-    id,
-    companyId: "company-1",
-    identifier,
-    title,
-    description: null,
-    status: "in_progress",
-    priority: "medium",
-    assigneeAgentId: null,
-    assigneeUserId: null,
-    parentId: null,
-    projectId: null,
-    projectWorkspaceId: null,
-    executionWorkspaceId: null,
-    goalId: null,
-    labels: [],
-    blockedByIssueIds: [],
-    blocksIssueIds: [],
-    createdAt: "2026-04-24T12:00:00.000Z",
-    updatedAt: "2026-04-24T12:00:00.000Z",
-  };
-}
-
-describe("ActiveAgentsPanel", () => {
+describe("AgentRunCard", () => {
   let container: HTMLDivElement;
 
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
-    mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([1, 2, 3, 4, 5].map(createRun));
     mockIssuesApi.get.mockRejectedValue(new Error("Issue not found"));
     mockIssuesApi.getAgentTodo.mockResolvedValue({ snapshot: null });
   });
@@ -134,160 +80,6 @@ describe("ActiveAgentsPanel", () => {
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
-  });
-
-  it("links hidden active/recent runs to the full live dashboard", async () => {
-    const root = createRoot(container);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <ActiveAgentsPanel companyId="company-1" />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-
-    expect(mockHeartbeatsApi.liveRunsForCompany).toHaveBeenCalledWith("company-1", {
-      minCount: 4,
-      limit: undefined,
-      distinctTasks: false,
-    });
-
-    const moreLink = [...container.querySelectorAll("a")].find((anchor) =>
-      anchor.textContent?.includes("more active/recent"),
-    );
-    expect(moreLink?.getAttribute("href")).toBe("/dashboard/live");
-    expect(container.textContent).not.toContain("Run output");
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
-
-  it("shows each linked task once on the dashboard while keeping distinct taskless runs", async () => {
-    const repeatedIssueId = "issue-repeated";
-    mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([
-      createIssueRun(1, repeatedIssueId),
-      { ...createIssueRun(2, repeatedIssueId), status: "succeeded", finishedAt: "2026-04-24T11:00:00.000Z" },
-      createIssueRun(3, "issue-other"),
-      createRun(4),
-      createRun(5),
-      createRun(6),
-    ]);
-
-    const root = createRoot(container);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <ActiveAgentsPanel companyId="company-1" dedupeLinkedTasks />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-
-    expect(mockHeartbeatsApi.liveRunsForCompany).toHaveBeenCalledWith("company-1", {
-      minCount: 4,
-      limit: undefined,
-      distinctTasks: true,
-    });
-    expect([...container.querySelectorAll(".dashboard-agent-card")].map((card) =>
-      card.querySelector('a[aria-label$=". View run"]')?.getAttribute("href"),
-    )).toEqual([
-      "/agents/agent-1/runs/run-1",
-      "/agents/agent-3/runs/run-3",
-      "/agents/agent-4/runs/run-4",
-      "/agents/agent-5/runs/run-5",
-    ]);
-    expect(container.textContent).toContain("1 more active/recent run");
-
-    await act(async () => root.unmount());
-  });
-
-  it("can request the full live dashboard page limit without a hidden-runs link", async () => {
-    mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([
-      createIssueRun(1, "issue-repeated"),
-      { ...createIssueRun(2, "issue-repeated"), status: "succeeded" },
-    ]);
-    const root = createRoot(container);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <ActiveAgentsPanel
-            companyId="company-1"
-            minRunCount={50}
-            fetchLimit={50}
-            cardLimit={50}
-            queryScope="dashboard-live"
-            showMoreLink={false}
-          />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-
-    expect(mockHeartbeatsApi.liveRunsForCompany).toHaveBeenCalledWith("company-1", {
-      minCount: 50,
-      limit: 50,
-      distinctTasks: false,
-    });
-    expect(container.textContent).not.toContain("more active/recent");
-    expect(container.textContent).not.toContain("Run output");
-    expect(container.querySelectorAll(".dashboard-agent-card")).toHaveLength(2);
-
-    await act(async () => {
-      root.unmount();
-    });
-  });
-
-  it("loads exact visible run issues so task names render even when the issue list page would miss them", async () => {
-    mockHeartbeatsApi.liveRunsForCompany.mockResolvedValue([
-      createIssueRun(1, "65274215-0000-4000-8000-000000000000"),
-    ]);
-    mockIssuesApi.get.mockResolvedValue(createIssue(
-      "65274215-0000-4000-8000-000000000000",
-      "PAP-3562",
-      "Phase 4B: Implement LLM Wiki distillation UI",
-    ));
-
-    const root = createRoot(container);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={queryClient}>
-          <ActiveAgentsPanel companyId="company-1" />
-        </QueryClientProvider>,
-      );
-    });
-    await flushReact();
-
-    await waitForMicrotaskAssertion(() => {
-      expect(mockIssuesApi.get).toHaveBeenCalledWith("65274215-0000-4000-8000-000000000000");
-      const issueLink = [...container.querySelectorAll("a")].find((anchor) =>
-        anchor.textContent?.includes("Phase 4B"),
-      );
-      expect(issueLink?.textContent).toContain("Phase 4B: Implement LLM Wiki distillation UI");
-      expect(issueLink?.textContent).toContain("PAP-3562");
-      expect(issueLink?.getAttribute("href")).toBe("/issues/PAP-3562");
-    });
-
-    await act(async () => {
-      root.unmount();
-    });
   });
 
   it("keeps run outcomes distinct from the linked task status", async () => {

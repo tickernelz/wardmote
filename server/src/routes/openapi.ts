@@ -5215,13 +5215,14 @@ registry.registerPath({
   tags: ["issues"],
   summary: "List issues in a company",
   description:
-    "Use `view=compact` for the board issue-list row contract. The default response remains the broad compatibility contract. Pass `includeConversations=true` to also return the caller's own persistent conversation threads, which are hidden from every other board query; rows belonging to another agent or user are never included.",
+    "Use `view=compact` for the board issue-list row contract. The default response remains the broad compatibility contract. Pass `includeConversations=true` to also return the caller's own persistent conversation threads, which are hidden from every other board query; rows belonging to another agent or user are never included. Pass `includeHidden=true` to also return tasks hidden from the list (`hiddenAt` set).",
   request: {
     params: z.object({ companyId: z.string() }),
     query: z
       .object({
         view: z.enum(["compact"]).optional(),
         includeConversations: z.enum(["true", "1"]).optional(),
+        includeHidden: z.enum(["true", "1"]).optional(),
       })
       .passthrough(),
   },

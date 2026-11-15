@@ -14,12 +14,20 @@ import { findIssuesScrollContainer } from "./IssuesList";
 import { LIVE_NOW_GROUP_LABEL, LiveNowBoardBand } from "./live-now/LiveNowBoardBand";
 import { LiveNowRow, type LiveNowDensity } from "./live-now/LiveNowRow";
 import { LiveNowPausedRow } from "./live-now/LiveNowPaused";
-import { LIVE_NOW_HEALTH_POSE, type LiveNowGroup, type LiveNowHealth } from "./live-now/live-now-health";
+import { LIVE_NOW_HEARTBEAT_LABEL, LiveNowHeartbeatRow } from "./live-now/LiveNowHeartbeat";
+import {
+  LIVE_NOW_HEALTH_POSE,
+  type LiveNowGroup,
+  type LiveNowHealth,
+  type LiveNowHealthSignal,
+} from "./live-now/live-now-health";
 import {
   resolveLiveNowParentPath,
   useLiveNowModel,
+  type LiveNowHeartbeatItem,
   type LiveNowItem,
   type LiveNowPausedItem,
+  type LiveNowRunSet,
 } from "./live-now/useLiveNowModel";
 
 const MAX_VISIBLE_ANCESTORS = 3;
@@ -132,7 +140,7 @@ export function TasksLiveNowSection({
   const listId = useId();
 
   const pausedTasks = usePausedTasks(companyId);
-  const { items, pausedItems, loadedById, detailById, failedIds } = useLiveNowModel(liveRuns, issues, pausedTasks);
+  const { items, heartbeats, pausedItems, loadedById, detailById, failedIds } = useLiveNowModel(liveRuns, issues, pausedTasks);
   const density: LiveNowDensity = storedDensity ?? (desktop ? "comfortable" : "compact");
 
   const passesFilter = (issue: Issue | null) => !issueFilter || issue === null || issueFilter(issue);
@@ -143,11 +151,13 @@ export function TasksLiveNowSection({
   const visiblePaused = showFiltered ? pausedItems : pausedItems.filter((item) => passesFilter(item.issue));
   const groupCounts: Record<LiveNowGroup, number> = { attention: 0, working: 0, paused: visiblePaused.length };
   for (const item of visible) groupCounts[item.group] += 1;
-  const visibleCount = visible.length + visiblePaused.length;
+  for (const item of heartbeats) groupCounts[item.group] += 1;
+  const visibleCount = visible.length + heartbeats.length + visiblePaused.length;
   const shownGroups = GROUP_ORDER.filter((group) => groupFilter === "all" || groupFilter === group);
   const announcement = useHealthAnnouncement(
     [
       ...items.map((item) => `${item.identifier}\t${item.signal.health}`),
+      ...heartbeats.map((item) => `${item.entry.runs[0]!.agentName} ${LIVE_NOW_HEARTBEAT_LABEL.toLowerCase()}\t${item.signal.health}`),
       ...pausedItems.map((item) => `${item.identifier}\t${item.pause.state}`),
     ].join("\n"),
   );
@@ -181,6 +191,10 @@ export function TasksLiveNowSection({
     />
   );
 
+  const renderHeartbeatRow = (item: LiveNowHeartbeatItem) => (
+    <LiveNowHeartbeatRow key={item.entry.runs[0]!.id} companyId={companyId} item={item} density={density} />
+  );
+
   const renderRow = (item: LiveNowItem) => {
     const { ancestors, complete } = resolveLiveNowParentPath(
       item.issue,
@@ -204,7 +218,7 @@ export function TasksLiveNowSection({
 
   return (
     <div ref={rootRef} data-slot="tasks-live-now" data-view={view}>
-      {items.length + pausedItems.length > 0 ? (
+      {items.length + heartbeats.length + pausedItems.length > 0 ? (
         <section aria-label="Live now" className="pb-4">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
             <button
@@ -225,7 +239,7 @@ export function TasksLiveNowSection({
               <span data-slot="tasks-live-now-count" className="text-xs tabular-nums text-ink-3">
                 {visibleCount}
               </span>
-              {collapsed ? <LiveNowAvatarStrip items={visible} /> : null}
+              {collapsed ? <LiveNowAvatarStrip items={[...visible, ...heartbeats]} /> : null}
               <LiveNowAttentionSummary count={groupCounts.attention} />
             </button>
             <div
@@ -284,6 +298,7 @@ export function TasksLiveNowSection({
               lanes={shownGroups.map((group) => ({
                 group,
                 items: visible.filter((item) => item.group === group),
+                heartbeats: heartbeats.filter((item) => item.group === group),
                 paused: group === "paused" ? visiblePaused : [],
               }))}
               failedIds={failedIds}
@@ -293,23 +308,28 @@ export function TasksLiveNowSection({
             <div id={listId} data-slot="tasks-live-now-list" className="mt-2 overflow-hidden rounded-xl border border-line bg-bg-2">
               {shownGroups.map((group) => {
                 const groupItems = visible.filter((item) => item.group === group);
+                const groupHeartbeats = heartbeats.filter((item) => item.group === group);
                 const groupPaused = group === "paused" ? visiblePaused : [];
-                if (groupItems.length + groupPaused.length === 0) return null;
+                const groupTotal = groupItems.length + groupHeartbeats.length + groupPaused.length;
+                if (groupTotal === 0) return null;
                 const limit = group === "working" && !showAllWorking ? workingLimit : Infinity;
                 const shown = groupItems.slice(0, limit);
-                const more = groupItems.length - shown.length;
+                const shownHeartbeats = groupHeartbeats.slice(0, Math.max(0, limit - shown.length));
+                const running = groupItems.length + groupHeartbeats.length;
+                const more = running - shown.length - shownHeartbeats.length;
                 return (
-                  <section key={group} aria-label={`${LIVE_NOW_GROUP_LABEL[group]}, ${groupItems.length + groupPaused.length}`} data-live-now-group={group}>
+                  <section key={group} aria-label={`${LIVE_NOW_GROUP_LABEL[group]}, ${groupTotal}`} data-live-now-group={group}>
                     <h3 className="flex items-center gap-1.5 border-b border-line bg-bg-3/40 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-ink-2">
                       <span aria-hidden="true" data-live-group={group} className="live-now-group-dot size-1.5 rounded-full" />
                       {LIVE_NOW_GROUP_LABEL[group]}
-                      <span className="font-normal tabular-nums text-ink-3">{groupItems.length + groupPaused.length}</span>
+                      <span className="font-normal tabular-nums text-ink-3">{groupTotal}</span>
                     </h3>
                     <ul>
                       {shown.map(renderRow)}
+                      {shownHeartbeats.map(renderHeartbeatRow)}
                       {groupPaused.map(renderPausedRow)}
                     </ul>
-                    {more > 0 || (group === "working" && showAllWorking && groupItems.length > workingLimit) ? (
+                    {more > 0 || (group === "working" && showAllWorking && running > workingLimit) ? (
                       <button
                         type="button"
                         className="w-full border-t border-line px-3 py-2 text-center text-xs text-ink-3 outline-none hover:bg-bg-3/40 hover:text-ink focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
@@ -369,7 +389,7 @@ function LiveNowAttentionSummary({ count }: { count: number }) {
   );
 }
 
-function LiveNowAvatarStrip({ items }: { items: readonly LiveNowItem[] }) {
+function LiveNowAvatarStrip({ items }: { items: readonly { entry: LiveNowRunSet; signal: LiveNowHealthSignal }[] }) {
   const agents = new Map<string, { run: LiveRunForIssue; health: LiveNowHealth }>();
   for (const item of items) {
     for (const run of item.entry.runs) {

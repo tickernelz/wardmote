@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, Clock, GitBranch, Loader2, MessageSquare, MoreHorizontal, Pause, PauseCircle, ScrollText, Square, TriangleAlert } from "lucide-react";
 import type { Issue, RunModelFallbackState } from "@tickernelz/wardmote-shared";
 import { Link } from "@/lib/router";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -41,7 +42,7 @@ import { queryKeys } from "../../lib/queryKeys";
 import { cn, formatDurationMs } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 import { LiveNowTodoLine } from "./LiveNowTodoLine";
-import type { LiveNowAncestor, LiveNowEntry, LiveNowItem } from "./useLiveNowModel";
+import type { LiveNowAncestor, LiveNowItem, LiveNowRunSet } from "./useLiveNowModel";
 import {
   LIVE_NOW_HEALTH_POSE,
   describeLiveActivity,
@@ -58,7 +59,7 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 /** Time since the task's first run started; only this text re-renders every second. */
-export function LiveNowElapsed({ entry, className }: { entry: LiveNowEntry; className?: string }) {
+export function LiveNowElapsed({ entry, className }: { entry: LiveNowRunSet; className?: string }) {
   const startedAt = entry.earliestStartedAt;
   useSecondTick(startedAt !== null);
   const text = startedAt ? formatDurationMs(Math.max(0, Date.now() - new Date(startedAt).getTime())) : "Queued";
@@ -106,22 +107,28 @@ export function LiveNowHealthChip({ signal, className }: { signal: LiveNowHealth
   );
 }
 
-function useLiveNowStop(entry: LiveNowEntry, companyId: string, onStopping: (message: string) => void) {
+/** Cancels a live run and refreshes the live lists that show it. */
+export function useLiveNowStop(
+  run: LiveRunForIssue,
+  issueId: string | null,
+  companyId: string,
+  onStopping: (message: string) => void,
+) {
   const queryClient = useQueryClient();
-  const primary = entry.runs[0]!;
   return useMutation({
-    mutationFn: () => heartbeatsApi.cancel(primary.id),
+    mutationFn: () => heartbeatsApi.cancel(run.id),
     onSuccess: () => {
-      onStopping(`Stopping ${primary.agentName}'s run`);
+      onStopping(`Stopping ${run.agentName}'s run`);
       void queryClient.invalidateQueries({ queryKey: queryKeys.liveRuns(companyId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.liveRuns(entry.issueId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.activeRun(entry.issueId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.runs(entry.issueId) });
+      if (!issueId) return;
+      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.liveRuns(issueId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.activeRun(issueId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.runs(issueId) });
     },
   });
 }
 
-function LiveNowStopDialog({
+export function LiveNowStopDialog({
   open,
   onOpenChange,
   agentName,
@@ -132,7 +139,7 @@ function LiveNowStopDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   agentName: string;
-  identifier: string;
+  identifier: string | null;
   onConfirm: () => void;
   onPauseInstead?: () => void;
 }) {
@@ -142,7 +149,8 @@ function LiveNowStopDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Stop {agentName}&apos;s run?</AlertDialogTitle>
           <AlertDialogDescription>
-            {identifier} keeps its status and comments. The agent stops mid-turn, so any unsaved work in this run is lost.
+            {identifier ? `${identifier} keeps its status and comments. ` : null}
+            The agent stops mid-turn, so any unsaved work in this run is lost.
             {onPauseInstead ? " Pause instead lets the current step finish, keeps the session, and continues on Resume." : null}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -176,9 +184,9 @@ export function LiveNowMoreMenu({
   onPauseSubtree,
   className,
 }: {
-  entry: LiveNowEntry;
+  entry: LiveNowRunSet;
   identifier: string;
-  taskPath: string;
+  taskPath?: string;
   detailState?: unknown;
   stopping: boolean;
   onSteer?: () => void;
@@ -202,12 +210,14 @@ export function LiveNowMoreMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-48">
-        <DropdownMenuItem asChild>
-          <Link to={taskPath} state={detailState} disableIssueQuicklook className="no-underline">
-            <ArrowUpRight aria-hidden="true" />
-            Open task
-          </Link>
-        </DropdownMenuItem>
+        {taskPath ? (
+          <DropdownMenuItem asChild>
+            <Link to={taskPath} state={detailState} disableIssueQuicklook className="no-underline">
+              <ArrowUpRight aria-hidden="true" />
+              Open task
+            </Link>
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem asChild>
           <Link to={`/agents/${primary.agentId}/runs/${primary.id}`} className="no-underline">
             <ScrollText aria-hidden="true" />
@@ -281,7 +291,7 @@ export function useLiveNowTaskActions({
   const { entry, issue, identifier } = item;
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const stop = useLiveNowStop(entry, companyId, setFeedback);
+  const stop = useLiveNowStop(entry.runs[0]!, entry.issueId, companyId, setFeedback);
   const taskPause = useTaskPause(companyId);
   const pathId = issue?.identifier ?? entry.issueId;
   const task = { issueId: entry.issueId, identifier: issue?.identifier ?? null };
@@ -431,7 +441,7 @@ function LiveNowTitleLink({
   );
 }
 
-function LiveNowAgents({ entry }: { entry: LiveNowEntry }) {
+function LiveNowAgents({ entry }: { entry: LiveNowRunSet }) {
   const primary = entry.runs[0]!;
   const others = [
     ...new Map(entry.runs.slice(1).filter((run) => run.agentId !== primary.agentId).map((run) => [run.agentId, run])).values(),
@@ -448,6 +458,42 @@ function LiveNowAgents({ entry }: { entry: LiveNowEntry }) {
       ))}
       {entry.runs.length > 1 ? <span className="shrink-0">· {entry.runs.length} runs</span> : null}
     </span>
+  );
+}
+
+type LiveNowTaskKind = "hidden" | "routine" | "chat";
+
+const TASK_KIND_TEXT: Record<LiveNowTaskKind, { label: string; title: string }> = {
+  hidden: { label: "Hidden", title: "Hidden from the task list. Filters › Show hidden tasks lists it." },
+  routine: { label: "Routine", title: "A routine run" },
+  chat: { label: "Chat", title: "A chat conversation" },
+};
+
+/** Why a live task may be missing from the list below: hidden, a routine run, or a chat conversation. */
+export function liveNowTaskKind(
+  issue: Pick<Issue, "hiddenAt" | "originKind" | "conversationAgentId"> | null,
+): LiveNowTaskKind | null {
+  if (!issue) return null;
+  if (issue.hiddenAt) return "hidden";
+  if (issue.originKind === "routine_execution") return "routine";
+  if (issue.conversationAgentId || issue.originKind === "chat_channel") return "chat";
+  return null;
+}
+
+export function LiveNowTaskKindTag({ issue, className }: { issue: Issue | null; className?: string }) {
+  const kind = liveNowTaskKind(issue);
+  if (!kind) return null;
+  const text = TASK_KIND_TEXT[kind];
+  return (
+    <Badge
+      variant="outline"
+      data-slot="tasks-live-now-kind"
+      data-task-kind={kind}
+      title={text.title}
+      className={cn("self-center px-1.5 py-0 font-normal text-ink-3", className)}
+    >
+      {text.label}
+    </Badge>
   );
 }
 
@@ -477,7 +523,7 @@ function LiveNowParentPath({ ancestors, truncated }: { ancestors: readonly LiveN
   );
 }
 
-export function LiveNowActivity({ entry, className }: { entry: LiveNowEntry; className?: string }) {
+export function LiveNowActivity({ entry, className }: { entry: LiveNowRunSet; className?: string }) {
   const primary = entry.runs[0]!;
   const activityRun = entry.runs.reduce<LiveRunForIssue>(
     (latest, run) => ((lastLiveActivityMs(run) ?? 0) > (lastLiveActivityMs(latest) ?? 0) ? run : latest),
@@ -585,6 +631,7 @@ export function LiveNowRow({
             {comfortable ? null : <span className="mr-1.5 font-mono text-xs font-normal text-ink-3 sm:hidden">{identifier}</span>}
             {title}
           </LiveNowTitleLink>
+          <LiveNowTaskKindTag issue={issue} />
           {comfortable ? null : (
             <span className="hidden min-w-0 shrink truncate text-xs text-ink-3 sm:inline">{primary.agentName}</span>
           )}

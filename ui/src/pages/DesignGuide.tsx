@@ -156,7 +156,7 @@ import {
   AvatarGroupCount,
 } from "@/components/ui/avatar";
 import { AgentCapsule, AGENT_GRADIENT_COUNT } from "@/components/AgentCapsule";
-import { AgentRunCard } from "@/components/ActiveAgentsPanel";
+import { AgentRunCard } from "@/components/AgentRunCard";
 import { StatusBadge, IssueStatusBadge } from "@/components/StatusBadge";
 import { StatusIcon } from "@/components/StatusIcon";
 import { EnforcementBanner } from "@/components/EnforcementBanner";

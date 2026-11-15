@@ -10,7 +10,7 @@ import {
   type EnvBinding,
   type Environment,
 } from "@tickernelz/wardmote-shared";
-import { ActiveAgentsPanel } from "@/components/ActiveAgentsPanel";
+import { AgentRunCard } from "@/components/AgentRunCard";
 import { AgentConfigForm, type CreateConfigValues } from "@/components/AgentConfigForm";
 import { defaultCreateValues } from "@/components/agent-config-defaults";
 import {
@@ -456,7 +456,6 @@ function StorybookQueryFixtures({ children }: { children: ReactNode }) {
   queryClient.setQueryData(queryKeys.adapters.all, adapterFixtures);
   queryClient.setQueryData(queryKeys.issues.list(COMPANY_ID), storybookIssues);
   queryClient.setQueryData([...queryKeys.issues.list(COMPANY_ID), "with-routine-executions"], storybookIssues);
-  queryClient.setQueryData([...queryKeys.liveRuns(COMPANY_ID), "dashboard", { minRunCount: 4, fetchLimit: undefined }], liveRuns);
   for (const issue of storybookIssues) {
     queryClient.setQueryData(queryKeys.issues.detail(issue.id), issue);
   }
@@ -803,8 +802,12 @@ function AgentManagementStories() {
             <AgentActionsMatrix />
           </Section>
 
-          <Section eyebrow="ActiveAgentsPanel" title="Mixed live, queued, succeeded, and failed agent runs">
-            <ActiveAgentsPanel companyId={COMPANY_ID} />
+          <Section eyebrow="AgentRunCard" title="Mixed live, queued, succeeded, and failed agent runs">
+            <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
+              {liveRuns.map((run) => (
+                <AgentRunCard key={run.id} companyId={COMPANY_ID} run={run} />
+              ))}
+            </div>
           </Section>
 
           <Section eyebrow="agent-config-primitives" title="Individual text, select, toggle, and JSON field types">

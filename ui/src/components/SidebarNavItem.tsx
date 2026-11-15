@@ -103,13 +103,15 @@ export function SidebarNavItem({
 
   // Accessible text equivalent for the collapsed dot indicator. The visible
   // label is `sr-only` in the rail, so the count must be surfaced here.
-  const railStatusText = hasLive
-    ? `${liveCount} live`
-    : hasBadge
-      ? `${badge}${badgeLabel ? ` ${badgeLabel}` : ""}`
-      : alert
-        ? "attention needed"
-        : undefined;
+  const railStatusParts = [
+    hasLive ? `${liveCount} live` : null,
+    hasBadge ? `${badge}${badgeLabel ? ` ${badgeLabel}` : ""}` : null,
+  ].filter((part): part is string => part !== null);
+  const railStatusText = railStatusParts.length > 0
+    ? railStatusParts.join(", ")
+    : alert
+      ? "attention needed"
+      : undefined;
   const railAriaLabel = !rail || (!railStatusText && !trailingLabel)
     ? undefined
     : `${label}${railStatusText ? `, ${railStatusText}` : ""}${trailingLabel ? `, ${trailingLabel}` : ""}`;

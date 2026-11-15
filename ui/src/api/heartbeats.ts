@@ -231,22 +231,8 @@ export const heartbeatsApi = {
     api.get<LiveRunForIssue[]>(`/issues/${issueId}/live-runs`),
   activeRunForIssue: (issueId: string) =>
     api.get<ActiveRunForIssue | null>(`/issues/${issueId}/active-run`),
-  liveRunsForCompany: (
-    companyId: string,
-    options?: number | { minCount?: number; limit?: number; distinctTasks?: boolean },
-  ) => {
-    const searchParams = new URLSearchParams();
-    if (typeof options === "number") {
-      searchParams.set("minCount", String(options));
-    } else if (options) {
-      if (options.minCount)
-        searchParams.set("minCount", String(options.minCount));
-      if (options.limit) searchParams.set("limit", String(options.limit));
-      if (options.distinctTasks) searchParams.set("distinctTasks", "true");
-    }
-    const qs = searchParams.toString();
-    return api.get<LiveRunForIssue[]>(
-      `/companies/${companyId}/live-runs${qs ? `?${qs}` : ""}`,
-    );
-  },
+  liveRunsForCompany: (companyId: string, options?: { limit?: number }) =>
+    api.get<LiveRunForIssue[]>(
+      `/companies/${companyId}/live-runs${options?.limit ? `?limit=${options.limit}` : ""}`,
+    ),
 };

@@ -8972,6 +8972,7 @@ export function issueRoutes(
       updatedSince: rawUpdatedSince,
       includeConversations,
       conversationOwner,
+      includeHidden: req.query.includeHidden === "true" || req.query.includeHidden === "1",
     };
     // readCondition is a Drizzle SQL object with cyclic internal references;
     // actor identity already scopes the coordinator key, so only serializable

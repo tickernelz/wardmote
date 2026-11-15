@@ -10,10 +10,12 @@ import {
   LiveNowMoreMenu,
   LiveNowPauseButton,
   LiveNowStopFlow,
+  LiveNowTaskKindTag,
   useLiveNowTaskActions,
 } from "./LiveNowRow";
 import type { LiveNowGroup } from "./live-now-health";
-import type { LiveNowItem, LiveNowPausedItem } from "./useLiveNowModel";
+import type { LiveNowHeartbeatItem, LiveNowItem, LiveNowPausedItem } from "./useLiveNowModel";
+import { LiveNowHeartbeatCard } from "./LiveNowHeartbeat";
 import { LiveNowPausedCard } from "./LiveNowPaused";
 
 const LANE_CARD_LIMIT = 2;
@@ -33,7 +35,12 @@ export function LiveNowBoardBand({
   listId,
 }: {
   companyId: string;
-  lanes: readonly { group: LiveNowGroup; items: readonly LiveNowItem[]; paused: readonly LiveNowPausedItem[] }[];
+  lanes: readonly {
+    group: LiveNowGroup;
+    items: readonly LiveNowItem[];
+    heartbeats: readonly LiveNowHeartbeatItem[];
+    paused: readonly LiveNowPausedItem[];
+  }[];
   failedIds: ReadonlySet<string>;
   issueLinkState?: unknown;
   listId: string;
@@ -51,6 +58,7 @@ export function LiveNowBoardBand({
           companyId={companyId}
           group={lane.group}
           items={lane.items}
+          heartbeats={lane.heartbeats}
           paused={lane.paused}
           failedIds={failedIds}
           issueLinkState={issueLinkState}
@@ -70,6 +78,7 @@ function LiveNowLane({
   companyId,
   group,
   items,
+  heartbeats,
   paused,
   failedIds,
   issueLinkState,
@@ -77,15 +86,19 @@ function LiveNowLane({
   companyId: string;
   group: LiveNowGroup;
   items: readonly LiveNowItem[];
+  heartbeats: readonly LiveNowHeartbeatItem[];
   paused: readonly LiveNowPausedItem[];
   failedIds: ReadonlySet<string>;
   issueLinkState?: unknown;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const total = items.length + paused.length;
+  const total = items.length + heartbeats.length + paused.length;
   const shown = expanded ? items : items.slice(0, LANE_CARD_LIMIT);
-  const shownPaused = expanded ? paused : paused.slice(0, Math.max(0, LANE_CARD_LIMIT - shown.length));
-  const hidden = total - shown.length - shownPaused.length;
+  const shownHeartbeats = expanded ? heartbeats : heartbeats.slice(0, Math.max(0, LANE_CARD_LIMIT - shown.length));
+  const shownPaused = expanded
+    ? paused
+    : paused.slice(0, Math.max(0, LANE_CARD_LIMIT - shown.length - shownHeartbeats.length));
+  const hidden = total - shown.length - shownHeartbeats.length - shownPaused.length;
   const label = LIVE_NOW_GROUP_LABEL[group];
   return (
     <section
@@ -110,6 +123,9 @@ function LiveNowLane({
               loadFailed={failedIds.has(item.entry.issueId)}
               issueLinkState={issueLinkState}
             />
+          ))}
+          {shownHeartbeats.map((item) => (
+            <LiveNowHeartbeatCard key={item.entry.runs[0]!.id} companyId={companyId} item={item} />
           ))}
           {shownPaused.map((item) => (
             <LiveNowPausedCard key={item.pause.holdId} companyId={companyId} item={item} issueLinkState={issueLinkState} />
@@ -151,6 +167,7 @@ function LiveNowBoardCard({
     >
       <span className="flex items-center gap-2">
         <span className="font-mono text-xs text-ink-3">{identifier}</span>
+        <LiveNowTaskKindTag issue={issue} />
         <LiveNowHealthChip signal={signal} className="ml-auto" />
       </span>
       <Link

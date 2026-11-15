@@ -108,6 +108,35 @@ test("live reorders and new tasks above the reading position do not move it", as
   expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(4);
 });
 
+test("a heartbeat run appearing and ending in Live now above the reading position does not move it", async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const { company } = await seedCompany(request, 90);
+  const agent = await json(await request.post(`/api/companies/${company.id}/agents`, {
+    data: {
+      name: "Heartbeat agent",
+      role: "qa",
+      adapterType: "process",
+      adapterConfig: { command: process.execPath, args: ["-e", "setTimeout(() => {}, 120000)"] },
+    },
+  }));
+  await page.goto(`/${company.issuePrefix}/issues`);
+  await expect(page.locator("[data-issue-row-id]").first()).toBeVisible({ timeout: 30_000 });
+  await scrollListToMiddle(page);
+  const reading = await rowInViewportMiddle(page);
+  const heartbeatRow = page.locator("[data-live-now-kind='heartbeat']");
+
+  const run = await json(await request.post(`/api/agents/${agent.id}/heartbeat/invoke`));
+  await expect(heartbeatRow).toHaveCount(1, { timeout: 30_000 });
+  await expect(heartbeatRow).toContainText("Heartbeat agent");
+  await page.waitForTimeout(500);
+  expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(4);
+
+  await json(await request.post(`/api/heartbeat-runs/${run.id}/cancel`, { data: {} }));
+  await expect(heartbeatRow).toHaveCount(0, { timeout: 30_000 });
+  await page.waitForTimeout(500);
+  expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(4);
+});
+
 for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
   test.describe(`at ${viewport.width}px`, () => {
     test.use({ viewport });

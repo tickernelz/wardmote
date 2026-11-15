@@ -2539,6 +2539,54 @@ describe("IssuesList", () => {
     });
   });
 
+  it("reports Show hidden tasks to the page that fetches them, and offers it nowhere else", async () => {
+    const onShowHiddenTasksChange = vi.fn();
+    const hiddenToggle = () => Array.from(document.body.querySelectorAll("label")).find(
+      (label) => label.textContent?.includes("Show hidden tasks"),
+    );
+    const openFilters = async () => {
+      await act(async () => {
+        Array.from(document.body.querySelectorAll("button"))
+          .find((button) => button.getAttribute("title") === "Filter")
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
+    };
+
+    const plain = renderWithQueryClient(
+      <IssuesList issues={[createIssue()]} agents={[]} projects={[]} viewStateKey="wardmote:test-issues-plain" onUpdateIssue={() => undefined} />,
+      container,
+    );
+    await openFilters();
+    await waitForAssertion(() => expect(document.body.textContent).toContain("Live runs only"));
+    expect(hiddenToggle()).toBeUndefined();
+    act(() => plain.root.unmount());
+
+    const { root } = renderWithQueryClient(
+      <IssuesList
+        issues={[createIssue()]}
+        agents={[]}
+        projects={[]}
+        viewStateKey="wardmote:test-issues-hidden"
+        onShowHiddenTasksChange={onShowHiddenTasksChange}
+        onUpdateIssue={() => undefined}
+      />,
+      container,
+    );
+    await waitForAssertion(() => expect(onShowHiddenTasksChange).toHaveBeenLastCalledWith(false));
+    await openFilters();
+    await waitForAssertion(() => expect(hiddenToggle()).not.toBeUndefined());
+    await act(async () => {
+      hiddenToggle()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await waitForAssertion(() => expect(onShowHiddenTasksChange).toHaveBeenLastCalledWith(true));
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
   it("blurs the search input on Enter without clearing the query", async () => {
     const { root } = renderWithQueryClient(
       <IssuesList

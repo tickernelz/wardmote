@@ -78,7 +78,7 @@ vi.mock("./pages/audit/AuditHub", () => ({
 vi.mock("./pages/Issues", () => ({
   Issues: () => {
     const location = useLocation();
-    return <div>{`TASKS_PAGE@${location.pathname}`}</div>;
+    return <div>{`TASKS_PAGE@${location.pathname}${location.search}`}</div>;
   },
 }));
 
@@ -231,6 +231,12 @@ describe("App Activity routing (PAP-16302)", () => {
     const root = renderAppAt(container, "/tasks");
     await waitForRoute(container, "TASKS_PAGE@/PAP/issues");
     expect(container.textContent).not.toContain("/tasks/dashboard");
+    flushSync(() => root.unmount());
+  });
+
+  it("sends a bookmark to the retired live runs page to all tasks, where Live now lists them", async () => {
+    const root = renderAppAt(container, "/PAP/dashboard/live");
+    await waitForRoute(container, "TASKS_PAGE@/PAP/issues?view=all");
     flushSync(() => root.unmount());
   });
 

@@ -163,7 +163,7 @@ export function Sidebar({ children }: { children?: ReactNode }) {
               collapsed rail, where the old header icon was dropped entirely.
               Cmd/Ctrl+K remains the keyboard path (command palette). */}
           <SidebarNavItem to="/search" label="Search" icon={Search} />
-          <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
+          <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} />
           {!combinedInboxTasks ? (
             <SidebarNavItem
               to="/inbox"
@@ -204,13 +204,14 @@ export function Sidebar({ children }: { children?: ReactNode }) {
               to="/issues"
               label="Tasks"
               icon={CircleCheck}
+              liveCount={liveRunCount}
               badge={inboxBadge.inbox}
               badgeLabel="unread"
               badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
               alert={inboxBadge.failedRuns > 0}
             />
           ) : (
-            <SidebarNavItem to="/issues" label="Tasks" icon={CircleCheck} />
+            <SidebarNavItem to="/issues" label="Tasks" icon={CircleCheck} liveCount={liveRunCount} />
           )}
           <SidebarNavItem to="/projects" label="Projects" icon={FolderOpen} />
           <SidebarStarredProjects />
