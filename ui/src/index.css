@@ -856,8 +856,11 @@ select:where(:not([multiple]):not(.appearance-none)):where(:not([size]), [size="
 @layer components {
 
 .wardmote-issue-list-row-deferred {
-  content-visibility: auto;
   contain-intrinsic-size: auto var(--issue-list-row-intrinsic-height);
+}
+
+.wardmote-issue-list[data-row-deferral] .wardmote-issue-list-row-deferred {
+  content-visibility: auto;
 }
 }
 
