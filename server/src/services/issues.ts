@@ -11467,6 +11467,12 @@ export function issueService(db: Db) {
           }
           if (updated.status === "done" || updated.status === "cancelled") {
             await finalizeSummarySlotsForTerminalIssue(tx, updated);
+            const { cancelDeferredWakesForClosedIssue } = await import("../modules/wake-queue/index.js");
+            await cancelDeferredWakesForClosedIssue(tx as unknown as Db, {
+              companyId: updated.companyId,
+              issueId: updated.id,
+              now: new Date(),
+            });
             // Every terminal transition funnels through here, including direct
             // service callers (tree control, recovery, pipelines, status cards)
             // that never touch the HTTP routes. Governed cards expire; ordinary

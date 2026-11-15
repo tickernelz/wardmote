@@ -28,6 +28,7 @@ export type {
   RunSummary,
 } from "./application/types.js";
 export { WakeQueueApplicationError } from "./application/types.js";
+export { cancelDeferredWakesForClosedIssue } from "./adapters/postgres.js";
 export type {
   IssueSnapshot,
   RunSnapshot,
