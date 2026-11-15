@@ -29,6 +29,7 @@ export type CompanyOwnerAgentCandidate = {
   agentRole?: string | null;
   agentStatus?: string | null;
   keyScope?: { kind: string } | null;
+  ownerAuthoritySuspended?: boolean | null;
 };
 
 export const AGENT_AUTHORITY_REASONS = ["agent_role_ceo", "agent_work_authority"] as const;
@@ -62,7 +63,7 @@ export function isCompanyOwnerAgentRole(role: string | null | undefined): boolea
 }
 
 export function isCompanyOwnerAgent(actor: CompanyOwnerAgentCandidate | null | undefined): boolean {
-  if (!actor || actor.type !== "agent" || !actor.agentId) return false;
+  if (!actor || actor.type !== "agent" || !actor.agentId || actor.ownerAuthoritySuspended) return false;
   if (!isCompanyOwnerAgentRole(actor.agentRole)) return false;
   const status = (actor.agentStatus ?? "").trim();
   if (!status || COMPANY_OWNER_AGENT_INACTIVE_STATUSES.includes(status)) return false;

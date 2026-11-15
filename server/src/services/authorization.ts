@@ -68,6 +68,7 @@ export type AuthorizationActor =
     companyId?: string | null;
     agentRole?: string | null;
     agentStatus?: string | null;
+    ownerAuthoritySuspended?: boolean;
     exercisedAgentAuthority?: {
       capability: AgentAuthorityCapability;
       reason: AgentAuthorityReason;
@@ -2483,7 +2484,7 @@ export function authorizationService(db: Db | DbTransaction) {
     // canCreateAgents: that flag is default-on for standard-trust agents, and
     // coupling would let any peer write over another agent's checked-out
     // issue. CEOs, explicit grants, and the manager chain remain the paths.
-    if (input.action === "tasks:manage_active_checkouts" && actorAgent.role === "ceo") {
+    if (input.action === "tasks:manage_active_checkouts" && actorAgent.role === "ceo" && trustResolution.kind === "standard") {
       return allow({
         action: input.action,
         reason: "allow_legacy_agent_creator",
@@ -2634,18 +2635,13 @@ export function authorizationService(db: Db | DbTransaction) {
     return input.action !== "agent_instructions:update" && responsibleUserAuthzShadowMode() ? agentDecision : denied;
   }
 
-  async function decideCompanyOwnerAgent(input: {
-    actor: AuthorizationActor;
-    action: AuthorizationAction;
-    resource: AuthorizationResource;
-  }): Promise<AuthorizationDecision | null> {
-    const { actor } = input;
-    if (actor.type !== "agent" || !actor.agentId || !actor.companyId) return null;
-    if (actor.keyScope && actor.keyScope.kind !== "standard") return null;
-    if (actor.agentRole != null && !isCompanyOwnerAgentRole(actor.agentRole)) return null;
-    if (companyIdForResource(input.resource) !== actor.companyId) return null;
+  async function isTrustedCompanyOwnerAgent(actor: AuthorizationActor, resource: AuthorizationResource): Promise<boolean> {
+    if (actor.type !== "agent" || !actor.agentId || !actor.companyId || actor.ownerAuthoritySuspended) return false;
+    if (actor.keyScope && actor.keyScope.kind !== "standard") return false;
+    if (actor.agentRole != null && !isCompanyOwnerAgentRole(actor.agentRole)) return false;
+    if (companyIdForResource(resource) !== actor.companyId) return false;
     const actorAgent = await loadAgent(actor.agentId);
-    if (!actorAgent || actorAgent.companyId !== actor.companyId) return null;
+    if (!actorAgent || actorAgent.companyId !== actor.companyId) return false;
     const candidate = {
       type: "agent",
       agentId: actorAgent.id,
@@ -2653,9 +2649,23 @@ export function authorizationService(db: Db | DbTransaction) {
       agentStatus: actorAgent.status,
       keyScope: actor.keyScope ?? null,
     };
-    if (!isCompanyOwnerAgent(candidate)) return null;
-    const trust = await resolveActorTrust({ actorAgent, actor, companyId: actor.companyId, resource: input.resource });
-    if (trust.kind === "low_trust_review") return null;
+    if (!isCompanyOwnerAgent(candidate)) return false;
+    const trust = await resolveActorTrust({ actorAgent, actor, companyId: actor.companyId, resource });
+    return trust.kind === "standard";
+  }
+
+  async function companyOwnerAgentTrusted(actor: AuthorizationActor): Promise<boolean> {
+    if (!actor.companyId) return false;
+    return isTrustedCompanyOwnerAgent(actor, { type: "company", companyId: actor.companyId });
+  }
+
+  async function decideCompanyOwnerAgent(input: {
+    actor: AuthorizationActor;
+    action: AuthorizationAction;
+    resource: AuthorizationResource;
+  }): Promise<AuthorizationDecision | null> {
+    const { actor } = input;
+    if (!actor.companyId || !(await isTrustedCompanyOwnerAgent(actor, input.resource))) return null;
     actor.exercisedAgentAuthority = {
       capability: "company:owner",
       reason: "agent_role_ceo",
@@ -2778,6 +2788,7 @@ export function authorizationService(db: Db | DbTransaction) {
 
   return {
     decide,
+    companyOwnerAgentTrusted,
     projectDiscoveryCandidateIds,
     decidePrincipalGrant,
   };

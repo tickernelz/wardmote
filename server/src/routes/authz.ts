@@ -114,6 +114,10 @@ export function assertBoardOrAgent(req: Request) {
   throw forbidden("Board or agent access required");
 }
 
+function agentAuthorityRole(actor: Request["actor"]): string | null {
+  return actor.ownerAuthoritySuspended ? null : actor.agentRole ?? null;
+}
+
 function assertAgentAuthority(
   req: Request,
   capability: AgentAuthorityCapability,
@@ -124,7 +128,7 @@ function assertAgentAuthority(
   if (!agentId) {
     throw forbidden("Agent authentication required");
   }
-  if (!agentRoleHasAuthority(role, capability)) {
+  if (!agentRoleHasAuthority(agentAuthorityRole(req.actor), capability)) {
     throw forbidden(`Agent role ${role ?? "unknown"} is not authorized for ${capability}`, {
       code: "AGENT_AUTHORITY_DENIED",
       capability,
@@ -138,7 +142,7 @@ function assertAgentAuthority(
   assertCompanyAccess(req, scope);
   req.agentAuthority = {
     capability,
-    reason: agentAuthorityReason(role),
+    reason: agentAuthorityReason(agentAuthorityRole(req.actor)),
     companyId: scope,
     agentId,
     runId: req.actor.runId ?? null,
@@ -178,7 +182,7 @@ export function assertBoardOrgOrAgentAuthority(
 }
 
 export function hasAgentAuthority(req: Request, capability: AgentAuthorityCapability): boolean {
-  return req.actor.type === "agent" && agentRoleHasAuthority(req.actor.agentRole ?? null, capability);
+  return req.actor.type === "agent" && agentRoleHasAuthority(agentAuthorityRole(req.actor), capability);
 }
 
 export function recordAgentAuthority(
@@ -189,7 +193,7 @@ export function recordAgentAuthority(
   if (req.actor.type !== "agent" || !req.actor.agentId) return;
   req.agentAuthority = {
     capability,
-    reason: agentAuthorityReason(req.actor.agentRole ?? null),
+    reason: agentAuthorityReason(agentAuthorityRole(req.actor)),
     companyId,
     agentId: req.actor.agentId,
     runId: req.actor.runId ?? null,

@@ -14,7 +14,7 @@ import {
 } from "@tickernelz/wardmote-db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import { agentRunWritesRevoked } from "../agent-run-cancellation.js";
-import { isUuidLike, normalizeAgentApiKeyScope, type DeploymentMode } from "@tickernelz/wardmote-shared";
+import { isCompanyOwnerAgent, isUuidLike, normalizeAgentApiKeyScope, type DeploymentMode } from "@tickernelz/wardmote-shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 import { captureRunIdentity } from "../services/run-identity.js";
@@ -25,6 +25,7 @@ import {
   restoreOpenwaGrant,
 } from "../services/openwa/authority.js";
 import { boardAuthService } from "../services/board-auth.js";
+import { authorizationService } from "../services/authorization.js";
 import { beginIdleTrackedWork } from "../services/task-admission.js";
 
 export {
@@ -202,8 +203,14 @@ const publicRoutineWebhookPath = /^\/api\/routine-triggers\/public\/[a-f0-9]{24}
 
 const publicMcpGatewayProtocolPath = /^\/mcp\/gateways\/gw_[a-f0-9]{32}\/?$/i;
 
+async function suspendUntrustedCompanyOwner(authorization: ReturnType<typeof authorizationService>, actor: Request["actor"]) {
+  if (!isCompanyOwnerAgent(actor)) return;
+  if (!(await authorization.companyOwnerAgentTrusted(actor))) actor.ownerAuthoritySuspended = true;
+}
+
 export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
   const boardAuth = boardAuthService(db);
+  const authorization = authorizationService(db);
   const authenticate: RequestHandler = async (req, _res, next) => {
     req.actor =
       opts.deploymentMode === "local_trusted"
@@ -427,6 +434,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         onBehalfOfMemberships,
         source: "agent_jwt",
       };
+      try {
+        await suspendUntrustedCompanyOwner(authorization, req.actor);
+      } catch (error) {
+        next(error);
+        return;
+      }
       if (openwaGrantId) openwaGrantScope({ companyId: claims.company_id, runId: claims.run_id, grantId: openwaGrantId }, next);
       else next();
       return;
@@ -495,6 +508,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       runId: runIdHeader || undefined,
       source: "agent_key",
     };
+    try {
+      await suspendUntrustedCompanyOwner(authorization, req.actor);
+    } catch (error) {
+      next(error);
+      return;
+    }
 
     next();
   };
