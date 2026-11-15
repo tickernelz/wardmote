@@ -1802,9 +1802,17 @@ function StreamlinedIssuesList({
   // Keep the keyboard selection visible while navigating. Depends on the
   // render budget too: a selection past the mounted batch scrolls once its
   // row mounts.
+  const scrolledNavKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!selectedNavKey) return;
-    findSelectedNavElement(selectedNavKey)?.scrollIntoView({ block: "nearest" });
+    if (!selectedNavKey) {
+      scrolledNavKeyRef.current = null;
+      return;
+    }
+    if (scrolledNavKeyRef.current === selectedNavKey) return;
+    const element = findSelectedNavElement(selectedNavKey);
+    if (!element) return;
+    element.scrollIntoView({ block: "nearest" });
+    scrolledNavKeyRef.current = selectedNavKey;
   }, [findSelectedNavElement, renderedIssueRowLimit, selectedNavKey]);
 
   useLayoutEffect(() => {
@@ -1871,6 +1879,19 @@ function StreamlinedIssuesList({
     }
     captureScrollAnchor();
   }, [budgetOrderedIssueIds, captureScrollAnchor, renderBudgetIdentity, renderedIssueRowLimit, viewState.viewMode]);
+
+  const showsListRows = viewState.viewMode === "list" && renderedIssueRowLimit > 0;
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || !showsListRows) return;
+    let frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(() => root.setAttribute("data-row-deferral", ""));
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      root.removeAttribute("data-row-deferral");
+    };
+  }, [showsListRows]);
 
   const listHeaderRef = useRef<HTMLDivElement | null>(null);
   const showListHeader = Boolean(listHeader) && viewState.viewMode === "list" && !viewState.liveOnly
