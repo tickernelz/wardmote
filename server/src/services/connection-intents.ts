@@ -679,7 +679,7 @@ export function connectionIntentService(db: Db) {
     options: { purpose?: "ai" | "channel"; selectionInteractionId?: string; targetService?: string; connectionId?: string; toolNames?: string[] } = {},
   ): Promise<ConnectionRequestResult> {
     const context = await loadRunContext(claims);
-    if (options.purpose !== "ai") await assertOpenwaRunMay(db, context.run, "external_tools", { consume: false });
+    if (options.purpose !== "ai") await assertOpenwaRunMay(db, context.run, "external_tools", { consume: false, window: false });
     return requestWithContext(context, serviceSlug, options);
   }
 
@@ -792,7 +792,7 @@ export function connectionIntentService(db: Db) {
         throw conflict("The user declined this connection. Pursue alternatives; do not request it again in this continuation.");
       }
     }
-    const consumedGrantId = options.purpose !== "ai" ? await assertOpenwaRunMay(db, context.run, "external_tools") : null;
+    const consumedGrantId = options.purpose !== "ai" ? await assertOpenwaRunMay(db, context.run, "external_tools", { window: false }) : null;
     const interaction = await interactions.createConnectionIntent(
       context.issue,
       {

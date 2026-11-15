@@ -2763,7 +2763,7 @@ export function createToolGatewayService(
   ): Promise<ToolAccessDecision> {
     if (tool.risk === "read" || (!decision.allowed && decision.decision !== "require_approval")) return decision;
     try {
-      const options = { consume: decision.allowed };
+      const options = { consume: decision.allowed, destructive: tool.risk === "destructive" };
       if (session.runId && session.openwaRunContext !== undefined) {
         await assertOpenwaRunMay(db, { id: session.runId, companyId: session.companyId, contextSnapshot: session.openwaRunContext }, "external_tools", options);
       } else {

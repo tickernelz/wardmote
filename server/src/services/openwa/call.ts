@@ -383,6 +383,7 @@ async function selfSessionConfirmation(ctx: ToolContext, operation: OpenwaOperat
           detailsMarkdown: operation.summary + ". The agent stays disconnected from WhatsApp until the session is reconnected in OpenWA.",
           acceptLabel: "Allow",
           rejectLabel: "Deny",
+          destructive: true,
           allowDeclineReason: true,
         },
       })

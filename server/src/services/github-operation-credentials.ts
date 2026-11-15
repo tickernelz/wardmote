@@ -211,7 +211,7 @@ export async function exportGitHubOperationCredentials(
   input: { companyId: string; agentId: string; runId: string },
 ) {
   const captured = await captureRunIdentity(db, input);
-  const grantId = await assertOpenwaRunMay(db, captured.run, "external_tools");
+  const grantId = await assertOpenwaRunMay(db, captured.run, "external_tools", { window: false });
   if (!grantId) return resolveCapturedGitHubOperationCredentials(db, input, captured);
   try {
     return await resolveCapturedGitHubOperationCredentials(db, input, captured);

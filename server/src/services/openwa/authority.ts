@@ -27,6 +27,7 @@ import { openwaCurrentOwners, openwaPrincipalAuthorization } from "./owners.js";
 import { logOpenwaActivity } from "./audit.js";
 import { openwaOwnerOnlyGroup } from "./owner-group.js";
 import { isOpenwaCompletionTurn, openwaCompletionOwedToOwner } from "../chat-completion-delivery.js";
+import { autonomyWindowService } from "../autonomy-windows.js";
 
 export const OPENWA_RUN_CONTEXT_KEY = "wardmoteOpenwa";
 export const OPENWA_APPROVAL_REQUIRED_CODE = "openwa_approval_required";
@@ -400,6 +401,7 @@ type OpenwaRunDelivery = {
   found: boolean;
   principalId: string | null;
   triggerClass: OpenwaTriggerClass | null;
+  principalRole: string | null;
   chatKey: string | null;
 };
 
@@ -440,7 +442,7 @@ async function loadOpenwaRunDeliveries(
       select id, case when id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then id::uuid end as uid
       from wanted
     )
-    select ids.id, delivery.id is not null as found, delivery.principal_id, delivery.trigger_class,
+    select ids.id, delivery.id is not null as found, delivery.principal_id, delivery.trigger_class, delivery.principal_role,
       delivery.normalized_event -> 'openwa' ->> 'chatKey' as chat_key
     from ids
     left join chat_deliveries delivery
@@ -451,6 +453,7 @@ async function loadOpenwaRunDeliveries(
     found: row.found === true,
     principalId: text(row.principal_id),
     triggerClass: triggerClass(row.trigger_class),
+    principalRole: text(row.principal_role),
     chatKey: text(row.chat_key),
   }));
 }
@@ -654,11 +657,17 @@ export async function resolveOpenwaRunContext(
   const profile: OpenwaRunProfile = cls === "owner" || ownerOrigin ? "full" : "read_only";
   const runAllowedCategories = openwaAllowedCategories(policy, profile, runGranted, policy.gatewayAdminTools).allowed;
   const requesterExternalTools = grants.some((grant) => grant.scope === "requester" && grant.category === "external_tools");
+  const toolProfile: OpenwaRunProfile = profile === "full" || runAllowedCategories.includes("external_tools") || requesterExternalTools ? "full" : "read_only";
+  const windowRoot = profile === "read_only" && cls === "other" && sameChat
+    ? await openwaWindowRootForSenders(db, input.companyId, input.issueId, deliveries.map((delivery) => delivery.principalRole))
+    : null;
+  if (windowRoot)
+    for (const category of WINDOW_CATEGORIES) if (!runAllowedCategories.includes(category)) runAllowedCategories.push(category);
   return {
     ...base,
     triggerClass: cls,
     profile,
-    toolProfile: profile === "full" || runAllowedCategories.includes("external_tools") || requesterExternalTools ? "full" : "read_only",
+    toolProfile,
     event: wakeAction?.event ?? (completionTurn ? "task_completion" : null),
     grantIds: grants.map((grant) => grant.id).sort(),
     deliveryIds: deliveries
@@ -764,15 +773,71 @@ function scopedGrantIds(run: RunLike): Set<string> | null {
   return scope && scope.runId === run.id && scope.companyId === run.companyId ? scope.grantIds : null;
 }
 
+const WINDOW_CATEGORIES: ReadonlySet<OpenwaApprovalCategory> = new Set(["create_task", "external_tools", "cross_chat_send"]);
+
+export interface OpenwaRunMayOptions {
+  consume?: boolean;
+  /** False where the effect issues credentials or the caller applies its own window scope. */
+  window?: boolean;
+  destructive?: boolean;
+  /** Conversation issues of the chats a cross_chat_send targets; the window lifts it only inside its tree. */
+  windowIssueIds?: readonly string[];
+}
+
+/** Root of the live autonomy window over a member-triggered run's conversation issue; null unless every triggering sender is an owner or on the allow list. */
+export async function openwaMemberWindowRoot(db: Db, run: RunLike): Promise<string | null> {
+  const openwa = readOpenwaRunContext(run.contextSnapshot);
+  if (!openwa || openwa.triggerClass !== "other" || openwa.deliveryIds.length === 0) return null;
+  const context = record(run.contextSnapshot);
+  const issueId = uuid(context.issueId) ?? uuid(context.taskId);
+  if (!issueId) return null;
+  const senders = await db
+    .select({ role: chatDeliveries.principalRole })
+    .from(chatDeliveries)
+    .where(and(
+      eq(chatDeliveries.companyId, run.companyId),
+      eq(chatDeliveries.endpointId, openwa.endpointId),
+      inArray(chatDeliveries.id, openwa.deliveryIds),
+    ));
+  if (senders.length !== openwa.deliveryIds.length) return null;
+  return openwaWindowRootForSenders(db, run.companyId, issueId, senders.map((sender) => sender.role));
+}
+
+async function openwaWindowRootForSenders(db: Db, companyId: string, issueId: string, roles: readonly (string | null)[]): Promise<string | null> {
+  if (roles.length === 0 || roles.some((role) => role !== "owner" && role !== "allowed")) return null;
+  const window = await autonomyWindowService(db).findCovering(companyId, issueId);
+  return window?.rootIssueId ?? null;
+}
+
+async function logWindowAuthority(db: Db, run: RunLike, input: { rootIssueId: string; category: OpenwaApprovalCategory; path?: string }) {
+  const openwa = readOpenwaRunContext(run.contextSnapshot);
+  if (!openwa) return;
+  await logOpenwaActivity(db, {
+    companyId: run.companyId,
+    endpointId: openwa.endpointId,
+    action: "openwa.window_authority_used",
+    runId: run.id,
+    details: { rootIssueId: input.rootIssueId, category: input.category, chatKey: openwa.chatKey, ...(input.path ? { path: input.path } : {}) },
+  });
+}
+
 /** Throws OpenwaApprovalRequiredError unless the run may act in the category; returns the one_action grant id it consumed. */
 export async function assertOpenwaRunMay(
   db: Db,
   run: RunLike,
   category: OpenwaApprovalCategory,
-  options: { consume?: boolean } = {},
+  options: OpenwaRunMayOptions = {},
 ): Promise<string | null> {
   const profile = await openwaRunProfile(db, run);
   if (profile === "full") return null;
+  if (options.window !== false && !options.destructive && WINDOW_CATEGORIES.has(category)) {
+    const rootIssueId = await openwaMemberWindowRoot(db, run);
+    const inScope = rootIssueId !== null && (category !== "cross_chat_send" || await someIssueInTree(db, run.companyId, rootIssueId, options.windowIssueIds ?? []));
+    if (inScope) {
+      await logWindowAuthority(db, run, { rootIssueId: rootIssueId!, category });
+      return null;
+    }
+  }
   const openwa = readOpenwaRunContext(run.contextSnapshot);
   if (openwa?.runAllowedCategories.includes(category)) {
     const [endpoint] = await db
@@ -877,7 +942,7 @@ export async function assertOpenwaRunIdMay(
   db: Db,
   input: { companyId: string; runId: string | null | undefined },
   category: OpenwaApprovalCategory,
-  options: { consume?: boolean } = {},
+  options: OpenwaRunMayOptions = {},
 ): Promise<string | null> {
   if (!input.runId) return null;
   const run = await loadOpenwaRunAuthority(db, { companyId: input.companyId, runId: input.runId });
@@ -1035,7 +1100,39 @@ export async function assertOpenwaRestAllowed(
     }
   }
   if (decision.allowed === true) return null;
-  return assertOpenwaRunMay(db, input.run, decision.category);
+  const rootIssueId = await openwaMemberWindowRoot(db, input.run);
+  if (rootIssueId && (await openwaWindowRestAllowed(db, { companyId: input.run.companyId, rootIssueId, method: input.method, path: input.path, body: input.body }))) {
+    await logWindowAuthority(db, input.run, { rootIssueId, category: decision.category, path: input.path });
+    return null;
+  }
+  return assertOpenwaRunMay(db, input.run, decision.category, { window: false });
+}
+
+const WINDOW_ISSUE_PATH = /^\/api\/(?:companies\/[^/]+\/)?issues\/([^/]+)(?:\/.*)?$/i;
+const WINDOW_ISSUE_CREATE_PATH = /^\/api\/companies\/[^/]+\/issues$/i;
+
+async function someIssueInTree(db: Db, companyId: string, rootIssueId: string, issueKeys: readonly string[]): Promise<boolean> {
+  for (const issueKey of issueKeys) {
+    if (await isOpenwaConversationTreeIssue(db, { companyId, rootIssueId, issueKey })) return true;
+  }
+  return false;
+}
+
+/** Autonomy-window scope for a member run's REST write: issues inside the window tree only, never a delete or a cancellation. */
+async function openwaWindowRestAllowed(
+  db: Db,
+  input: { companyId: string; rootIssueId: string; method: string; path: string; body?: unknown },
+): Promise<boolean> {
+  const method = input.method.toUpperCase();
+  if (method === "DELETE") return false;
+  const path = input.path.length > 1 ? input.path.replace(/\/+$/, "") : input.path;
+  const body = record(input.body);
+  if (body.status === "cancelled") return false;
+  const parentId = text(body.parentId);
+  if (parentId && !(await someIssueInTree(db, input.companyId, input.rootIssueId, [parentId]))) return false;
+  if (WINDOW_ISSUE_CREATE_PATH.test(path)) return method === "POST" && parentId !== null;
+  const issueKey = WINDOW_ISSUE_PATH.exec(path)?.[1];
+  return issueKey !== undefined && (await someIssueInTree(db, input.companyId, input.rootIssueId, [issueKey]));
 }
 
 /** D35: persistent keys of an agent bound to a non-archived OpenWA endpoint never mutate. */

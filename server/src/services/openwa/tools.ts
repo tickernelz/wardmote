@@ -774,7 +774,17 @@ async function assertSendAllowed(ctx: ToolContext, target: Target, heldGrant: st
   if (!target.isOrigin && !(ctx.completion && target.ownerReport)) {
     if (heldGrant && (await openwaHeldGrantValid(ctx.db, { companyId: ctx.endpoint.companyId, grantId: heldGrant }))) return null;
     try {
-      return await assertOpenwaRunMay(ctx.db, ctx.run, "cross_chat_send");
+      const targetConversations = await ctx.db
+        .select({ issueId: chatConversations.issueId })
+        .from(chatConversations)
+        .where(and(
+          eq(chatConversations.companyId, ctx.endpoint.companyId),
+          eq(chatConversations.endpointId, ctx.endpoint.id),
+          eq(chatConversations.externalConversationId, chatRef(ctx, target.chatId)),
+        ));
+      return await assertOpenwaRunMay(ctx.db, ctx.run, "cross_chat_send", {
+        windowIssueIds: targetConversations.map((conversation) => conversation.issueId),
+      });
     } catch (error) {
       if (error instanceof OpenwaApprovalRequiredError)
         throw new OpenwaToolError(403, "approval_required", "Sending to a chat other than the origin chat needs owner approval", {
