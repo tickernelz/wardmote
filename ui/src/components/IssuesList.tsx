@@ -6,7 +6,7 @@ import { useVisibilityRefetchInterval } from "@/lib/polling";
 import { accessApi } from "../api/access";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
-import { Link, useNavigate } from "@/lib/router";
+import { Link, useLocation, useNavigate } from "@/lib/router";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { issuesApi } from "../api/issues";
 import { authApi } from "../api/auth";
@@ -400,6 +400,8 @@ function sortIssues(issues: Issue[], state: IssueViewState): Issue[] {
 
 type IssueRowRenderSnapshot = { identity: string; ids: string[]; limit: number };
 
+const issueRowRenderBudgetByHistoryEntry = new Map<string, { identity: string; limit: number }>();
+
 type SeenIssueTreeState = {
   identity: string;
   keptRootIds: Set<string>;
@@ -412,8 +414,9 @@ function nextIssueRowRenderLimit(
   identity: string,
   nextIds: string[],
   requested: number,
+  restoredLimit: number,
 ): number {
-  const initialLimit = Math.min(nextIds.length, INITIAL_ISSUE_ROW_RENDER_LIMIT);
+  const initialLimit = Math.min(nextIds.length, Math.max(INITIAL_ISSUE_ROW_RENDER_LIMIT, restoredLimit));
   if (!previous || previous.identity !== identity) return initialLimit;
   if (previous.ids === nextIds) return Math.min(nextIds.length, Math.max(previous.limit, requested, initialLimit));
   const positionById = new Map<string, number>();
@@ -850,6 +853,7 @@ function StreamlinedIssuesList({
 }: IssuesListProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
+  const historyEntryKey = useLocation().key;
   const queryClient = useQueryClient();
   // Keyboard selection for the list view (mirrors the inbox). Hover moves the
   // selection only after real pointer movement, so keyboard-driven scrolling
@@ -1783,11 +1787,19 @@ function StreamlinedIssuesList({
   }, [groupedContent, viewState.collapsedParents, viewState.nestingEnabled, viewState.viewMode]);
 
   const renderBudgetSnapshotRef = useRef<IssueRowRenderSnapshot | null>(null);
+  const [restoredIssueRowBudget] = useState(() => issueRowRenderBudgetByHistoryEntry.get(historyEntryKey) ?? null);
+  const restoredIssueRowLimit = restoredIssueRowBudget?.identity === renderBudgetIdentity ? restoredIssueRowBudget.limit : 0;
   const renderedIssueRowLimit = useMemo(
     () => viewState.viewMode === "list"
-      ? nextIssueRowRenderLimit(renderBudgetSnapshotRef.current, renderBudgetIdentity, budgetOrderedIssueIds, requestedIssueRowLimit)
+      ? nextIssueRowRenderLimit(
+        renderBudgetSnapshotRef.current,
+        renderBudgetIdentity,
+        budgetOrderedIssueIds,
+        requestedIssueRowLimit,
+        restoredIssueRowLimit,
+      )
       : requestedIssueRowLimit,
-    [budgetOrderedIssueIds, renderBudgetIdentity, requestedIssueRowLimit, viewState.viewMode],
+    [budgetOrderedIssueIds, renderBudgetIdentity, requestedIssueRowLimit, restoredIssueRowLimit, viewState.viewMode],
   );
   useLayoutEffect(() => {
     if (viewState.viewMode !== "list") return;
@@ -1796,8 +1808,16 @@ function StreamlinedIssuesList({
       ids: budgetOrderedIssueIds,
       limit: renderedIssueRowLimit,
     };
+    issueRowRenderBudgetByHistoryEntry.set(historyEntryKey, { identity: renderBudgetIdentity, limit: renderedIssueRowLimit });
     if (requestedIssueRowLimit !== renderedIssueRowLimit) setRequestedIssueRowLimit(renderedIssueRowLimit);
-  }, [budgetOrderedIssueIds, renderBudgetIdentity, renderedIssueRowLimit, requestedIssueRowLimit, viewState.viewMode]);
+  }, [
+    budgetOrderedIssueIds,
+    historyEntryKey,
+    renderBudgetIdentity,
+    renderedIssueRowLimit,
+    requestedIssueRowLimit,
+    viewState.viewMode,
+  ]);
 
   // Keep the keyboard selection visible while navigating. Depends on the
   // render budget too: a selection past the mounted batch scrolls once its

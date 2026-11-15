@@ -36,13 +36,29 @@ async function scrollListToMiddle(page: Page) {
 async function rowInViewportMiddle(page: Page) {
   return page.evaluate(() => {
     const middle = window.innerHeight / 2;
-    const row = [...document.querySelectorAll<HTMLElement>("[data-issue-row-id]")].find((candidate) => {
+    const rows = [...document.querySelectorAll<HTMLElement>("[data-issue-row-id]")];
+    const index = rows.findIndex((candidate) => {
       const rect = candidate.getBoundingClientRect();
       return rect.top <= middle && rect.bottom > middle;
     });
-    if (!row) throw new Error("no task row in the middle of the viewport");
-    return { id: row.dataset.issueRowId!, top: row.getBoundingClientRect().top };
+    if (index < 0) throw new Error("no task row in the middle of the viewport");
+    const row = rows[index]!;
+    return { id: row.dataset.issueRowId!, top: row.getBoundingClientRect().top, index };
   });
+}
+
+async function scrollUntilReadingRow(page: Page, minIndex: number) {
+  const viewport = page.viewportSize()!;
+  await page.mouse.move(viewport.width * 0.6, viewport.height / 2);
+  for (let step = 0; step < 150; step += 1) {
+    if ((await rowInViewportMiddle(page).catch(() => ({ index: -1 }))).index >= minIndex) break;
+    await page.mouse.wheel(0, 500);
+    await page.waitForTimeout(120);
+  }
+  await page.waitForTimeout(500);
+  const reading = await rowInViewportMiddle(page);
+  expect(reading.index).toBeGreaterThanOrEqual(minIndex);
+  return reading;
 }
 
 async function rowTop(page: Page, rowId: string) {
@@ -91,3 +107,27 @@ test("live reorders and new tasks above the reading position do not move it", as
   await page.waitForTimeout(500);
   expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(4);
 });
+
+for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
+  test.describe(`at ${viewport.width}px`, () => {
+    test.use({ viewport });
+
+    test("returning from a task below the first 100 rows keeps the reading row in place", async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const { company } = await seedCompany(request, 160);
+      await page.goto(`/${company.issuePrefix}/issues`);
+      await expect(page.locator("[data-issue-row-id]").first()).toBeVisible({ timeout: 30_000 });
+      const reading = await scrollUntilReadingRow(page, 120);
+
+      await page.locator(`[data-issue-row-id="${reading.id}"] [data-inbox-issue-link]`).click();
+      await page.waitForURL(/\/issues\/[A-Z]+-\d+/);
+      await expect(page.locator("[data-issue-row-id]")).toHaveCount(0);
+      await page.waitForTimeout(1500);
+      await page.goBack();
+      await expect(page.locator(`[data-issue-row-id="${reading.id}"]`)).toBeAttached({ timeout: 30_000 });
+      await page.waitForTimeout(1500);
+
+      expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(ROW_TOLERANCE_PX);
+    });
+  });
+}
