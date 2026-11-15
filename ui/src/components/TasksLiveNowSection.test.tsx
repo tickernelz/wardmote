@@ -624,6 +624,23 @@ describe("Live now groups, density, filters and board lanes", () => {
     expect(liveRows()[0]!.querySelector("[data-slot='tasks-live-now-health']")?.textContent).toBe("Quiet 2m");
   });
 
+  it("keeps a seconds label ticking when the watchdog already flags a run that showed activity seconds ago", () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(NOW);
+    const flagged = run({
+      startedAt: at(70 * 60_000),
+      lastEventAt: at(5_000),
+      outputSilence: silence("suspicious", 65 * 60_000),
+    });
+    render(<TasksLiveNowSection companyId="company-1" liveRuns={[flagged]} issues={[issue({})]} />);
+    const label = () => liveRows()[0]!.querySelector("[data-slot='tasks-live-now-health']")?.textContent;
+    expect(label()).toBe("Quiet 5s");
+
+    flushSync(() => vi.advanceTimersByTime(1_100));
+    expect(label()).toBe("Quiet 6s");
+  });
+
   it("remembers the row density per company", () => {
     const props = { liveRuns: [run({})], issues: [issue({})] };
     render(<TasksLiveNowSection companyId="company-1" {...props} />);

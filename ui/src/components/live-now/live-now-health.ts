@@ -100,6 +100,10 @@ export function nextLiveNowHealthChangeMs(run: LiveRunForIssue, now: number): nu
   if (lastMs === null && now - startedMs < STARTING_WINDOW_MS) return startedMs + STARTING_WINDOW_MS;
   const sinceMs = lastMs ?? startedMs;
   const silentMs = Math.max(0, now - sinceMs);
+  const level = run.outputSilence?.level;
+  if (silentMs < 60_000 && (level === "suspicious" || level === "critical")) {
+    return sinceMs + (Math.floor(silentMs / 1000) + 1) * 1000;
+  }
   if (silentMs < QUIET_AFTER_MS) return sinceMs + QUIET_AFTER_MS;
   const nextMinute = sinceMs + (Math.floor(silentMs / 60_000) + 1) * 60_000;
   const stalledAt = sinceMs + (run.outputSilence?.criticalThresholdMs || STALLED_AFTER_MS);
