@@ -85,44 +85,40 @@ export async function cancelDeferredWakesForClosedIssue(
     ${agentWakeupRequests.payload} -> '_wardmoteWakeContext' ->> 'issueId',
     ${agentWakeupRequests.payload} -> '_wardmoteWakeContext' ->> 'taskId'
   )`;
-  const deferredForIssue = and(
+  const cancellable = and(
     eq(agentWakeupRequests.companyId, companyId),
     sql`${agentWakeupRequests.status} = 'deferred_issue_execution'`,
     sql`${wakeIssueKey} = ${issueId}`,
+    exists(
+      tx
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(eq(issues.companyId, companyId), eq(issues.id, issueId), inArray(issues.status, CLOSED_ISSUE_STATUSES))),
+    ),
+    notExists(
+      tx
+        .select({ id: heartbeatRuns.id })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
+            or(
+              eq(heartbeatRuns.nativeIssueId, issueId),
+              sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+              sql`${heartbeatRuns.id} = (select execution_run_id from issues where company_id = ${companyId} and id = ${issueId})`,
+            ),
+          ),
+        ),
+    ),
   );
-  const [pending] = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests).where(deferredForIssue).limit(1);
+  const [pending] = await tx.select({ id: agentWakeupRequests.id }).from(agentWakeupRequests).where(cancellable).limit(1);
   if (!pending) return [];
   if (await getConversationOwnershipBlocker(tx, companyId, issueId)) return [];
   const rows = await tx
     .update(agentWakeupRequests)
     .set({ status: "cancelled", finishedAt: now, error: ISSUE_CLOSED_CANCEL_REASON, updatedAt: now })
-    .where(
-      and(
-        deferredForIssue,
-        exists(
-          tx
-            .select({ id: issues.id })
-            .from(issues)
-            .where(and(eq(issues.companyId, companyId), eq(issues.id, issueId), inArray(issues.status, CLOSED_ISSUE_STATUSES))),
-        ),
-        notExists(
-          tx
-            .select({ id: heartbeatRuns.id })
-            .from(heartbeatRuns)
-            .where(
-              and(
-                eq(heartbeatRuns.companyId, companyId),
-                inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
-                or(
-                  eq(heartbeatRuns.nativeIssueId, issueId),
-                  sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
-                  sql`${heartbeatRuns.id} = (select execution_run_id from issues where company_id = ${companyId} and id = ${issueId})`,
-                ),
-              ),
-            ),
-        ),
-      ),
-    )
+    .where(cancellable)
     .returning({ id: agentWakeupRequests.id });
   return rows.map((row) => row.id);
 }
