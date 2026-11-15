@@ -1,5 +1,5 @@
-import { AgentIdentity } from "../components/AgentIdentity";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { useEffect, useMemo } from "react";
 import { useLocation } from "@/lib/router";
 import {
   onboardingStepForCompany,
@@ -9,41 +9,69 @@ import { claimOnboardingOffer } from "../lib/onboarding-auto-open";
 import { Link } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { dashboardApi } from "../api/dashboard";
-import { activityApi } from "../api/activity";
-import { accessApi } from "../api/access";
-import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
-import { projectsApi } from "../api/projects";
-import { buildCompanyUserProfileMap } from "../lib/company-members";
 import { useCompany } from "../context/CompanyContext";
 import { useDialogActions } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { MetricCard } from "../components/MetricCard";
 import { EmptyState } from "../components/EmptyState";
-import { StatusIcon } from "../components/StatusIcon";
 import { usePublishSharedQueryData, useSharedPollingQuery } from "../hooks/useSharedPolling";
-
-import { ActivityRow } from "../components/ActivityRow";
 import { timeAgo } from "../lib/timeAgo";
-import { formatCents } from "../lib/utils";
-import { SHOW_TASK_PRIORITY_UI } from "../lib/ui-flags";
-import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
-import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+import { formatCents, formatDurationMs } from "../lib/utils";
+import { Activity, Bot, DollarSign, Hourglass, LayoutDashboard, PauseCircle, ShieldCheck } from "lucide-react";
+import { ChartCard, RunActivityChart, SuccessRateChart } from "../components/ActivityCharts";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { InlineBanner } from "../components/InlineBanner";
-import type { Agent, Issue } from "@tickernelz/wardmote-shared";
+import type { Agent, DashboardRunActivityDay } from "@tickernelz/wardmote-shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { SmokeLabDashboardCard } from "../components/SmokeLabDashboardCard";
 import { InstallNudge } from "../components/InstallNudge";
 
-const DASHBOARD_ACTIVITY_LIMIT = 10;
+const FAILURE_CAUSE_LIMIT = 5;
 
-function getRecentIssues(issues: Issue[]): Issue[] {
-  return [...issues]
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+/** Month-end spend if the rest of the UTC month spends at the rate so far. */
+export function projectMonthEndSpendCents(monthSpendCents: number, now: Date): number {
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const monthEnd = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+  const elapsed = Math.max(now.getTime() - monthStart, 60 * 60 * 1000);
+  return Math.round((monthSpendCents * (monthEnd - monthStart)) / elapsed);
+}
+
+/** Totals over the run activity window: success rate counting recovered runs as successes, and the commonest failure codes. */
+export function summarizeRunHealth(days: readonly DashboardRunActivityDay[]) {
+  let runs = 0;
+  let succeeded = 0;
+  let failed = 0;
+  const byCode = new Map<string, number>();
+  for (const day of days) {
+    runs += day.total;
+    succeeded += day.succeeded + day.recovered;
+    failed += day.failed;
+    for (const [code, count] of Object.entries(day.failedByErrorCode)) byCode.set(code, (byCode.get(code) ?? 0) + count);
+  }
+  return {
+    runs,
+    failed,
+    successRate: runs > 0 ? Math.round((succeeded / runs) * 1000) / 10 : null,
+    causes: [...byCode].sort((a, b) => b[1] - a[1]).slice(0, FAILURE_CAUSE_LIMIT),
+  };
+}
+
+function failurePercent(failed: number, runs: number): string {
+  return `${runs > 0 ? Math.round((failed / runs) * 1000) / 10 : 0}%`;
+}
+
+function DashboardListCard({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
+  return (
+    <section className="min-w-0" aria-label={title}>
+      <h3 className="text-sm font-semibold text-ink-3 uppercase tracking-wide">{title}</h3>
+      <p className="mb-3 text-xs text-ink-3">{subtitle}</p>
+      <Card className="block py-0 divide-y divide-line overflow-hidden">{children}</Card>
+    </section>
+  );
 }
 
 export type PausedAgentBanner =
@@ -75,10 +103,6 @@ export function Dashboard() {
   const { openOnboarding } = useDialogActions();
   const location = useLocation();
   const { setBreadcrumbs } = useBreadcrumbs();
-  const [animatedActivityIds, setAnimatedActivityIds] = useState<Set<string>>(new Set());
-  const seenActivityIdsRef = useRef<Set<string>>(new Set());
-  const hydratedActivityRef = useRef(false);
-  const activityAnimationTimersRef = useRef<number[]>([]);
 
   // `isFetching` is read alongside the data: a cached list is served while its
   // refetch runs, and an empty one from before the first hire must not pass
@@ -171,126 +195,7 @@ export function Dashboard() {
     enabled: !!selectedCompanyId,
   });
   usePublishSharedQueryData(sharedDashboard, data, dashboardUpdatedAt);
-
-  const activityQueryKey = [...queryKeys.activity(selectedCompanyId!), { limit: DASHBOARD_ACTIVITY_LIMIT }] as const;
-  const sharedActivity = useSharedPollingQuery({
-    companyId: selectedCompanyId,
-    resourceKey: `activity:limit:${DASHBOARD_ACTIVITY_LIMIT}`,
-    queryKey: activityQueryKey,
-    enabled: !!selectedCompanyId,
-  });
-  const { data: activity, dataUpdatedAt: activityUpdatedAt } = useQuery({
-    queryKey: activityQueryKey,
-    queryFn: () => activityApi.list(selectedCompanyId!, { limit: DASHBOARD_ACTIVITY_LIMIT }),
-    enabled: !!selectedCompanyId,
-  });
-  usePublishSharedQueryData(sharedActivity, activity, activityUpdatedAt);
-
-  const { data: issues } = useQuery({
-    queryKey: queryKeys.issues.list(selectedCompanyId!),
-    queryFn: () => issuesApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
-
-  const { data: projects } = useQuery({
-    queryKey: queryKeys.projects.list(selectedCompanyId!, { includeArchived: true }),
-    queryFn: () => projectsApi.list(selectedCompanyId!, { includeArchived: true }),
-    enabled: !!selectedCompanyId,
-  });
-
-  const { data: companyMembers } = useQuery({
-    queryKey: queryKeys.access.companyUserDirectory(selectedCompanyId!),
-    queryFn: () => accessApi.listUserDirectory(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
-
-  const userProfileMap = useMemo(
-    () => buildCompanyUserProfileMap(companyMembers?.users),
-    [companyMembers?.users],
-  );
-
-  const recentIssues = issues ? getRecentIssues(issues) : [];
-  const recentActivity = useMemo(() => (activity ?? []).slice(0, 10), [activity]);
-
-  useEffect(() => {
-    for (const timer of activityAnimationTimersRef.current) {
-      window.clearTimeout(timer);
-    }
-    activityAnimationTimersRef.current = [];
-    seenActivityIdsRef.current = new Set();
-    hydratedActivityRef.current = false;
-    setAnimatedActivityIds(new Set());
-  }, [selectedCompanyId]);
-
-  useEffect(() => {
-    if (recentActivity.length === 0) return;
-
-    const seen = seenActivityIdsRef.current;
-    const currentIds = recentActivity.map((event) => event.id);
-
-    if (!hydratedActivityRef.current) {
-      for (const id of currentIds) seen.add(id);
-      hydratedActivityRef.current = true;
-      return;
-    }
-
-    const newIds = currentIds.filter((id) => !seen.has(id));
-    if (newIds.length === 0) {
-      for (const id of currentIds) seen.add(id);
-      return;
-    }
-
-    setAnimatedActivityIds((prev) => {
-      const next = new Set(prev);
-      for (const id of newIds) next.add(id);
-      return next;
-    });
-
-    for (const id of newIds) seen.add(id);
-
-    const timer = window.setTimeout(() => {
-      setAnimatedActivityIds((prev) => {
-        const next = new Set(prev);
-        for (const id of newIds) next.delete(id);
-        return next;
-      });
-      activityAnimationTimersRef.current = activityAnimationTimersRef.current.filter((t) => t !== timer);
-    }, 980);
-    activityAnimationTimersRef.current.push(timer);
-  }, [recentActivity]);
-
-  useEffect(() => {
-    return () => {
-      for (const timer of activityAnimationTimersRef.current) {
-        window.clearTimeout(timer);
-      }
-    };
-  }, []);
-
-  const agentMap = useMemo(() => {
-    const map = new Map<string, Agent>();
-    for (const a of agents ?? []) map.set(a.id, a);
-    return map;
-  }, [agents]);
-
-  const entityNameMap = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const i of issues ?? []) map.set(`issue:${i.id}`, i.identifier ?? i.id.slice(0, 8));
-    for (const a of agents ?? []) map.set(`agent:${a.id}`, a.name);
-    for (const p of projects ?? []) map.set(`project:${p.id}`, p.name);
-    return map;
-  }, [issues, agents, projects]);
-
-  const entityTitleMap = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const i of issues ?? []) map.set(`issue:${i.id}`, i.title);
-    return map;
-  }, [issues]);
-
-  const agentName = (id: string | null) => {
-    if (!id || !agents) return null;
-    return agents.find((a) => a.id === id)?.name ?? null;
-  };
+  const runHealth = useMemo(() => summarizeRunHealth(data?.runActivity ?? []), [data?.runActivity]);
 
   if (!selectedCompanyId) {
     if (companies.length === 0) {
@@ -398,40 +303,29 @@ export function Dashboard() {
 
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-1 sm:gap-2">
             <MetricCard
-              icon={Bot}
-              value={data.agents.active + data.agents.running + data.agents.paused + data.agents.error}
-              label="Agents Enabled"
-              to="/agents"
-              description={
-                <span>
-                  {data.agents.running} running{", "}
-                  {data.agents.paused} paused{", "}
-                  {data.agents.error} errors
-                </span>
-              }
-            />
-            <MetricCard
-              icon={CircleDot}
-              value={data.tasks.inProgress}
-              label="Tasks In Progress"
-              to="/issues"
-              description={
-                <span>
-                  {data.tasks.open} open{", "}
-                  {data.tasks.blocked} blocked
-                </span>
-              }
-            />
-            <MetricCard
               icon={DollarSign}
               value={formatCents(data.costs.monthSpendCents)}
               label="Month Spend"
               to="/costs"
               description={
                 <span>
+                  On pace for {formatCents(projectMonthEndSpendCents(data.costs.monthSpendCents, new Date()))}
                   {data.costs.monthBudgetCents > 0
-                    ? `${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
-                    : "Unlimited budget"}
+                    ? ` · ${data.costs.monthUtilizationPercent}% of ${formatCents(data.costs.monthBudgetCents)} budget`
+                    : " · unlimited budget"}
+                </span>
+              }
+            />
+            <MetricCard
+              icon={Activity}
+              value={runHealth.successRate === null ? "—" : `${runHealth.successRate}%`}
+              label="14-Day Success"
+              to="/activity/runs"
+              description={
+                <span>
+                  {runHealth.failed} failed of {runHealth.runs}
+                  {data.runDurations.p50Ms !== null ? ` · p50 ${formatDurationMs(data.runDurations.p50Ms)}` : ""}
+                  {data.runDurations.p95Ms !== null ? ` · p95 ${formatDurationMs(data.runDurations.p95Ms)}` : ""}
                 </span>
               }
             />
@@ -442,9 +336,23 @@ export function Dashboard() {
               to="/approvals"
               description={
                 <span>
-                  {data.budgets.pendingApprovals > 0
-                    ? `${data.budgets.pendingApprovals} budget overrides awaiting board review`
-                    : "Awaiting board review"}
+                  {data.oldestPendingApprovalAt
+                    ? `Oldest waiting since ${timeAgo(data.oldestPendingApprovalAt)}`
+                    : data.budgets.pendingApprovals > 0
+                      ? `${data.budgets.pendingApprovals} budget overrides awaiting board review`
+                      : "Nothing awaiting board review"}
+                </span>
+              }
+            />
+            <MetricCard
+              icon={Hourglass}
+              value={data.wakeQueue.waiting}
+              label="Waiting Wakes"
+              description={
+                <span>
+                  {data.wakeQueue.oldestWaitingAt
+                    ? `Oldest queued ${timeAgo(data.wakeQueue.oldestWaitingAt)}`
+                    : "No wake waits for a run slot or its task"}
                 </span>
               }
             />
@@ -453,21 +361,45 @@ export function Dashboard() {
           <SmokeLabDashboardCard companyId={selectedCompanyId!} />
 
           <div className="home-charts grid gap-4">
-            <ChartCard title="Run Activity" subtitle="Last 14 days" className="home-run-chart">
+            <ChartCard title="Run Activity" subtitle="Last 14 days">
               <RunActivityChart activity={data.runActivity} />
-            </ChartCard>
-            {/* PAP-411: "Tasks by Priority" chart hidden behind SHOW_TASK_PRIORITY_UI. */}
-            {SHOW_TASK_PRIORITY_UI && (
-              <ChartCard title="Tasks by Priority" subtitle="Last 14 days">
-                <PriorityChart issues={issues ?? []} />
-              </ChartCard>
-            )}
-            <ChartCard title="Tasks by Status" subtitle="Last 14 days">
-              <IssueStatusChart issues={issues ?? []} />
             </ChartCard>
             <ChartCard title="Success Rate" subtitle="Last 14 days">
               <SuccessRateChart activity={data.runActivity} />
             </ChartCard>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <DashboardListCard title="Agents to watch" subtitle="Failures not recovered by a retry, last 14 days">
+              {data.agentFailures.length === 0 ? (
+                <p className="px-4 py-3 text-sm text-ink-3">No agent failed without recovering.</p>
+              ) : (
+                data.agentFailures.map((agent) => (
+                  <Link
+                    key={agent.agentId}
+                    to={`/agents/${agent.agentId}`}
+                    className="dashboard-list-row flex items-baseline gap-3 text-sm text-inherit no-underline transition-colors hover:bg-bg-3/50"
+                  >
+                    <span className="min-w-0 flex-1 truncate" title={agent.agentName}>{agent.agentName}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-ink-3">
+                      {agent.failed} of {agent.runs} runs · {failurePercent(agent.failed, agent.runs)}
+                    </span>
+                  </Link>
+                ))
+              )}
+            </DashboardListCard>
+            <DashboardListCard title="Failure causes" subtitle="Error codes of unrecovered failures, last 14 days">
+              {runHealth.causes.length === 0 ? (
+                <p className="px-4 py-3 text-sm text-ink-3">No unrecovered failures.</p>
+              ) : (
+                runHealth.causes.map(([code, count]) => (
+                  <div key={code} className="dashboard-list-row flex items-baseline gap-3 text-sm">
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs" title={code}>{code}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-ink-3">{count}</span>
+                  </div>
+                ))
+              )}
+            </DashboardListCard>
           </div>
 
           <PluginSlotOutlet
@@ -477,82 +409,6 @@ export function Dashboard() {
             // design-allow(card-pattern): class-string prop consumed by the plugin outlet; a component can't be passed here (C5a Run 3)
             itemClassName="rounded-lg border bg-bg-2 p-4 shadow-sm"
           />
-
-          <div className="grid md:grid-cols-2 gap-4">
-            {/* Recent Activity */}
-            {recentActivity.length > 0 && (
-              <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-ink-3 uppercase tracking-wide mb-3">
-                  Recent Activity
-                </h3>
-                <Card className="@container block py-0 divide-y divide-line overflow-hidden">
-                  {recentActivity.map((event) => (
-                    <ActivityRow
-                      key={event.id}
-                      event={event}
-                      agentMap={agentMap}
-                      userProfileMap={userProfileMap}
-                      entityNameMap={entityNameMap}
-                      entityTitleMap={entityTitleMap}
-                      className={animatedActivityIds.has(event.id) ? "activity-row-enter" : undefined}
-                    />
-                  ))}
-                </Card>
-              </div>
-            )}
-
-            {/* Recent Tasks */}
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-ink-3 uppercase tracking-wide mb-3">
-                Recent Tasks
-              </h3>
-              {recentIssues.length === 0 ? (
-                <Card className="block p-4">
-                  <p className="text-sm text-ink-3">No tasks yet.</p>
-                </Card>
-              ) : (
-                <Card className="@container block py-0 divide-y divide-line overflow-hidden">
-                  {recentIssues.slice(0, 10).map((issue) => (
-                    <Link
-                      key={issue.id}
-                      to={`/issues/${issue.identifier ?? issue.id}`}
-                      className="dashboard-list-row text-sm cursor-pointer hover:bg-bg-3/50 transition-colors no-underline text-inherit block"
-                    >
-                      <div className="flex items-start gap-2 @xl:grid @xl:grid-cols-(--dashboard-task-list-columns) @xl:items-baseline">
-                        <span className="flex size-6 shrink-0 items-center justify-end @xl:self-center">
-                          <StatusIcon status={issue.status} externalConversationState={issue.externalConversationState} blockerAttention={issue.blockerAttention} />
-                        </span>
-                        <span className="flex min-w-0 flex-1 flex-col gap-1 @xl:contents">
-                          <span className="flex min-w-0 items-baseline gap-2 @xl:contents">
-                            <span className="min-w-0 flex-1 truncate text-sm leading-6" title={issue.title}>
-                              {issue.title}
-                            </span>
-                            <span className="ml-auto shrink-0 truncate text-right font-mono text-(length:--text-micro) text-ink-3 @xl:col-start-4 @xl:row-start-1 @xl:w-(--dashboard-list-id-width)">
-                              {issue.identifier ?? issue.id.slice(0, 8)}
-                            </span>
-                          </span>
-                          <span className="flex min-h-6 min-w-0 items-center gap-2 @xl:contents">
-                            <span className="flex min-w-0 flex-1 items-center @xl:col-start-3 @xl:row-start-1 @xl:self-center">
-                              {issue.assigneeAgentId && (() => {
-                                const name = agentName(issue.assigneeAgentId);
-                                return name
-                                  ? <AgentIdentity agent={agents?.find(agent => agent.id === issue.assigneeAgentId) ?? { id: issue.assigneeAgentId ?? undefined, name }} size="sm" className="max-w-32" />
-                                  : null;
-                              })()}
-                            </span>
-                            <span className="ml-auto w-(--dashboard-list-time-width) shrink-0 whitespace-nowrap text-right text-xs text-ink-3">
-                              {timeAgo(issue.updatedAt)}
-                            </span>
-                          </span>
-                        </span>
-                      </div>
-                    </Link>
-                  ))}
-                </Card>
-              )}
-            </div>
-          </div>
-
         </>
       )}
     </div>

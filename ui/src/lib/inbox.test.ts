@@ -304,6 +304,7 @@ const dashboard: DashboardSummary = {
     monthUtilizationPercent: 90,
   },
   pendingApprovals: 1,
+  oldestPendingApprovalAt: null,
   budgets: {
     activeIncidents: 0,
     pendingApprovals: 0,
@@ -311,6 +312,9 @@ const dashboard: DashboardSummary = {
     pausedProjects: 0,
   },
   runActivity: [],
+  runDurations: { p50Ms: null, p95Ms: null },
+  agentFailures: [],
+  wakeQueue: { waiting: 0, oldestWaitingAt: null },
 };
 
 describe("inbox helpers", () => {
