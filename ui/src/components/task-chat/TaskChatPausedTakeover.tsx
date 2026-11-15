@@ -35,8 +35,8 @@ export function TaskChatPausedTakeover({
         className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-(--status-agent-paused)/40 bg-(--status-agent-paused)/10 px-3 py-2"
       >
         <Pause aria-hidden="true" className="size-4 shrink-0 text-(--status-task-icon-todo)" />
-        <p id={headingId} className="min-w-0 flex-1 text-sm text-ink">
-          {subtree ? "This subtree is paused." : "This task is paused."}{" "}
+        <p className="min-w-0 flex-1 text-sm text-ink">
+          <span id={headingId}>{subtree ? "Subtree is paused." : "Task is paused."}</span>{" "}
           <span className="text-ink-3">Your message waits until Resume.</span>
         </p>
         {error ? (

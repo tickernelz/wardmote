@@ -2000,7 +2000,7 @@ describe("TaskChatComposer", () => {
       const onAdd = vi.fn().mockResolvedValue(undefined);
       const onResume = vi.fn();
       act(() => root!.render(<TaskChatComposer onAdd={onAdd} workMode="standard" pause={{ scope: "leaf", onResume }} />));
-      expect(container.textContent).toContain("This task is paused.");
+      expect(container.textContent).toContain("Task is paused.");
       expect(container.textContent).toContain("Your message waits until Resume.");
       typeText("Please check mobile too.");
       await act(async () => sendButton().click());

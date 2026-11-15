@@ -6,7 +6,7 @@ async function json(response: APIResponse) {
   return body;
 }
 
-test("paused composer: task chat preserves drafts and requires resume", async ({ page, request }) => {
+test("paused composer: a paused task keeps accepting messages that wait for resume", async ({ page, request }) => {
   test.setTimeout(120_000);
   const company = await json(await request.post("/api/companies", { data: { name: `Paused composer ${Date.now()}` } }));
   try {
@@ -20,50 +20,37 @@ test("paused composer: task chat preserves drafts and requires resume", async ({
     } }));
     await page.goto(`/${company.issuePrefix}/issues/${task.identifier}`);
     const editor = page.getByRole("textbox", { name: "editable markdown" });
-    await editor.fill("Keep this draft until I resume.");
     await page.getByRole("button", { name: "More task actions", exact: true }).click();
     await page.getByRole("button", { name: "Pause work", exact: true }).click();
-    const takeover = page.getByTestId("paused-composer-takeover");
-    await expect(takeover).toBeVisible();
-    await expect(takeover).toContainText("Your draft is saved.");
-    await expect(editor).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Send", exact: true })).toHaveCount(0);
-    await page.keyboard.press("Meta+Enter");
-    const rejected = await request.post(`/api/issues/${task.id}/comments`, { data: { body: "Cannot send yet", reopen: true } });
-    expect(rejected.status()).toBe(409);
-    const rejectedUpdate = await request.patch(`/api/issues/${task.id}`, { data: { comment: "Cannot reassign and send", assigneeAgentId: null } });
-    expect(rejectedUpdate.status()).toBe(409);
-    expect((await json(await request.get(`/api/issues/${task.id}`))).assigneeAgentId).toBe(agent.id);
-    expect(await json(await request.get(`/api/issues/${task.id}/comments`))).toHaveLength(0);
-    await page.reload();
-    await expect(takeover).toBeVisible();
-    await expect(takeover).toContainText("Your draft is saved.");
-    await takeover.getByRole("button", { name: "Resume task" }).click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", { name: "Resume work", exact: true }).click();
-    await expect(takeover).toHaveCount(0);
-    await expect(editor).toHaveText("Keep this draft until I resume.");
+    const notice = page.getByTestId("paused-composer-notice");
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("Task is paused. Your message waits until Resume.");
+    const hold = (await json(await request.get(`/api/issues/${task.id}/tree-control/state`))).activePauseHold;
+    expect(hold).toMatchObject({ rootIssueId: task.id, isRoot: true });
+
+    await editor.fill("Pick this up after the pause.");
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    await expect.poll(async () => (await json(await request.get(`/api/issues/${task.id}/comments`))).map((comment: { body: string }) => comment.body)).toEqual(["Keep this draft until I resume."]);
+    await expect.poll(async () => (await json(await request.get(`/api/issues/${task.id}/comments`))).map((comment: { body: string }) => comment.body))
+      .toEqual(["Pick this up after the pause."]);
+    expect(await json(await request.get(`/api/issues/${task.id}/live-runs`))).toEqual([]);
+
+    await page.reload();
+    await expect(notice).toBeVisible();
+    await notice.getByRole("button", { name: "Resume" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Resume work", exact: true }).click();
+    await expect(notice).toHaveCount(0);
+    expect((await json(await request.get(`/api/issues/${task.id}/tree-control/state`))).activePauseHold).toBeNull();
 
     await page.getByRole("button", { name: "More task actions", exact: true }).click();
     await page.getByRole("button", { name: "Pause work", exact: true }).click();
-    await expect(takeover).toBeVisible();
+    await expect(notice).toBeVisible();
     const child = await json(await request.post(`/api/companies/${company.id}/issues`, { data: {
-      title: "Child held by parent", parentId: task.id, status: "backlog", assigneeAgentId: agent.id,
+      title: "Child of a paused task", parentId: task.id, status: "backlog", assigneeAgentId: agent.id,
     } }));
+    expect((await json(await request.get(`/api/issues/${child.id}/tree-control/state`))).activePauseHold).toBeNull();
     await page.goto(`/${company.issuePrefix}/issues/${child.identifier}`);
-    await expect(takeover).toContainText("Subtree is paused.");
-    await expect(editor).toHaveCount(0);
-    expect((await request.post(`/api/issues/${child.id}/comments`, { data: { body: "Still paused" } })).status()).toBe(409);
-    await takeover.getByRole("link", { name: "Resume subtree" }).click();
-    await expect(page).toHaveURL(new RegExp(task.identifier));
-    await takeover.getByRole("button", { name: "Resume subtree" }).click();
-    await page.getByRole("dialog").getByRole("checkbox").uncheck();
-    await page.getByRole("dialog").getByRole("button", { name: "Resume subtree", exact: true }).click();
-    await page.goto(`/${company.issuePrefix}/issues/${child.identifier}`);
-    await expect(takeover).toHaveCount(0);
     await expect(editor).toBeVisible();
+    await expect(notice).toHaveCount(0);
   } finally {
     await request.patch(`/api/companies/${company.id}`, { data: { status: "archived" } });
   }
