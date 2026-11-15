@@ -529,7 +529,7 @@ describe("openwa_endpoint_config (embedded Postgres + fake gateway)", () => {
     expect(read).not.toHaveProperty("customInstructionsTruncated");
 
     const extended = read.customInstructions + "\nRule 31: answer in the owner's language.";
-    const note = "Supplier escalation path. ".repeat(200).trim();
+    const note = "Supplier escalation path. ".repeat(150).trim();
     const written = await executeOpenwaTool(db, binding, "openwa_endpoint_config", { customInstructions: extended, chatSettings: { note } });
     expect(written.customInstructions).toBe(extended);
     expect((written.chat as { settings: { note: string } }).settings.note).toBe(note);

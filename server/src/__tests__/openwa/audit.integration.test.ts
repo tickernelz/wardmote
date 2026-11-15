@@ -399,7 +399,7 @@ describeEmbeddedPostgres("OpenWA audit and retention", () => {
     expect(await scheduler.runDue()).toEqual({ purged: 1, batches: 1, expiredGrants: 0 });
   });
 
-  it("redacts credentials, stores config and message content whole and cuts tool calls at 16 KB with a marker", async () => {
+  it("redacts credentials, stores config and message content whole and cuts tool calls at 64 KB with a marker", async () => {
     const t = await seed();
     await recordOpenwaAudit(db, {
       companyId: t.companyId, endpointId: t.endpointId, kind: "config_changed", actorKind: "agent",
@@ -428,17 +428,17 @@ describeEmbeddedPostgres("OpenWA audit and retention", () => {
     await recordOpenwaAudit(db, {
       companyId: t.companyId, endpointId: t.endpointId, kind: "tool_called", actorKind: "agent",
       metadata: { operation: "openwa.sendText" },
-      content: { args: { blob: "x".repeat(10_000) }, resultSummary: "y".repeat(5_000), text: "z".repeat(40_000) },
+      content: { args: { blob: "x".repeat(30_000) }, resultSummary: "y".repeat(5_000), text: "z".repeat(100_000) },
     });
     const rows = await db.select().from(chatAuditEntries).where(eq(chatAuditEntries.endpointId, t.endpointId));
     const message = rows.find((entry) => entry.kind === "message_sent")!;
     expect((message.content as { text: string }).text).toBe("m".repeat(40_000));
     const tool = rows.find((entry) => entry.kind === "tool_called")!;
     const cut = tool.content as { args: { truncated: true; bytes: number }; resultSummary: string; text: string };
-    expect(Buffer.byteLength(JSON.stringify(cut))).toBeLessThanOrEqual(16_384);
-    expect(cut.text).toContain("…[truncated 40000 bytes]");
+    expect(Buffer.byteLength(JSON.stringify(cut))).toBeLessThanOrEqual(65_536);
+    expect(cut.text).toContain("…[truncated 100000 bytes]");
     expect(cut.resultSummary).toBe("y".repeat(5_000));
-    expect(cut.args).toMatchObject({ truncated: true, bytes: Buffer.byteLength(JSON.stringify({ blob: "x".repeat(10_000) })) });
+    expect(cut.args).toMatchObject({ truncated: true, bytes: Buffer.byteLength(JSON.stringify({ blob: "x".repeat(30_000) })) });
   });
 
   async function grantFixture(t: Fixture, input: { expiresAt: Date; scope?: "one_action" | "requester" }) {

@@ -48,8 +48,9 @@ export const OPENWA_GUIDANCE_VERSION = 2;
 export const OPENWA_WAKE_CONTEXT_KEY = "wardmoteOpenwaWake";
 export const OPENWA_WAKE_MAX_MESSAGES = 20;
 export const OPENWA_WAKE_MAX_TEXT = 2000;
-const QUOTE_MAX_TEXT = 500;
-const SUMMARY_MAX_TEXT = 300;
+const QUOTE_MAX_TEXT = 4000;
+const SUMMARY_MAX_TEXT = 500;
+const PROPOSED_ACTION_MAX_TEXT = 2000;
 const MAX_MEDIA_PER_MESSAGE = 10;
 const MAX_PENDING_APPROVALS = 10;
 const MAX_OWNERS = 20;
@@ -237,7 +238,7 @@ function summaryOf(value: string): { summary: string; summaryTruncated?: true } 
 }
 
 function proposedActionOf(value: string): { proposedAction: string; proposedActionTruncated?: true } {
-  const cut = truncate(value, SUMMARY_MAX_TEXT);
+  const cut = truncate(value, PROPOSED_ACTION_MAX_TEXT);
   return { proposedAction: cut.text, ...(cut.truncated ? { proposedActionTruncated: true as const } : {}) };
 }
 

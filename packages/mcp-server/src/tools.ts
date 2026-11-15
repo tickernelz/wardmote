@@ -152,8 +152,8 @@ const listIssuesSchema = z.object({
   includeLiveDescendantSummary: z.boolean().optional(),
   includeConversations: z.boolean().optional(),
   q: z.string().optional(),
-  limit: z.number().int().positive().max(1000).default(25).describe(
-    "Maximum issues to return; defaults to 25 to keep the response small.",
+  limit: z.number().int().positive().default(25).describe(
+    "Maximum issues to return; defaults to 25 to keep the response small, any positive number is accepted. A page with exactly limit rows may have more: pass offset = offset + limit.",
   ),
   offset: z.number().int().nonnegative().optional(),
   view: z.enum(["compact"]).optional().describe(
@@ -170,7 +170,7 @@ const listCommentsSchema = z.object({
   issueId: issueIdSchema,
   after: z.string().guid().optional(),
   order: z.enum(["asc", "desc"]).optional(),
-  limit: z.number().int().positive().max(500).optional(),
+  limit: z.number().int().positive().optional(),
 });
 
 const upsertDocumentToolSchema = z.object({

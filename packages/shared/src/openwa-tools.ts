@@ -1,13 +1,16 @@
 import { z } from "zod";
 import {
+  OPENWA_CHAT_NOTE_MAX_LENGTH,
+  OPENWA_CUSTOM_INSTRUCTIONS_MAX_LENGTH,
   openwaBurstWindowSecondsSchema,
   openwaChatActivationSchema,
   openwaReplyPolicySchema,
   openwaTriggerOverridesSchema,
 } from "./validators/chat-channels.js";
 
-export const OPENWA_TOOL_SCHEMA_BUDGET_BYTES = 12_288;
-export const OPENWA_TOOL_RESULT_DEFAULT_BYTES = 16_384;
+export const OPENWA_TOOL_SCHEMA_BUDGET_BYTES = 12_800;
+export const OPENWA_TOOL_RESULT_DEFAULT_BYTES = 32_768;
+export const OPENWA_APPROVAL_MESSAGE_MAX_LENGTH = 4096;
 export const OPENWA_TOOL_RESULT_MIN_BYTES = 1024;
 export const OPENWA_SEND_KINDS = ["text", "image", "video", "audio", "voice", "document", "sticker", "location", "contact", "poll"] as const;
 export type OpenwaSendKind = (typeof OPENWA_SEND_KINDS)[number];
@@ -19,7 +22,7 @@ const uuid = z.string().refine((value) => UUID_PATTERN.test(value), "Expected a 
 const e164 = z.string().regex(/^\+?[1-9]\d{6,14}$/);
 const messageId = z.string().min(1).max(200);
 const mention = z.string().regex(/^(\+?[1-9]\d{6,14}|openwa:[A-Za-z0-9-]{1,64}:\d{5,25}@(c\.us|lid))$/);
-const triggerIds = z.array(uuid).min(1);
+const triggerIds = z.array(uuid).min(1).max(500);
 const operation = z.string().min(1).max(100);
 const cursor = z.string().min(1).max(200).optional();
 const maxBytes = z.number().min(OPENWA_TOOL_RESULT_MIN_BYTES).optional();
@@ -50,13 +53,13 @@ export const OPENWA_TOOLS = [
     {
       chat,
       kind: z.enum(OPENWA_SEND_KINDS).optional(),
-      text: z.string().min(1).optional(),
+      text: z.string().min(1).max(200_000).optional(),
       attachmentId: uuid.optional(),
       filename: z.string().max(255).optional(),
       location: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180), name: z.string().max(1024).optional(), address: z.string().max(1024).optional() }).strict().optional(),
       contact: z.object({ name: z.string().min(1).max(255), number: e164 }).strict().optional(),
       poll: z.object({ question: z.string().min(1).max(255), options: z.array(z.string().min(1).max(100)).min(2).max(12), multi: z.boolean().optional() }).strict().optional(),
-      mentions: z.array(mention).optional(),
+      mentions: z.array(mention).max(500).optional(),
       quoteMessageId: messageId.optional(),
       idempotencyKey: uuid,
     },
@@ -95,7 +98,7 @@ export const OPENWA_TOOLS = [
     "find",
     "read",
     "Find contacts and chats by name or number, check whether a number is on WhatsApp, or resolve a LID. Give exactly one of query, phone, lid; cursor pages it.",
-    { query: z.string().min(1).optional(), phone: e164.optional(), lid: z.string().regex(/^\d{5,25}@lid$/).optional(), cursor, limit: z.number().min(1).optional(), maxBytes },
+    { query: z.string().min(1).max(1_000).optional(), phone: e164.optional(), lid: z.string().regex(/^\d{5,25}@lid$/).optional(), cursor, limit: z.number().min(1).optional(), maxBytes },
     (value, ctx) => {
       if ([value.query, value.phone, value.lid].filter((entry) => entry !== undefined).length !== 1)
         ctx.addIssue({ code: "custom", message: "Give exactly one of query, phone, lid" });
@@ -109,9 +112,9 @@ export const OPENWA_TOOLS = [
     {
       categories: z.array(z.enum(GRANT_CATEGORIES)).min(1).max(GRANT_CATEGORIES.length).optional(),
       scope: z.enum(["one_action", "requester"]).optional(),
-      summary: z.string().trim().min(1).optional(),
-      proposedAction: z.string().trim().min(1).optional(),
-      messageToOwners: z.string().trim().min(1),
+      summary: z.string().trim().min(1).max(10_000).optional(),
+      proposedAction: z.string().trim().min(1).max(10_000).optional(),
+      messageToOwners: z.string().trim().min(1).max(OPENWA_APPROVAL_MESSAGE_MAX_LENGTH),
       remindRequestId: uuid.optional(),
       idempotencyKey: uuid,
     },
@@ -130,7 +133,7 @@ export const OPENWA_TOOLS = [
     {
       requestId: uuid,
       decision: z.enum(["approve", "reject", "clarify"]),
-      conditions: z.string().trim().min(1).optional(),
+      conditions: z.string().trim().min(1).max(20_000).optional(),
     },
   ),
   tool(
@@ -139,7 +142,7 @@ export const OPENWA_TOOLS = [
     "Withdraw your pending approval request from this chat when the owner's reply decided or mooted it. Owner runs or your own runs only; never just because a member asked. Sends and executes nothing; reminders stop.",
     {
       requestId: uuid,
-      reason: z.string().trim().min(1),
+      reason: z.string().trim().min(1).max(5_000),
       ownerMessageRef: messageId.optional(),
     },
   ),
@@ -147,13 +150,13 @@ export const OPENWA_TOOLS = [
     "stay_silent",
     "write",
     "Leave triggers unanswered: marks the listed (default: all visible pending) triggers silenced.",
-    { triggerIds: z.array(uuid).optional() },
+    { triggerIds: z.array(uuid).max(500).optional() },
   ),
   tool(
     "handoff",
     "write",
     "Hand owner triggers to a follow-up owner run carrying your note.",
-    { triggerIds, note: z.string().min(1) },
+    { triggerIds, note: z.string().min(1).max(20_000) },
   ),
   tool(
     "catalog",
@@ -161,7 +164,7 @@ export const OPENWA_TOOLS = [
     "List gateway operations with category and availability on this engine and key. Filter by category or text; page with cursor.",
     {
       category: z.enum(["read", "write", "wa_admin", "gateway_admin", "wardmote"]).optional(),
-      query: z.string().min(1).optional(),
+      query: z.string().min(1).max(1_000).optional(),
       cursor,
       maxBytes,
     },
@@ -173,8 +176,8 @@ export const OPENWA_TOOLS = [
     {
       senders: z
         .object({
-          add: z.array(senderRule.extend({ label: z.string().trim().min(1).optional() })).optional(),
-          remove: z.array(senderRule).optional(),
+          add: z.array(senderRule.extend({ label: z.string().trim().min(1).max(1_200).optional() })).max(500).optional(),
+          remove: z.array(senderRule).max(500).optional(),
         })
         .strict()
         .optional(),
@@ -185,7 +188,7 @@ export const OPENWA_TOOLS = [
           triggers: openwaTriggerOverridesSchema.nullable().optional(),
           absenceSeconds: z.number().int().min(10).max(86_400).nullable().optional(),
           replyPolicy: openwaReplyPolicySchema.nullable().optional(),
-          note: z.string().nullable().optional(),
+          note: z.string().max(OPENWA_CHAT_NOTE_MAX_LENGTH).nullable().optional(),
           ownerReportChat: z.string().nullable().optional(),
           ownerGroupAccess: z.enum(["auto", "off"]).optional(),
         })
@@ -205,7 +208,7 @@ export const OPENWA_TOOLS = [
         .strict()
         .optional(),
       burstWindowSeconds: openwaBurstWindowSecondsSchema.optional(),
-      customInstructions: z.string().optional(),
+      customInstructions: z.string().max(OPENWA_CUSTOM_INSTRUCTIONS_MAX_LENGTH).optional(),
       cursor,
       maxBytes,
     },
@@ -216,7 +219,7 @@ export const OPENWA_TOOLS = [
     "Owner-triggered runs only: open, close or list autonomy windows. While open, plain confirmation cards in the named issue trees are auto-accepted; destructive ones still wait. Close without issues closes all.",
     {
       operation: z.enum(["open", "close", "list"]),
-      issues: z.array(z.string().min(1).max(200)).min(1).optional().describe("identifiers or ids"),
+      issues: z.array(z.string().min(1).max(200)).min(1).max(200).optional().describe("identifiers or ids"),
       hours: z.number().int().min(1).max(24).optional(),
       maxAccepts: z.number().int().min(1).max(1000).optional(),
       idempotencyKey: uuid.optional(),

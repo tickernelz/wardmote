@@ -17,7 +17,7 @@ const activeRuns = ["queued", "scheduled_retry", "running"];
 export const OPENWA_COMPLETION_STATUSES = ["done", "cancelled", "blocked"] as const;
 export const OPENWA_COMPLETION_COALESCE_MS = 60_000;
 const OPENWA_TITLE_LIMIT = 200;
-const OPENWA_COMMENT_LIMIT = 600;
+const OPENWA_COMMENT_LIMIT = 4000;
 const OPENWA_MAX_BLOCKERS = 10;
 function ids(run: Run): string[] {
   const value = run.contextSnapshot?.chatCompletionDeliveryIds;

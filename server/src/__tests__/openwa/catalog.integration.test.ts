@@ -27,7 +27,7 @@ import {
   toolConnections,
   type Db,
 } from "@tickernelz/wardmote-db";
-import { openwaTool, type OpenwaTriggerClass } from "@tickernelz/wardmote-shared";
+import { openwaTool, type OpenwaTriggerClass, OPENWA_TOOL_RESULT_DEFAULT_BYTES } from "@tickernelz/wardmote-shared";
 import { OPENWA_OPERATIONS, type OpenwaJsonSchema, type OpenwaOperation } from "@tickernelz/wardmote-shared/openwa-operations";
 import { startEmbeddedPostgresTestDatabase } from "../helpers/embedded-postgres.js";
 import { createLocalDiskStorageProvider } from "../../storage/local-disk-provider.js";
@@ -365,7 +365,7 @@ describe("OpenWA catalog, describe and call (embedded Postgres + fake gateway)",
     let pages = 0;
     do {
       const page = await executeOpenwaTool(db, binding, "openwa_catalog", { ...input, ...(cursor ? { cursor } : {}) });
-      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(16_384);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(OPENWA_TOOL_RESULT_DEFAULT_BYTES);
       operations.push(...(page.operations as Array<Record<string, unknown>>));
       cursor = page.nextCursor as string | null;
       pages++;
@@ -622,7 +622,7 @@ describe("OpenWA catalog, describe and call (embedded Postgres + fake gateway)",
     expect((await rejection(call(other, { operation: "wardmote.audit.list" }))).code).toBe("owner_only");
   });
 
-  it("filters session-query operations to the endpoint's session and caps results at 16 KB with cursors", async () => {
+  it("filters session-query operations to the endpoint's session and caps results at the default page budget with cursors", async () => {
     const t = await setup();
     t.gateway.overrides.push({
       method: "GET",
@@ -641,7 +641,7 @@ describe("OpenWA catalog, describe and call (embedded Postgres + fake gateway)",
     let cursor: string | null = null;
     do {
       const page = await call(other, { operation: "ContactController_findAll", ...(cursor ? { cursor } : {}) });
-      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(16_384);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(OPENWA_TOOL_RESULT_DEFAULT_BYTES);
       seen.push(...(page.result as unknown[]));
       cursor = page.nextCursor as string | null;
     } while (cursor);

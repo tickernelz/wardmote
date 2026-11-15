@@ -182,17 +182,25 @@ of the person you answer.
   and `nextCursor`; a cut text carries `textTruncated` (with `textChars`, the
   original length), `transcriptTruncated`, `summaryTruncated` or
   `proposedActionTruncated`.
-- `maxBytes` (at least 1024, default 16384) sets the page budget of
+- `maxBytes` (at least 1024, default 32768) sets the page budget of
   `openwa_read_chat`, `openwa_linked_read`, `openwa_find`, `openwa_catalog`,
   `openwa_endpoint_config` (sender list), `openwa_get_media`,
   `openwa_linked_get_media` and `openwa_call` (including `wardmote.audit.list`).
 - `maxChars` sets the text cut: per message on `openwa_read_chat` and
-  `openwa_linked_read` (default 2000, quoted text 200), per transcript on
-  `openwa_get_media` and `openwa_linked_get_media` (default 8000).
+  `openwa_linked_read` (default 4000, quoted text 500), per transcript on
+  `openwa_get_media` and `openwa_linked_get_media` (default 16000).
 - `limit` has no upper bound on `openwa_read_chat`, `openwa_linked_read`,
   `openwa_find` (default 40 matches per page) and `wardmote.audit.list`
-  (default 25). Free-text arguments (notes, custom instructions, summaries,
-  reasons, handoff notes) and id lists have no length cap.
+  (default 25).
+- Write arguments have loose caps; a longer one is refused with
+  `invalid_arguments`, never cut: `openwa_send` text 200000 and 500
+  mentions; `openwa_request_approval` `messageToOwners` 4096 (one bubble),
+  `summary` and `proposedAction` 10000; `openwa_approval_resolve`
+  `conditions` and `openwa_handoff` `note` 20000; `openwa_approval_withdraw`
+  `reason` 5000; `triggerIds` 500; `openwa_endpoint_config` sender
+  `add`/`remove` 500 (label 1200), chat `note` 4000 and
+  `customInstructions` 16000; `openwa_autonomy_window` `issues` 200;
+  `openwa_find` and `openwa_catalog` `query` 1000.
 - Fixed limits come from WhatsApp and the OpenWA gateway: 4096 characters per
   bubble (a longer send is split, past 3 parts it goes as a Markdown document),
   2000 messages of live history (`historyCeiling` marks it; `source: "stored"`
@@ -316,9 +324,8 @@ anew.
    either put the items in one task with a checklist or ask once with scope
    `requester` and say the count in `proposedAction`; never ask again after the
    first call. You write `messageToOwners`;
-   it goes as one WhatsApp bubble (at most 4096 characters; a longer one is cut
-   and returns `truncated: true` with `messageShortened`, so keep the full
-   context in `summary` and `proposedAction`) to each owner approval chat, or
+   it goes as one WhatsApp bubble (at most 4096 characters; a longer one is
+   refused, so keep the full context in `summary` and `proposedAction`) to each owner approval chat, or
    to the chat's owner report group when the guidance names one. Then tell the
    requester you asked. Never ask for approval by writing in a team or project
    group: this tool is the only way to ask.

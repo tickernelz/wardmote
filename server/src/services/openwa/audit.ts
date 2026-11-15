@@ -18,7 +18,7 @@ import { readOpenwaRunContext } from "./authority.js";
 type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 export type OpenwaAuditDb = Db | DbTransaction;
 
-export const OPENWA_AUDIT_TOOL_CALL_LIMIT_BYTES = 16384;
+export const OPENWA_AUDIT_TOOL_CALL_LIMIT_BYTES = 65536;
 export const DEFAULT_OPENWA_AUDIT_CONTENT_RETENTION_DAYS = 90;
 export const OPENWA_AUDIT_PURGE_BATCH_SIZE = 1000;
 export const OPENWA_AUDIT_PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;

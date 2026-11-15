@@ -44,6 +44,7 @@ import {
   normalizeIssueListLimit,
   deriveIssueCommentRunLogAttribution,
   ISSUE_COUNT_BATCH_SIZE,
+  MAX_CHILD_ISSUES_CREATED_BY_HELPER,
   issueService,
   readIssueCommentRunLogText,
 } from "../services/issues.ts";
@@ -4297,6 +4298,35 @@ describeEmbeddedPostgres("issueService.create workspace inheritance", () => {
     });
 
     expect(child.requestDepth).toBe(MAX_ISSUE_REQUEST_DEPTH);
+  });
+
+  it("refuses a helper child past the child cap and names the route that still creates one", async () => {
+    const companyId = randomUUID();
+    const parentIssueId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Wardmote",
+      issuePrefix: `C${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(issues).values({ id: parentIssueId, companyId, title: "Conversation parent", status: "in_progress", priority: "medium" });
+    await db.insert(issues).values(
+      Array.from({ length: MAX_CHILD_ISSUES_CREATED_BY_HELPER - 1 }, (_, index) => ({
+        companyId,
+        parentId: parentIssueId,
+        title: "Child " + index,
+        status: "todo" as const,
+        priority: "medium" as const,
+      })),
+    );
+
+    await expect(svc.createChild(parentIssueId, { title: "Last allowed", status: "todo", priority: "medium" })).resolves.toMatchObject({
+      issue: expect.objectContaining({ parentId: parentIssueId }),
+    });
+    await expect(svc.createChild(parentIssueId, { title: "One too many", status: "todo", priority: "medium" })).rejects.toMatchObject({
+      status: 422,
+      message: expect.stringContaining("maximum 200 child issues for this helper; create more with POST /api/companies/{companyId}/issues and parentId"),
+    });
   });
 });
 

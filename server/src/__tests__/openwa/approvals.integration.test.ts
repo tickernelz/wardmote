@@ -33,8 +33,7 @@ import {
   toolConnections,
   type Db,
 } from "@tickernelz/wardmote-db";
-import { SPEECH_TO_TEXT_DEFAULTS } from "@tickernelz/wardmote-shared";
-import { OPENWA_TEXT_LIMIT } from "../../services/openwa/format.js";
+import { OPENWA_APPROVAL_MESSAGE_MAX_LENGTH, SPEECH_TO_TEXT_DEFAULTS } from "@tickernelz/wardmote-shared";
 import { startEmbeddedPostgresTestDatabase } from "../helpers/embedded-postgres.js";
 import { createLocalDiskStorageProvider } from "../../storage/local-disk-provider.js";
 import { createStorageService } from "../../storage/service.js";
@@ -811,33 +810,22 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     expect(await grantsOf(request.id)).toHaveLength(1);
   }, 120_000);
 
-  it("shortens a messageToOwners longer than one WhatsApp bubble and reports it instead of failing", async () => {
+  it("refuses a messageToOwners longer than one WhatsApp bubble and sends one that fits whole", async () => {
     const t = await setup();
     const memberRun = await runStart(t, await admitted(t, { chatId: jid(MEMBER_A), body: "tolong buatkan task" }));
     const long = "Ringkasan permintaan anggota. ".repeat(400).trim();
-    expect(long.length).toBeGreaterThan(OPENWA_TEXT_LIMIT);
-    const created = (await requestApproval(memberRun.binding, { message: long })) as Awaited<ReturnType<typeof requestApproval>> & {
-      truncated?: true;
-      messageShortened?: { originalLength: number; sentLength: number };
-    };
+    expect(long.length).toBeGreaterThan(OPENWA_APPROVAL_MESSAGE_MAX_LENGTH);
+    await expect(requestApproval(memberRun.binding, { message: long })).rejects.toMatchObject({
+      name: "ZodError",
+      message: expect.stringContaining("<=" + OPENWA_APPROVAL_MESSAGE_MAX_LENGTH + " characters"),
+    });
+    expect(t.gateway.sends.filter((send) => send.chatId === jid(OWNER_PHONE))).toHaveLength(0);
+    const full = "Ringkasan permintaan anggota. ".repeat(130).trim();
+    expect(full.length).toBeLessThanOrEqual(OPENWA_APPROVAL_MESSAGE_MAX_LENGTH);
+    const created = await requestApproval(memberRun.binding, { message: full });
     expect(created.bubbles).toEqual([expect.objectContaining({ state: "sent" })]);
-    expect(created.truncated).toBe(true);
-    expect(created.messageShortened).toMatchObject({ originalLength: long.length });
-    expect(created.messageShortened!.sentLength).toBeGreaterThan(3500);
-    const ownerSend = t.gateway.sends.find((send) => send.chatId === jid(OWNER_PHONE))!;
-    expect(ownerSend.text.length).toBeLessThanOrEqual(OPENWA_TEXT_LIMIT);
-    expect(ownerSend.text.length).toBe(created.messageShortened!.sentLength);
-    expect(ownerSend.text.endsWith("[…]")).toBe(true);
-    expect(ownerSend.text).toContain("Ringkasan permintaan anggota.");
-    const short = await requestApproval(memberRun.binding, { message: "Approve invoice task?" });
-    expect(short).not.toHaveProperty("messageShortened");
-    expect(short).not.toHaveProperty("truncated");
-    const spaced = "a" + " ".repeat(3400) + "b cx" + " filler".repeat(600);
-    const started = performance.now();
-    const cut = (await requestApproval(memberRun.binding, { message: spaced })) as Awaited<ReturnType<typeof requestApproval>> & { messageShortened?: unknown };
-    expect(performance.now() - started).toBeLessThan(5_000);
-    expect(cut.messageShortened).toMatchObject({ originalLength: spaced.length });
-    expect(t.gateway.sends.at(-1)!.text.endsWith("[…]")).toBe(true);
+    expect(created).not.toHaveProperty("messageShortened");
+    expect(t.gateway.sends.find((send) => send.chatId === jid(OWNER_PHONE))!.text).toBe(full);
   }, 120_000);
 
   it("rejects approval requests from owner-class runs", async () => {

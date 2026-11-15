@@ -305,6 +305,8 @@ export const openwaGatewayAdminToolLevelSchema = z.enum(OPENWA_GATEWAY_ADMIN_TOO
 
 export const OPENWA_DEFAULT_COMMAND_PREFIX = "/ai";
 export const OPENWA_DEFAULT_OWNER_NUMBER_PREFIX = "\u{1F916} *Assistant:*";
+export const OPENWA_CUSTOM_INSTRUCTIONS_MAX_LENGTH = 16_000;
+export const OPENWA_CHAT_NOTE_MAX_LENGTH = 4_000;
 
 const openwaCommandPrefixSchema = z.string().trim().min(1).max(32).regex(/^\S+$/);
 const openwaKeywordsSchema = z.array(z.string().trim().min(1).max(100)).max(50);
@@ -381,7 +383,9 @@ export const openwaEndpointPolicySchema = z
       .strict()
       .prefault({}),
     gatewayAdminTools: openwaGatewayAdminToolLevelSchema.default("off"),
-    customInstructions: multilineTextSchema.pipe(z.string().trim()).default(""),
+    customInstructions: multilineTextSchema
+      .pipe(z.string().trim().max(OPENWA_CUSTOM_INSTRUCTIONS_MAX_LENGTH))
+      .default(""),
     auditContentRetentionDays: z.number().int().min(1).max(3650).default(90),
     attestations: z
       .object({
@@ -431,7 +435,7 @@ export const openwaChatSettingsSchema = z
     triggers: openwaTriggerOverridesSchema.optional(),
     absenceSeconds: openwaAbsenceSecondsSchema.optional(),
     replyPolicy: openwaReplyPolicySchema.optional(),
-    note: multilineTextSchema.pipe(z.string().trim()).optional(),
+    note: multilineTextSchema.pipe(z.string().trim().max(OPENWA_CHAT_NOTE_MAX_LENGTH)).optional(),
     ownerReportChatKey: openwaGroupChatKeySchema.nullable().optional(),
     ownerGroupAccess: openwaOwnerGroupAccessSchema.optional(),
   })
