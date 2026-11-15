@@ -34,6 +34,7 @@ function usePausedTaskActions(companyId: string, item: LiveNowPausedItem, issueL
     title: item.issue?.title ?? item.pause.title,
     taskPath: createIssueDetailPath(pathId),
     detailState: item.issue ? withIssueDetailHeaderSeed(issueLinkState, item.issue) : undefined,
+    canRelease: item.pause.state === "paused",
     resuming: resume.isPending,
     ending: endPause.isPending,
     resume: () => resume.mutate(task),
@@ -77,7 +78,7 @@ function PausedMoreMenu({ actions, identifier, className }: { actions: PausedAct
           </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem disabled={actions.ending || actions.resuming} onSelect={actions.endPause}>
+        <DropdownMenuItem disabled={!actions.canRelease || actions.ending || actions.resuming} onSelect={actions.endPause}>
           <Square aria-hidden="true" />
           {actions.ending ? "Ending pause…" : "End pause without waking"}
         </DropdownMenuItem>
@@ -163,7 +164,7 @@ export function LiveNowPausedRow({
             comfortable && "border-t border-line pt-2 sm:border-t-0 sm:pt-0",
           )}
         >
-          <ResumeButton actions={actions} identifier={identifier} iconOnly={!comfortable} />
+          {pause.state === "paused" ? <ResumeButton actions={actions} identifier={identifier} iconOnly={!comfortable} /> : null}
           <Link
             to={actions.taskPath}
             state={actions.detailState}
@@ -217,7 +218,7 @@ export function LiveNowPausedCard({
         <span className="min-w-0 truncate">{pause.assigneeAgentName ?? "Unassigned"}</span>
         <span className="ml-auto shrink-0">paused {relativeTime(pause.pausedAt)}</span>
         <span className="relative z-10 flex items-center gap-1">
-          <ResumeButton actions={actions} identifier={identifier} iconOnly />
+          {pause.state === "paused" ? <ResumeButton actions={actions} identifier={identifier} iconOnly /> : null}
           <PausedMoreMenu actions={actions} identifier={identifier} />
         </span>
       </span>

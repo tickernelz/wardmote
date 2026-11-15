@@ -3188,6 +3188,13 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     },
   );
 
+  const { data: runningRunCount = 0 } = useQuery<LiveRunForIssue[], Error, number>({
+    queryKey: queryKeys.issues.liveRuns(issueQueryId!),
+    queryFn: () => heartbeatsApi.liveRunsForIssue(canonicalIssueId!),
+    enabled: !!canonicalIssueId,
+    select: (runs) => runs.filter((run) => run.status === "running").length,
+  });
+
   const { data: hasActiveRun = false } = useQuery<
     ActiveRunForIssue | null,
     Error,
@@ -6563,8 +6570,9 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
 
 
   const canShowSubtreeControls = canManageTreeControl && childIssues.length > 0;
+  const pauseStillStopping = Boolean(activePauseHold) && runningRunCount > 0;
   const canResumeSubtree =
-    canShowSubtreeControls && activePauseHold?.isRoot === true;
+    canShowSubtreeControls && activePauseHold?.isRoot === true && !pauseStillStopping;
   const canRestoreSubtree =
     canShowSubtreeControls && activeCancelHolds.length > 0;
   const isTerminalIssue =
@@ -6579,7 +6587,8 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
   const canResumeLeafWork =
     canManageTreeControl &&
     childIssues.length === 0 &&
-    activePauseHold?.isRoot === true;
+    activePauseHold?.isRoot === true &&
+    !pauseStillStopping;
   const treeControlScope: "leaf" | "subtree" =
     childIssues.length === 0 ? "leaf" : "subtree";
   const previewAffectedIssueCount = treePreviewAffectedIssues.length;
@@ -7263,7 +7272,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                   composerPause={activePauseHold ? {
                     scope: activePauseHold.isRoot && childIssues.length === 0 ? "leaf" : "subtree",
                     pending: executeTreeControl.isPending && executeTreeControl.variables?.mode === "resume",
-                    onResume: activePauseHold.isRoot && canManageTreeControl ? () => {
+                    onResume: activePauseHold.isRoot && canManageTreeControl && !pauseStillStopping ? () => {
                       executeTreeControl.reset();
                       setTreeControlMode("resume");
                       setTreeControlWakeAgentsOnResume(isAgentOwnedNonTerminalIssue || canShowSubtreeControls);

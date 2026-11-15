@@ -787,6 +787,26 @@ describe("OMP RPC pause at a safe point", () => {
     await running;
   });
 
+  it("does not treat a turn end as a safe point while a tool from that turn is still running", async () => {
+    const session = createOmpRpcSteerSession();
+    const { running } = await startPrompted(session);
+    await state.feed({ type: "turn_start" });
+    await state.feed({ type: "tool_execution_start", toolCallId: "background" });
+    const outcome = session.stopAtSafePoint({ timeoutMs: 5_000 });
+
+    await state.feed({ type: "turn_end", toolResults: [] });
+    expect(aborts()).toHaveLength(0);
+
+    await state.feed({ type: "tool_execution_end", toolCallId: "background" });
+    await state.feed({ type: "turn_end", toolResults: [] });
+    expect(await outcome).toBe("reached");
+    expect(aborts()).toHaveLength(1);
+
+    await state.endTurn();
+    state.finish();
+    await running;
+  });
+
   it("never dispatches the prompt once the run was paused before it started", async () => {
     const session = createOmpRpcSteerSession();
     const running = run(session);

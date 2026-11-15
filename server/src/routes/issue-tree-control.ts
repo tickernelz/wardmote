@@ -5,7 +5,7 @@ import {
   issues as issueRows,
   type Db,
 } from "@tickernelz/wardmote-db";
-import { and, eq, gte, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { getExecutionBlocker } from "../services/execution-blocker.js";
 import { conflict } from "../errors.js";
 import {
@@ -29,6 +29,7 @@ import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 const TREE_RUN_CANCELLATION_RESPONSE_WAIT_MS = 1_000;
 const RESUME_EXECUTABLE_STATUSES = ["todo", "in_progress", "in_review"];
+const RESUME_WAKE_COMMENT_LIMIT = 50;
 
 function errorToMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -386,7 +387,7 @@ export function issueTreeControlRoutes(
       resource: { type: "company", companyId },
     });
     if (!scopeDecision.allowed) {
-      res.status(403).json({ error: "Run telemetry is outside this actor's authorization boundary" });
+      res.status(403).json({ error: "Paused tasks are outside this actor's authorization boundary" });
       return;
     }
     const pausedTasks = await treeControlSvc.listPausedTasks(companyId, {
@@ -547,17 +548,17 @@ export function issueTreeControlRoutes(
             )
               continue;
             const waitingComments = await db
-              .select({ id: issueCommentRows.id, createdAt: issueCommentRows.createdAt })
+              .select({ id: issueCommentRows.id })
               .from(issueCommentRows)
               .where(and(
                 eq(issueCommentRows.companyId, root.companyId),
                 eq(issueCommentRows.issueId, issue.id),
                 gte(issueCommentRows.createdAt, hold.createdAt),
                 or(isNull(issueCommentRows.authorAgentId), ne(issueCommentRows.authorAgentId, issue.assigneeAgentId)),
-              ));
-            const wakeCommentIds = waitingComments
-              .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
-              .map((comment) => comment.id);
+              ))
+              .orderBy(desc(issueCommentRows.createdAt), desc(issueCommentRows.id))
+              .limit(RESUME_WAKE_COMMENT_LIMIT);
+            const wakeCommentIds = waitingComments.map((comment) => comment.id).reverse();
             await heartbeat.wakeup(issue.assigneeAgentId, {
               source: "assignment",
               triggerDetail: "system",

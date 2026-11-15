@@ -414,6 +414,33 @@ export function issueTreeControlService(db: Db) {
     return byIssueId;
   }
 
+  async function assertPauseHoldsNotStopping(companyId: string, holdIds: string[]) {
+    if (holdIds.length === 0) return;
+    const memberIssueIds = (await db
+      .select({ issueId: issueTreeHoldMembers.issueId })
+      .from(issueTreeHoldMembers)
+      .where(and(
+        eq(issueTreeHoldMembers.companyId, companyId),
+        inArray(issueTreeHoldMembers.holdId, holdIds),
+        eq(issueTreeHoldMembers.skipped, false),
+      ))).map((row) => row.issueId);
+    if (memberIssueIds.length === 0) return;
+    const stopping = await db
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(and(
+        eq(heartbeatRuns.companyId, companyId),
+        eq(heartbeatRuns.status, "running"),
+        inArray(heartbeatRuns.issueId, [...new Set(memberIssueIds)]),
+      ));
+    if (stopping.length > 0) {
+      throw conflict("Pausing: the run is still finishing its current step. Wait until it stops, or use Stop now.", {
+        code: "pause_still_stopping",
+        runIds: stopping.map((run) => run.id),
+      });
+    }
+  }
+
   async function activePauseHoldsForIssueIds(companyId: string, issueIds: string[]) {
     if (issueIds.length === 0) return [];
     return db
@@ -467,7 +494,7 @@ export function issueTreeControlService(db: Db) {
         .where(and(
           eq(heartbeatRuns.companyId, companyId),
           inArray(heartbeatRuns.issueId, issueIds),
-          inArray(heartbeatRuns.status, [...ACTIVE_RUN_STATUSES]),
+          eq(heartbeatRuns.status, "running"),
         )),
       db
         .selectDistinctOn([heartbeatRuns.issueId], {
@@ -700,6 +727,7 @@ export function issueTreeControlService(db: Db) {
     if (input.mode === "resume") {
       const issueIds = [...new Set(holdPreview.issues.map((issue) => issue.id))];
       const activePauseHolds = await activePauseHoldsForIssueIds(companyId, issueIds);
+      await assertPauseHoldsNotStopping(companyId, activePauseHolds.map((hold) => hold.id));
       const releaseReason = input.reason ?? "Subtree resume applied.";
 
       const { hold: resumeHold } = await db.transaction(async (tx) => {
@@ -1114,6 +1142,7 @@ export function issueTreeControlService(db: Db) {
     if (existing.status === "released") {
       throw conflict("Issue tree hold is already released");
     }
+    if (existing.mode === "pause") await assertPauseHoldsNotStopping(companyId, [existing.id]);
 
     const [updated] = await db
       .update(issueTreeHolds)

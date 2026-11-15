@@ -126,7 +126,7 @@ export function buildLiveNowItems(
     const issue = issueById(entry.issueId);
     const pause = pauseByIssueId.get(entry.issueId) ?? null;
     const signal = pause
-      ? pauseSignal(pause.state === "paused" ? "pausing" : pause.state)
+      ? pauseSignal(pause.state)
       : mostSevereSignal(entry.runs.map((run) => classifyLiveNowHealth(run, now)));
     return {
       order,
@@ -220,8 +220,9 @@ export function useLiveNowModel(
   const now = useLiveNowClock(liveEntryRuns);
   const pauseByIssueId = useMemo(() => new Map(pausedTasks.map((pause) => [pause.issueId, pause])), [pausedTasks]);
   const issueById = (issueId: string) => loadedById.get(issueId) ?? detailById.get(issueId) ?? null;
-  const items = buildLiveNowItems(entries, issueById, now, pauseByIssueId);
-  const liveIssueIds = new Set(entries.map((entry) => entry.issueId));
+  const stillLive = entries.filter((entry) => pauseByIssueId.get(entry.issueId)?.state !== "paused");
+  const items = buildLiveNowItems(stillLive, issueById, now, pauseByIssueId);
+  const liveIssueIds = new Set(stillLive.map((entry) => entry.issueId));
   const pausedItems: LiveNowPausedItem[] = pausedTasks
     .filter((pause) => !liveIssueIds.has(pause.issueId))
     .map((pause) => ({

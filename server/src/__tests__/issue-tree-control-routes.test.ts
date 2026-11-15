@@ -58,7 +58,10 @@ async function createApp(
   const query = {
     from: () => query,
     innerJoin: () => query,
-    where: (predicate: unknown) => { mockReplayWhere(predicate); return mockReplayBlocks(); },
+    where: (predicate: unknown) => {
+      mockReplayWhere(predicate);
+      return Object.assign(mockReplayBlocks(), { orderBy: () => ({ limit: mockReplayBlocks }) });
+    },
     limit: mockReplayBlocks,
   };
   app.use("/api", issueTreeControlRoutes({ select: () => query } as any, { pluginWorkerManager }));

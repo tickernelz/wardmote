@@ -592,6 +592,44 @@ describeEmbeddedPostgres("issueTreeControlService", () => {
     await expect(issueSvc.checkout(rootIssueId, agentId, ["todo"], rootRunId)).rejects.toMatchObject({ status: 409 });
   });
 
+  it("refuses to resume or end a pause while its run is still stopping, so the late stop cannot outlive the pause", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const runId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Wardmote",
+      issuePrefix: `R${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId, companyId, name: "Builder", role: "engineer", status: "active",
+      adapterType: "omp_local", adapterConfig: {}, runtimeConfig: {}, permissions: {},
+    });
+    await db.insert(issues).values({
+      id: issueId, companyId, title: "Pausing task", status: "in_progress", priority: "medium", assigneeAgentId: agentId,
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId, companyId, agentId, issueId, invocationSource: "assignment", triggerDetail: "system",
+      status: "running", contextSnapshot: { issueId },
+    });
+    const treeSvc = issueTreeControlService(db);
+    const actor = { actorType: "user" as const, actorId: "board-user", userId: "board-user" };
+    const { hold } = await treeSvc.createHold(companyId, issueId, { mode: "pause", scope: "task", actor });
+
+    await expect(treeSvc.releaseHold(companyId, issueId, hold.id, { actor })).rejects.toMatchObject({
+      status: 409,
+      details: expect.objectContaining({ code: "pause_still_stopping", runIds: [runId] }),
+    });
+    await expect(treeSvc.createHold(companyId, issueId, { mode: "resume", actor })).rejects.toMatchObject({ status: 409 });
+    expect(await treeSvc.getActivePauseHoldGate(companyId, issueId)).toMatchObject({ holdId: hold.id });
+
+    await db.update(heartbeatRuns).set({ status: "cancelled", finishedAt: new Date() }).where(eq(heartbeatRuns.id, runId));
+    const released = await treeSvc.releaseHold(companyId, issueId, hold.id, { actor });
+    expect(released.status).toBe("released");
+  });
+
   it("lists paused tasks with their pausing, paused, and pause-failed states for readers only", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();
