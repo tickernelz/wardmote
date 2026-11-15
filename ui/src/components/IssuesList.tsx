@@ -6,6 +6,7 @@ import { useVisibilityRefetchInterval } from "@/lib/polling";
 import { accessApi } from "../api/access";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { usePausedTasks } from "../hooks/usePausedTasks";
 import { Link, useLocation, useNavigate } from "@/lib/router";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { issuesApi } from "../api/issues";
@@ -1443,6 +1444,11 @@ function StreamlinedIssuesList({
     const statusById = new Map(sourceIssues.map((issue) => [issue.id, issue.status]));
     return new Map(buildLiveNowEntries(liveRuns, statusById).map((entry) => [entry.issueId, entry.runs]));
   }, [liveRuns, sourceIssues, viewState.viewMode]);
+  const boardPausedTasks = usePausedTasks(selectedCompanyId, viewState.viewMode === "board");
+  const boardPausedIssueIds = useMemo(
+    () => new Set(boardPausedTasks.map((task) => task.issueId)),
+    [boardPausedTasks],
+  );
   const boardHighVolume = viewState.viewMode === "board" && filtered.length > KANBAN_BOARD_HIGH_VOLUME_THRESHOLD;
   const boardCompactCards =
     viewState.boardCardDensity === "compact"
@@ -2425,6 +2431,7 @@ function StreamlinedIssuesList({
           agents={agents}
           liveIssueIds={liveIssueIds}
           liveRunsByIssueId={boardLiveRunsByIssueId}
+          pausedIssueIds={boardPausedIssueIds}
           compactCards={boardCompactCards}
           collapsedStatuses={boardCollapsedStatuses}
           initialVisibleCount={viewState.boardColumnPageSize}

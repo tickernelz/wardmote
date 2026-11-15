@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Clock, MessageSquare, MoreHorizontal, ScrollText, Square, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, Clock, GitBranch, Loader2, MessageSquare, MoreHorizontal, Pause, PauseCircle, ScrollText, Square, TriangleAlert } from "lucide-react";
 import type { Issue, RunModelFallbackState } from "@tickernelz/wardmote-shared";
 import { Link } from "@/lib/router";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import {
 import { heartbeatsApi, type LiveRunForIssue } from "../../api/heartbeats";
 import { issuesApi } from "../../api/issues";
 import { useSecondTick } from "../../hooks/useSecondTick";
+import { useTaskPause } from "../../hooks/useTaskPause";
 import {
   createIssueDetailPath,
   rememberIssueDetailLocationState,
@@ -72,9 +73,17 @@ export function LiveNowElapsed({ entry, className }: { entry: LiveNowEntry; clas
   );
 }
 
+const HEALTH_ICON: Partial<Record<LiveNowHealthSignal["health"], typeof Clock>> = {
+  stalled: TriangleAlert,
+  pause_failed: TriangleAlert,
+  quiet: Clock,
+  pausing: Loader2,
+  paused: PauseCircle,
+};
+
 /** State as a word with its colour and icon, never colour alone. */
 export function LiveNowHealthChip({ signal, className }: { signal: LiveNowHealthSignal; className?: string }) {
-  const Icon = signal.health === "stalled" ? TriangleAlert : signal.health === "quiet" ? Clock : null;
+  const Icon = HEALTH_ICON[signal.health] ?? null;
   return (
     <span
       data-slot="tasks-live-now-health"
@@ -85,7 +94,10 @@ export function LiveNowHealthChip({ signal, className }: { signal: LiveNowHealth
       )}
     >
       {Icon ? (
-        <Icon aria-hidden="true" className="live-now-health-icon size-3 shrink-0" />
+        <Icon
+          aria-hidden="true"
+          className={cn("live-now-health-icon size-3 shrink-0", signal.health === "pausing" && "animate-spin motion-reduce:animate-none")}
+        />
       ) : (
         <span aria-hidden="true" className="live-now-health-dot size-1.5 shrink-0 rounded-full" />
       )}
@@ -115,12 +127,14 @@ function LiveNowStopDialog({
   agentName,
   identifier,
   onConfirm,
+  onPauseInstead,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   agentName: string;
   identifier: string;
   onConfirm: () => void;
+  onPauseInstead?: () => void;
 }) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -129,10 +143,17 @@ function LiveNowStopDialog({
           <AlertDialogTitle>Stop {agentName}&apos;s run?</AlertDialogTitle>
           <AlertDialogDescription>
             {identifier} keeps its status and comments. The agent stops mid-turn, so any unsaved work in this run is lost.
+            {onPauseInstead ? " Pause instead lets the current step finish, keeps the session, and continues on Resume." : null}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Keep running</AlertDialogCancel>
+          {onPauseInstead ? (
+            <AlertDialogAction className={buttonVariants({ variant: "secondary" })} onClick={onPauseInstead}>
+              <Pause aria-hidden="true" />
+              Pause instead
+            </AlertDialogAction>
+          ) : null}
           <AlertDialogAction className={buttonVariants({ variant: "danger" })} onClick={onConfirm}>
             Stop run
           </AlertDialogAction>
@@ -151,6 +172,9 @@ export function LiveNowMoreMenu({
   stopping,
   onSteer,
   onStop,
+  stopNow = false,
+  onPause,
+  onPauseSubtree,
   className,
 }: {
   entry: LiveNowEntry;
@@ -160,6 +184,9 @@ export function LiveNowMoreMenu({
   stopping: boolean;
   onSteer?: () => void;
   onStop: () => void;
+  stopNow?: boolean;
+  onPause?: () => void;
+  onPauseSubtree?: () => void;
   className?: string;
 }) {
   const primary = entry.runs[0]!;
@@ -195,15 +222,27 @@ export function LiveNowMoreMenu({
             Steer {primary.agentName}
           </DropdownMenuItem>
         ) : null}
+        {onPause ? (
+          <DropdownMenuItem className="sm:hidden" onSelect={onPause}>
+            <Pause aria-hidden="true" />
+            Pause
+          </DropdownMenuItem>
+        ) : null}
+        {onPauseSubtree ? (
+          <DropdownMenuItem onSelect={onPauseSubtree}>
+            <GitBranch aria-hidden="true" />
+            Pause subtree
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           variant="destructive"
           disabled={stopping}
-          aria-label={`Stop ${primary.agentName}'s run on ${identifier}`}
+          aria-label={`${stopNow ? "Stop now" : "Stop"} ${primary.agentName}'s run on ${identifier}`}
           onSelect={onStop}
         >
           <Square aria-hidden="true" className="fill-current" />
-          {stopping ? "Stopping…" : "Stop run…"}
+          {stopping ? "Stopping…" : stopNow ? "Stop now" : "Stop run…"}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -224,7 +263,16 @@ interface LiveNowTaskActions {
   confirmStop: () => void;
   feedback: string | null;
   setFeedback: (message: string | null) => void;
+  pausable: boolean;
+  pauseBlockedReason: string | null;
+  pausing: boolean;
+  pauseFailed: boolean;
+  pause: (scope: "task" | "subtree") => void;
+  stopNow: () => void;
+  stopNowPending: boolean;
 }
+
+const SAFE_POINT_UNAVAILABLE = "This run can’t stop at a safe point. Use Stop run in More.";
 
 /** Task identity, links and the Stop flow shared by the list row and the board card. */
 export function useLiveNowTaskActions({
@@ -242,8 +290,18 @@ export function useLiveNowTaskActions({
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const stop = useLiveNowStop(entry, companyId, setFeedback);
+  const taskPause = useTaskPause(companyId);
   const pathId = issue?.identifier ?? entry.issueId;
+  const task = { issueId: entry.issueId, identifier: issue?.identifier ?? null };
+  const pausable = Boolean(issue) && !issue?.conversationAgentId && item.pause === null;
   return {
+    pausable,
+    pauseBlockedReason: pausable && entry.runs.some((run) => run.safePointPause === false) ? SAFE_POINT_UNAVAILABLE : null,
+    pausing: item.pause?.state === "pausing" || item.pause?.state === "paused" || taskPause.pause.isPending,
+    pauseFailed: item.pause?.state === "pause_failed",
+    pause: (scope) => taskPause.pause.mutate({ ...task, scope }),
+    stopNow: () => taskPause.stopNow.mutate({ ...task, runId: entry.runs[0]!.id }),
+    stopNowPending: taskPause.stopNow.isPending,
     primary: entry.runs[0]!,
     identifier,
     title: issue?.title ?? (loadFailed ? "Task unavailable" : "Loading task…"),
@@ -271,6 +329,7 @@ export function LiveNowStopFlow({ actions }: { actions: LiveNowTaskActions }) {
       agentName={actions.primary.agentName}
       identifier={actions.identifier}
       onConfirm={actions.confirmStop}
+      onPauseInstead={actions.pausable && !actions.pauseBlockedReason ? () => actions.pause("task") : undefined}
     />
   );
 }
@@ -284,6 +343,69 @@ export function LiveNowFeedback({ actions, className }: { actions: LiveNowTaskAc
     >
       {actions.stopError ? errorMessage(actions.stopError, "Couldn’t stop the run.") : actions.feedback}
     </p>
+  );
+}
+
+/** The primary labelled control of a live task: Pause, the Pausing state, or Stop now after a pause failed. */
+export function LiveNowPauseButton({
+  actions,
+  iconOnly = false,
+  className,
+}: {
+  actions: LiveNowTaskActions;
+  iconOnly?: boolean;
+  className?: string;
+}) {
+  const sizing = iconOnly ? ICON_BUTTON : "h-11 sm:h-7";
+  if (actions.pauseFailed) {
+    return (
+      <Button
+        type="button"
+        variant="danger"
+        size="xs"
+        className={cn(sizing, className)}
+        disabled={actions.stopNowPending}
+        aria-label={`Stop ${actions.identifier} now`}
+        title="The run did not stop within 120 s. Stop it now; the task stays paused."
+        onClick={actions.stopNow}
+      >
+        <Square aria-hidden="true" className="fill-current" />
+        {iconOnly ? null : actions.stopNowPending ? "Stopping…" : "Stop now"}
+      </Button>
+    );
+  }
+  if (actions.pausing) {
+    return (
+      <Button
+        type="button"
+        variant="secondary"
+        size="xs"
+        className={cn(sizing, className)}
+        disabled
+        aria-label={`Pausing ${actions.identifier}`}
+        title="Stops after the current step"
+      >
+        <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+        {iconOnly ? null : "Pausing…"}
+      </Button>
+    );
+  }
+  if (!actions.pausable) return null;
+  const blocked = actions.pauseBlockedReason;
+  return (
+    <Button
+      type="button"
+      variant="secondary"
+      size="xs"
+      className={cn(sizing, blocked && "opacity-50", className)}
+      aria-disabled={blocked ? true : undefined}
+      aria-label={`Pause ${actions.identifier}`}
+      title={blocked ?? "Pause after the current step"}
+      onClick={blocked ? undefined : () => actions.pause("task")}
+    >
+      <Pause aria-hidden="true" />
+      {iconOnly ? null : "Pause"}
+    </Button>
   );
 }
 
@@ -501,6 +623,11 @@ export function LiveNowRow({
             comfortable && "border-t border-line pt-2 sm:border-t-0 sm:pt-0",
           )}
         >
+          <LiveNowPauseButton
+            actions={actions}
+            iconOnly={!comfortable}
+            className={!comfortable && !actions.pauseFailed ? "hidden sm:inline-flex" : undefined}
+          />
           <Button
             type="button"
             variant="secondary"
@@ -529,9 +656,12 @@ export function LiveNowRow({
             identifier={identifier}
             taskPath={taskPath}
             detailState={detailState}
-            stopping={actions.stopping}
+            stopping={actions.stopping || actions.stopNowPending}
             onSteer={toggleComposer}
-            onStop={() => actions.setConfirmingStop(true)}
+            stopNow={actions.pausing}
+            onStop={actions.pausing ? actions.stopNow : () => actions.setConfirmingStop(true)}
+            onPause={!comfortable && actions.pausable && !actions.pauseBlockedReason ? () => actions.pause("task") : undefined}
+            onPauseSubtree={actions.pausable && !actions.pauseBlockedReason ? () => actions.pause("subtree") : undefined}
             className={comfortable ? "ml-auto sm:ml-0" : undefined}
           />
         </span>

@@ -4,6 +4,7 @@ import { ChevronRight, Rows2, Rows3 } from "lucide-react";
 import type { Issue } from "@tickernelz/wardmote-shared";
 import type { LiveRunForIssue } from "../api/heartbeats";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { usePausedTasks } from "../hooks/usePausedTasks";
 import { cn } from "../lib/utils";
 import { Chip } from "./ui/chip";
 import { Segmented, SegmentedItem } from "./ui/segmented";
@@ -12,15 +13,21 @@ import { LiveRunDot } from "./IssueColumns";
 import { findIssuesScrollContainer } from "./IssuesList";
 import { LIVE_NOW_GROUP_LABEL, LiveNowBoardBand } from "./live-now/LiveNowBoardBand";
 import { LiveNowRow, type LiveNowDensity } from "./live-now/LiveNowRow";
+import { LiveNowPausedRow } from "./live-now/LiveNowPaused";
 import { LIVE_NOW_HEALTH_POSE, type LiveNowGroup, type LiveNowHealth } from "./live-now/live-now-health";
-import { resolveLiveNowParentPath, useLiveNowModel, type LiveNowItem } from "./live-now/useLiveNowModel";
+import {
+  resolveLiveNowParentPath,
+  useLiveNowModel,
+  type LiveNowItem,
+  type LiveNowPausedItem,
+} from "./live-now/useLiveNowModel";
 
 const MAX_VISIBLE_ANCESTORS = 3;
 const MAX_STRIP_AVATARS = 5;
 const MOBILE_STRIP_AVATARS = 2;
 const WORKING_LIMIT_PHONE = 2;
 const WORKING_LIMIT_COMFORTABLE = 4;
-const GROUP_ORDER: readonly LiveNowGroup[] = ["attention", "working"];
+const GROUP_ORDER: readonly LiveNowGroup[] = ["attention", "working", "paused"];
 const DESKTOP_QUERY = "(min-width: 40rem)";
 
 type GroupFilter = "all" | LiveNowGroup;
@@ -124,19 +131,26 @@ export function TasksLiveNowSection({
   const desktop = useMediaQuery(DESKTOP_QUERY);
   const listId = useId();
 
-  const { items, loadedById, detailById, failedIds } = useLiveNowModel(liveRuns, issues);
+  const pausedTasks = usePausedTasks(companyId);
+  const { items, pausedItems, loadedById, detailById, failedIds } = useLiveNowModel(liveRuns, issues, pausedTasks);
   const density: LiveNowDensity = storedDensity ?? (desktop ? "comfortable" : "compact");
 
+  const passesFilter = (issue: Issue | null) => !issueFilter || issue === null || issueFilter(issue);
   const hiddenByFilters = issueFilter
-    ? items.filter((item) => item.issue !== null && !issueFilter(item.issue)).length
+    ? items.filter((item) => !passesFilter(item.issue)).length + pausedItems.filter((item) => !passesFilter(item.issue)).length
     : 0;
-  const visible = issueFilter && !showFiltered
-    ? items.filter((item) => item.issue === null || issueFilter(item.issue))
-    : items;
-  const groupCounts: Record<LiveNowGroup, number> = { attention: 0, working: 0 };
+  const visible = showFiltered ? items : items.filter((item) => passesFilter(item.issue));
+  const visiblePaused = showFiltered ? pausedItems : pausedItems.filter((item) => passesFilter(item.issue));
+  const groupCounts: Record<LiveNowGroup, number> = { attention: 0, working: 0, paused: visiblePaused.length };
   for (const item of visible) groupCounts[item.group] += 1;
+  const visibleCount = visible.length + visiblePaused.length;
   const shownGroups = GROUP_ORDER.filter((group) => groupFilter === "all" || groupFilter === group);
-  const announcement = useHealthAnnouncement(items.map((item) => `${item.identifier}\t${item.signal.health}`).join("\n"));
+  const announcement = useHealthAnnouncement(
+    [
+      ...items.map((item) => `${item.identifier}\t${item.signal.health}`),
+      ...pausedItems.map((item) => `${item.identifier}\t${item.pause.state}`),
+    ].join("\n"),
+  );
 
   const toggle = () => {
     const next = !collapsed;
@@ -156,6 +170,16 @@ export function TasksLiveNowSection({
   };
 
   const workingLimit = !desktop ? WORKING_LIMIT_PHONE : density === "comfortable" ? WORKING_LIMIT_COMFORTABLE : Infinity;
+
+  const renderPausedRow = (item: LiveNowPausedItem) => (
+    <LiveNowPausedRow
+      key={item.pause.holdId}
+      companyId={companyId}
+      item={item}
+      density={density}
+      issueLinkState={issueLinkState}
+    />
+  );
 
   const renderRow = (item: LiveNowItem) => {
     const { ancestors, complete } = resolveLiveNowParentPath(
@@ -180,7 +204,7 @@ export function TasksLiveNowSection({
 
   return (
     <div ref={rootRef} data-slot="tasks-live-now" data-view={view}>
-      {items.length > 0 ? (
+      {items.length + pausedItems.length > 0 ? (
         <section aria-label="Live now" className="pb-4">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
             <button
@@ -199,7 +223,7 @@ export function TasksLiveNowSection({
               <LiveRunDot />
               <span className="shrink-0 text-sm font-semibold uppercase tracking-wide">Live now</span>
               <span data-slot="tasks-live-now-count" className="text-xs tabular-nums text-ink-3">
-                {visible.length}
+                {visibleCount}
               </span>
               {collapsed ? <LiveNowAvatarStrip items={visible} /> : null}
               <LiveNowAttentionSummary count={groupCounts.attention} />
@@ -211,7 +235,7 @@ export function TasksLiveNowSection({
               className="hidden items-center gap-1.5 sm:ml-auto sm:flex"
             >
               <Chip selected={groupFilter === "all"} onClick={() => pickGroup("all")}>
-                All <span className="tabular-nums">{visible.length}</span>
+                All <span className="tabular-nums">{visibleCount}</span>
               </Chip>
               {GROUP_ORDER.filter((group) => groupCounts[group] > 0 || groupFilter === group).map((group) => (
                 <Chip key={group} selected={groupFilter === group} onClick={() => pickGroup(group)}>
@@ -257,7 +281,11 @@ export function TasksLiveNowSection({
             <LiveNowBoardBand
               companyId={companyId}
               listId={listId}
-              lanes={shownGroups.map((group) => ({ group, items: visible.filter((item) => item.group === group) }))}
+              lanes={shownGroups.map((group) => ({
+                group,
+                items: visible.filter((item) => item.group === group),
+                paused: group === "paused" ? visiblePaused : [],
+              }))}
               failedIds={failedIds}
               issueLinkState={issueLinkState}
             />
@@ -265,18 +293,22 @@ export function TasksLiveNowSection({
             <div id={listId} data-slot="tasks-live-now-list" className="mt-2 overflow-hidden rounded-xl border border-line bg-bg-2">
               {shownGroups.map((group) => {
                 const groupItems = visible.filter((item) => item.group === group);
-                if (groupItems.length === 0) return null;
+                const groupPaused = group === "paused" ? visiblePaused : [];
+                if (groupItems.length + groupPaused.length === 0) return null;
                 const limit = group === "working" && !showAllWorking ? workingLimit : Infinity;
                 const shown = groupItems.slice(0, limit);
                 const more = groupItems.length - shown.length;
                 return (
-                  <section key={group} aria-label={`${LIVE_NOW_GROUP_LABEL[group]}, ${groupItems.length}`} data-live-now-group={group}>
+                  <section key={group} aria-label={`${LIVE_NOW_GROUP_LABEL[group]}, ${groupItems.length + groupPaused.length}`} data-live-now-group={group}>
                     <h3 className="flex items-center gap-1.5 border-b border-line bg-bg-3/40 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-ink-2">
                       <span aria-hidden="true" data-live-group={group} className="live-now-group-dot size-1.5 rounded-full" />
                       {LIVE_NOW_GROUP_LABEL[group]}
-                      <span className="font-normal tabular-nums text-ink-3">{groupItems.length}</span>
+                      <span className="font-normal tabular-nums text-ink-3">{groupItems.length + groupPaused.length}</span>
                     </h3>
-                    <ul>{shown.map(renderRow)}</ul>
+                    <ul>
+                      {shown.map(renderRow)}
+                      {groupPaused.map(renderPausedRow)}
+                    </ul>
                     {more > 0 || (group === "working" && showAllWorking && groupItems.length > workingLimit) ? (
                       <button
                         type="button"
@@ -316,7 +348,10 @@ function useHealthAnnouncement(healthKey: string): string {
     for (const [identifier, health] of next) {
       const before = previous.get(identifier);
       if (!before || before === health) continue;
-      if (health === "stalled" || health === "quiet") changes.push(`${identifier} is ${health}`);
+      if (health === "paused") changes.push(`${identifier} is paused`);
+      else if (health === "pause_failed") changes.push(`${identifier} did not stop within 120 seconds`);
+      else if (health === "pausing") changes.push(`${identifier} is pausing`);
+      else if (health === "stalled" || health === "quiet") changes.push(`${identifier} is ${health}`);
       else if (before === "stalled" || before === "quiet") changes.push(`${identifier} is working again`);
     }
     if (changes.length > 0) setAnnouncement(changes.join(". "));

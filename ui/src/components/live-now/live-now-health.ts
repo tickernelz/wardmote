@@ -1,10 +1,19 @@
 import { Activity } from "lucide-react";
+import type { PausedTaskState } from "@tickernelz/wardmote-shared";
 import type { LiveRunForIssue } from "../../api/heartbeats";
 import { statusLabelIcon, toolTaxonomy, type ToolIcon } from "../task-chat/tool-taxonomy";
 
-export type LiveNowHealth = "starting" | "active" | "thinking" | "quiet" | "stalled";
+export type LiveNowHealth =
+  | "starting"
+  | "active"
+  | "thinking"
+  | "quiet"
+  | "stalled"
+  | "pausing"
+  | "paused"
+  | "pause_failed";
 
-export type LiveNowGroup = "attention" | "working";
+export type LiveNowGroup = "attention" | "working" | "paused";
 
 export interface LiveNowHealthSignal {
   health: LiveNowHealth;
@@ -23,11 +32,14 @@ const QUIET_AFTER_MS = 2 * 60_000;
 const STALLED_AFTER_MS = 15 * 60_000;
 
 const HEALTH_SEVERITY: Record<LiveNowHealth, number> = {
+  paused: -2,
+  pausing: -1,
   active: 0,
   thinking: 1,
   starting: 2,
   quiet: 3,
   stalled: 4,
+  pause_failed: 5,
 };
 
 /** Pose the agent avatar takes for each health state. */
@@ -37,7 +49,21 @@ export const LIVE_NOW_HEALTH_POSE = {
   thinking: "thinking",
   quiet: "sleepy",
   stalled: "confused",
+  pausing: "loading",
+  paused: "sleepy",
+  pause_failed: "confused",
 } as const satisfies Record<LiveNowHealth, string>;
+
+const PAUSE_LABEL: Record<PausedTaskState, string> = {
+  pausing: "Pausing",
+  paused: "Paused",
+  pause_failed: "Pause failed",
+};
+
+/** The signal a task shows while its pause hold is active, replacing the run's own health. */
+export function pauseSignal(state: PausedTaskState): LiveNowHealthSignal {
+  return { health: state, label: PAUSE_LABEL[state], silentMs: null };
+}
 
 function toMs(value: string | Date | null | undefined): number | null {
   if (!value) return null;
@@ -110,9 +136,10 @@ export function nextLiveNowHealthChangeMs(run: LiveRunForIssue, now: number): nu
   return stalledAt > now ? Math.min(nextMinute, stalledAt) : nextMinute;
 }
 
-/** Stalled and quiet runs need the operator; every other live run is working. */
+/** Stalled, quiet and pause-failed tasks need the operator, paused tasks wait, every other live task is working. */
 export function liveNowGroupOf(health: LiveNowHealth): LiveNowGroup {
-  return health === "stalled" || health === "quiet" ? "attention" : "working";
+  if (health === "paused") return "paused";
+  return health === "stalled" || health === "quiet" || health === "pause_failed" ? "attention" : "working";
 }
 
 /** Orders signals by how much they need the operator, most first. */

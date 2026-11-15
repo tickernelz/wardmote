@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
-import type { Issue } from "@tickernelz/wardmote-shared";
+import type { Issue, PausedTask } from "@tickernelz/wardmote-shared";
 import type { LiveRunForIssue } from "../../api/heartbeats";
 import { issuesApi } from "../../api/issues";
 import { isLiveIssueRun } from "../../lib/liveIssueIds";
@@ -11,11 +11,13 @@ import {
   liveNowGroupOf,
   mostSevereSignal,
   nextLiveNowHealthChangeMs,
+  pauseSignal,
   type LiveNowGroup,
   type LiveNowHealthSignal,
 } from "./live-now-health";
 
 const ISSUE_DETAIL_STALE_TIME_MS = 30_000;
+const NO_PAUSED_TASKS: readonly PausedTask[] = [];
 
 export interface LiveNowEntry {
   issueId: string;
@@ -36,6 +38,14 @@ export interface LiveNowItem {
   identifier: string;
   signal: LiveNowHealthSignal;
   group: LiveNowGroup;
+  pause: PausedTask | null;
+}
+
+/** A paused task with no run left, shown in the Paused group until it is resumed or its pause ends. */
+export interface LiveNowPausedItem {
+  pause: PausedTask;
+  issue: Issue | null;
+  identifier: string;
 }
 
 type LiveNowIssueNode = Pick<Issue, "id" | "identifier" | "title" | "parentId">;
@@ -110,10 +120,14 @@ export function buildLiveNowItems(
   entries: readonly LiveNowEntry[],
   issueById: (issueId: string) => Issue | null,
   now: number,
+  pauseByIssueId: ReadonlyMap<string, PausedTask> = new Map(),
 ): LiveNowItem[] {
   const items = entries.map((entry, order) => {
     const issue = issueById(entry.issueId);
-    const signal = mostSevereSignal(entry.runs.map((run) => classifyLiveNowHealth(run, now)));
+    const pause = pauseByIssueId.get(entry.issueId) ?? null;
+    const signal = pause
+      ? pauseSignal(pause.state === "paused" ? "pausing" : pause.state)
+      : mostSevereSignal(entry.runs.map((run) => classifyLiveNowHealth(run, now)));
     return {
       order,
       item: {
@@ -122,6 +136,7 @@ export function buildLiveNowItems(
         identifier: issue?.identifier ?? entry.issueId.slice(0, 8),
         signal,
         group: liveNowGroupOf(signal.health),
+        pause,
       } satisfies LiveNowItem,
     };
   });
@@ -157,6 +172,7 @@ export function useLiveNowClock(runs: readonly LiveRunForIssue[]): number {
 export function useLiveNowModel(
   liveRuns: readonly LiveRunForIssue[] | null | undefined,
   issues: readonly Issue[],
+  pausedTasks: readonly PausedTask[] = NO_PAUSED_TASKS,
 ) {
   const loadedById = useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues]);
 
@@ -202,10 +218,16 @@ export function useLiveNowModel(
 
   const liveEntryRuns = useMemo(() => entries.flatMap((entry) => entry.runs), [entries]);
   const now = useLiveNowClock(liveEntryRuns);
-  const items = buildLiveNowItems(
-    entries,
-    (issueId) => loadedById.get(issueId) ?? detailById.get(issueId) ?? null,
-    now,
-  );
-  return { items, loadedById, detailById, failedIds, now };
+  const pauseByIssueId = useMemo(() => new Map(pausedTasks.map((pause) => [pause.issueId, pause])), [pausedTasks]);
+  const issueById = (issueId: string) => loadedById.get(issueId) ?? detailById.get(issueId) ?? null;
+  const items = buildLiveNowItems(entries, issueById, now, pauseByIssueId);
+  const liveIssueIds = new Set(entries.map((entry) => entry.issueId));
+  const pausedItems: LiveNowPausedItem[] = pausedTasks
+    .filter((pause) => !liveIssueIds.has(pause.issueId))
+    .map((pause) => ({
+      pause,
+      issue: issueById(pause.issueId),
+      identifier: pause.identifier ?? pause.issueId.slice(0, 8),
+    }));
+  return { items, pausedItems, loadedById, detailById, failedIds, now };
 }
