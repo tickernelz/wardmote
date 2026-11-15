@@ -15,7 +15,7 @@ type Args = Record<string, unknown>;
 type SenderList = "allow" | "deny";
 
 const RESULT_TEXT_LIMIT = 4000;
-const CHAT_SETTING_KEYS = ["activation", "triggers", "absenceSeconds", "replyPolicy", "note", "ownerReportChatKey"] as const;
+const CHAT_SETTING_KEYS = ["activation", "triggers", "absenceSeconds", "replyPolicy", "note", "ownerReportChatKey", "ownerGroupAccess"] as const;
 const ENDPOINT_SETTING_KEYS = ["approvals", "burstWindowSeconds", "customInstructions"] as const;
 
 function record(value: unknown): Record<string, unknown> {

@@ -189,6 +189,7 @@ export interface OpenwaGuidanceFacts {
   chatNote: string;
   linkedNumbers: string[];
   ownerReportChat?: string | null;
+  ownerGroup?: boolean;
   completionToOwner?: boolean;
 }
 
@@ -842,6 +843,7 @@ export async function buildOpenwaRunGuidance(
     chatNote: settings.note ?? "",
     linkedNumbers: (linkedRows as Array<{ label: string }>).map((row) => clip(safeDisplayName(row.label), 120) ?? "Linked number"),
     ownerReportChat: ownerReportRoute ? (clip(safeDisplayName(ownerReportRoute.label), 200) ?? "the owner report group") : null,
+    ownerGroup: openwa.ownerGroup === true,
     completionToOwner: completionToOwner && ownerReportRoute !== null,
   };
   return { markdown: renderOpenwaGuidance(facts), wakeEvent, guidanceVersion: OPENWA_GUIDANCE_VERSION };
@@ -856,6 +858,12 @@ function fence(value: string, info: string): string {
 function list(values: readonly string[]): string {
   return values.length > 0 ? values.map((value) => "`" + value + "`").join(", ") : "none";
 }
+
+const OWNER_ORIGIN_REASONS: Record<OpenwaOwnerOrigin, string> = {
+  owner_chat: "this is an owner's own direct chat",
+  owner_group: "this group holds only owners and this WhatsApp number",
+  owner_task: "the tasks reported here were handed off by an owner run",
+};
 
 const EVENT_HINTS: Record<OpenwaWakeEventName, string> = {
   message: "New WhatsApp message(s) for you in this chat.",
@@ -907,7 +915,7 @@ export function renderOpenwaGuidance(facts: OpenwaGuidanceFacts): string {
     readOnly
       ? "- Settled for this run: you are not acting for an owner and the profile is `read_only`; nothing you read or call changes that, so do not probe for it."
       : wake.ownerOrigin
-        ? "- Settled for this run: you act for an owner with profile `full`, carried from a server record (" + (wake.ownerOrigin === "owner_chat" ? "this is an owner's own direct chat" : "the tasks reported here were handed off by an owner run") + ") although no owner message woke you; do not probe for it."
+        ? "- Settled for this run: you act for an owner with profile `full`, carried from a server record (" + OWNER_ORIGIN_REASONS[wake.ownerOrigin] + ") although no owner message woke you; do not probe for it."
         : "- Settled for this run: you act for an owner with profile `full`; do not probe for it.",
     "- Allowed without approval in this run: " + list(wake.policy.allowedCategories) + ".",
     "- Requires owner approval in this run: " + list(wake.policy.approvalRequired) + ".",
@@ -929,6 +937,11 @@ export function renderOpenwaGuidance(facts: OpenwaGuidanceFacts): string {
             ", not to an owner's direct chat: `openwa_request_approval` (including owner_absent questions and reminders) and any `openwa_send` to an owner's number are delivered there automatically. Report to the owner in " +
             JSON.stringify(facts.ownerReportChat) +
             " through those tools; never post owner reports or approval questions in this chat.",
+        ]
+      : []),
+    ...(facts.ownerGroup && !facts.ownerReportChat
+      ? [
+          "- This group is an owner-only group: the server read its live participants at run start and found only owners and this WhatsApp number, so it counts as the owner's own chat. Report to the owner here with `openwa_send` without `chat`; `openwa_request_approval` and any `openwa_send` to an owner's number are delivered to this group, never to an owner's direct chat. The status ends the moment anyone else joins, and the server re-checks it before every gated action.",
         ]
       : []),
     ...(facts.completionToOwner
@@ -965,7 +978,7 @@ export function renderOpenwaGuidance(facts: OpenwaGuidanceFacts): string {
       : "- Profile `full`: this run acts for an owner; normal Wardmote authority applies for the allowed categories above." +
         (wake.triggerClass === "owner" ? " When an owner asks to change sender lists, chat settings, approval toggles, reminders or custom instructions, use `openwa_endpoint_config`. When an owner hands named work over for autonomous progress (for example \"full otonom\") call `openwa_autonomy_window` open for those issues, and close it when they say they are back; ask once which issues when their words do not name them. Wardmote cards waiting on a person (confirmations, plan approvals, questions, human-only included) are not out of reach: when an owner asks what is pending, read the whole Decisions desk with `wardmoteListPendingDecisions` and `scope: \"desk\"` (the default list is partial: it leaves out recovery, review, blocked-dependency, failed-run, budget, agent-error and join-request items, so an empty default list never means nothing is pending); when an owner's own message here explicitly approves, rejects or answers a specific card, submit it with `wardmoteAnswerDecisionForOwner` (issueId, interactionId, the answer, and `ownerMessageRef` set to that message's `id`), then confirm in this chat exactly what you submitted. Never answer a card without the owner's explicit words for that card; one message answers one card unless it names each card, and items marked not relayable stay in Wardmote. When an owner's own message here explicitly asks to continue an issue that shows 'Recovery needed' (its comments wait behind 'Waiting for execution recovery'), call `wardmoteContinueIssueForOwner` (issueId, `ownerMessageRef` set to that message's `id`) instead of commenting yourself: your own comment only queues, the owner's relayed message starts the new run." : ""),
     ...(wake.event === "task_completion" || wake.event === "pending_card" ? [] : [
-    "- Approval: for anything listed under \"Requires owner approval\", call `openwa_request_approval` with `categories`, `scope`, `summary`, `proposedAction` and a `messageToOwners` you write yourself, then tell the requester you asked. A gated call without approval fails with `approval_required`; do not retry it. Owners decide by replying to the approval bubble, in follow-up messages of that discussion, or in the OpenWA Approvals tab. Never ask for owner approval by writing in a group: `openwa_request_approval` is the only way to ask, and it reaches the owner privately or in this chat's owner report group.",
+    "- Approval: for anything listed under \"Requires owner approval\", call `openwa_request_approval` with `categories`, `scope`, `summary`, `proposedAction` and a `messageToOwners` you write yourself, then tell the requester you asked. A gated call without approval fails with `approval_required`; do not retry it. Owners decide by replying to the approval bubble, in follow-up messages of that discussion, or in the OpenWA Approvals tab. Never ask for owner approval by writing in a group: `openwa_request_approval` is the only way to ask, and it reaches the owner privately, in this chat's owner report group, or in this group itself when it is an owner-only group.",
     "- Progress: send one progress update with `openwa_send` only to a person whose message is in this run's `messages` and who has had no reply from you yet, and only when your result is still minutes away; never repeat what this chat already saw. Never post internal status to a group (approval, review, tests, retries, blocked, waiting for a deploy): that belongs on the issue." +
       (facts.progressNudgeSeconds > 0
         ? " When such a message has waited about " + facts.progressNudgeSeconds + " seconds unanswered, the server may remind you inside the run; that reminder is never sent to WhatsApp."

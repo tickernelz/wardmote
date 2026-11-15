@@ -104,7 +104,7 @@ export const OPENWA_TOOLS = [
   tool(
     "request_approval",
     "write",
-    "Ask the endpoint owners to approve categories for this chat's requester. You write messageToOwners (markdown, one WhatsApp bubble per owner chat); owners approve by replying to it or in the OpenWA Approvals tab. Remind: remindRequestId + messageToOwners. Silence never approves.",
+    "Ask the owners to approve categories for this chat's requester. You write messageToOwners (markdown, one WhatsApp bubble per owner chat); owners approve by replying to it or in the OpenWA Approvals tab. Remind: remindRequestId + messageToOwners. Silence never approves.",
     {
       categories: z.array(z.enum(GRANT_CATEGORIES)).min(1).max(GRANT_CATEGORIES.length).optional(),
       scope: z.enum(["one_action", "requester"]).optional(),
@@ -135,7 +135,7 @@ export const OPENWA_TOOLS = [
   tool(
     "approval_withdraw",
     "write",
-    "Withdraw your pending approval request from this chat when the owner's reply decided it differently or made it moot. Owner runs or your own runs only; never just because a member asked. Sends and executes nothing; reminders stop.",
+    "Withdraw your pending approval request from this chat when the owner's reply decided or mooted it. Owner runs or your own runs only; never just because a member asked. Sends and executes nothing; reminders stop.",
     {
       requestId: uuid,
       reason: z.string().trim().min(1).max(500),
@@ -157,7 +157,7 @@ export const OPENWA_TOOLS = [
   tool(
     "catalog",
     "read",
-    "List OpenWA gateway operations with category and availability on this engine and key. Filter by category or text; page with cursor.",
+    "List gateway operations with category and availability on this engine and key. Filter by category or text; page with cursor.",
     {
       category: z.enum(["read", "write", "wa_admin", "gateway_admin", "wardmote"]).optional(),
       query: z.string().min(1).max(100).optional(),
@@ -167,7 +167,7 @@ export const OPENWA_TOOLS = [
   tool(
     "endpoint_config",
     "write",
-    "Owner-triggered runs only: change sender lists, one chat's settings (default origin chat; null clears), approvals, reminders, pending TTL, burst window, custom instructions. Empty call reads them. Credentials, number mode, owners, gateway admin stay in Wardmote.",
+    "Owner-triggered runs only: sender lists, one chat's settings (default origin; null clears), approvals, reminders, pending TTL, burst window, custom instructions. No args reads them. Credentials, number mode, owners, gateway admin stay in Wardmote.",
     {
       senders: z
         .object({
@@ -185,6 +185,7 @@ export const OPENWA_TOOLS = [
           replyPolicy: openwaReplyPolicySchema.nullable().optional(),
           note: z.string().max(OPENWA_CHAT_NOTE_MAX_LENGTH).nullable().optional(),
           ownerReportChat: z.string().nullable().optional(),
+          ownerGroupAccess: z.enum(["auto", "off"]).optional(),
         })
         .strict()
         .optional(),

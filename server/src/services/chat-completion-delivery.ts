@@ -53,7 +53,7 @@ function ownerTriggeredRun(run: Run): boolean {
   const openwa = run.contextSnapshot?.wardmoteOpenwa;
   if (!openwa || typeof openwa !== "object") return false;
   const context = openwa as Record<string, unknown>;
-  return context.triggerClass === "owner" || context.ownerOrigin === "owner_chat" || context.ownerOrigin === "owner_task";
+  return context.triggerClass === "owner" || context.ownerOrigin === "owner_chat" || context.ownerOrigin === "owner_task" || context.ownerOrigin === "owner_group";
 }
 
 async function recordOpenwaHandoff(tx: Connection, task: Issue, source: Issue, run: Run) {

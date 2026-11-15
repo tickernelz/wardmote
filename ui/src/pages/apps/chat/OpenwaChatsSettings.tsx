@@ -371,6 +371,23 @@ function ChatEditor({
         </p>
         <FieldMessage id="openwa-chat-owner-report" error={fieldError(errors, "ownerReportChatKey")} />
       </div>
+      {chatId.toLowerCase().endsWith("@g.us") ? (
+        <div className="grid gap-1">
+          <label htmlFor="openwa-chat-owner-group" className="text-sm font-medium">Owner-only group access</label>
+          <select
+            id="openwa-chat-owner-group"
+            className={openwaSelectClass + " sm:max-w-sm"}
+            value={draft.ownerGroupAccess}
+            onChange={(event) => setDraft((current) => ({ ...current, ownerGroupAccess: event.target.value as ChatDraft["ownerGroupAccess"] }))}
+          >
+            <option value="auto">Automatic (default)</option>
+            <option value="off">Off</option>
+          </select>
+          <p className="text-xs text-ink-3">
+            While the live members are only owners and this number, runs here act with full owner access and owner reports and approval requests stay in this group. Anyone else joining ends it at once. Off keeps the normal group rules.
+          </p>
+        </div>
+      ) : null}
       <fieldset className="space-y-2">
         <legend className="text-sm font-medium">Trigger overrides</legend>
         <div className="grid gap-2 sm:grid-cols-2">

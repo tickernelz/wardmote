@@ -33,7 +33,7 @@ import { getStorageService } from "../../storage/index.js";
 import type { StorageService } from "../../storage/types.js";
 import { instanceSettingsService } from "../instance-settings.js";
 import { claimOpenwaCompletionReport, isOpenwaCompletionTurn, openwaCompletionOwedToOwner, settleOpenwaCompletionReport } from "../chat-completion-delivery.js";
-import { openwaOwnerReportRoute } from "./owner-report.js";
+import { openwaOwnerFacingChat, registerOpenwaGroupGateway } from "./owner-group.js";
 import { parseOpenwaThreadId } from "./adapter.js";
 import { openwaApprovalResolveTool, openwaApprovalWithdrawTool, openwaRequestApprovalTool } from "./approvals.js";
 import { logOpenwaActivity, recordOpenwaAudit } from "./audit.js";
@@ -167,7 +167,9 @@ const runtimes = new WeakMap<Db, OpenwaToolRuntime>();
 
 export function registerOpenwaToolRuntime(db: Db, runtime: OpenwaToolRuntime): () => void {
   runtimes.set(db, runtime);
+  const unregisterGroupGateway = registerOpenwaGroupGateway(db, async (endpoint) => (await runtime.resolve(endpoint)).gateway);
   return () => {
+    unregisterGroupGateway();
     if (runtimes.get(db) === runtime) runtimes.delete(db);
   };
 }
@@ -1003,12 +1005,13 @@ async function ownerReportTarget(ctx: ToolContext, target: Target): Promise<Targ
     ? target.isOrigin && (await openwaCompletionOwedToOwner(ctx.db, { companyId: ctx.endpoint.companyId, runId: ctx.run.id, issueId: ctx.binding.issueId }))
     : !target.isOrigin && !target.isGroup && target.number !== null && (await ownerPrincipal(ctx, target.number));
   if (!owed) return target;
-  const route = await openwaOwnerReportRoute(ctx.db, ctx.endpoint, ctx.origin.chatKey, {
+  const route = await openwaOwnerFacingChat(ctx.db, ctx.endpoint, ctx.origin.chatKey, {
     source: ctx.completion ? "task_completion" : "send",
     runId: ctx.run.id,
     conversationId: ctx.conversation.id,
   });
-  if (!route || route.chatKey === ctx.origin.chatKey) return target;
+  if (!route || (route.chatKey === ctx.origin.chatKey && target.isOrigin)) return target;
+  if (route.chatKey === ctx.origin.chatKey) return { ...ctx.origin, ownerReport: true };
   return { chatId: route.chatId, chatKey: route.chatKey, isGroup: true, isOrigin: false, number: null, ownerReport: true };
 }
 

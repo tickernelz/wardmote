@@ -43,6 +43,7 @@ export const AUDIT_KIND_LABELS: Record<ChatAuditEntryKind, string> = {
   linked_read: "Linked number read",
   run_failed: "Run failed",
   owner_report_fallback: "Owner report sent to direct chat",
+  owner_group_changed: "Owner-only group status changed",
 };
 
 export function mergeOpenwaPolicy(policy: OpenwaEndpointPolicy, patch: OpenwaEndpointPolicyInput): Record<string, unknown> {
@@ -156,6 +157,7 @@ export interface ChatDraft {
   keywordsOverride: boolean;
   keywords: string;
   ownerReportChatKey: string;
+  ownerGroupAccess: NonNullable<OpenwaChatSettings["ownerGroupAccess"]>;
 }
 
 function choice(value: boolean | undefined): TriggerChoice {
@@ -183,6 +185,7 @@ export function chatDraft(label: string, settings: OpenwaChatSettings): ChatDraf
     keywordsOverride: triggers.keywords !== undefined,
     keywords: (triggers.keywords ?? []).join(", "),
     ownerReportChatKey: settings.ownerReportChatKey ?? "",
+    ownerGroupAccess: settings.ownerGroupAccess ?? "auto",
   };
 }
 
@@ -208,6 +211,7 @@ export function chatSettingsInput(draft: ChatDraft): OpenwaChatSettingsInput {
     ...(draft.replyPolicy === "inherit" ? {} : { replyPolicy: draft.replyPolicy }),
     ...(draft.note.trim() ? { note: draft.note } : {}),
     ...(draft.ownerReportChatKey ? { ownerReportChatKey: draft.ownerReportChatKey } : {}),
+    ...(draft.ownerGroupAccess === "off" ? { ownerGroupAccess: "off" as const } : {}),
   };
 }
 

@@ -71,7 +71,7 @@ function problemOf(row: ResourceRow | null): OpenwaOwnerReportProblem | null {
   return row.metadata.ownerPresent === true ? null : "owner_absent";
 }
 
-function chatOf(row: ResourceRow, chatKey: string): OpenwaOwnerReportChat {
+export function openwaReportChatOf(row: ResourceRow, chatKey: string): OpenwaOwnerReportChat {
   let chatId = chatKey;
   try {
     chatId = parseOpenwaThreadId(row.providerResourceId).chatId;
@@ -102,7 +102,7 @@ export async function openwaOwnerReportRoute(
   if (!key) return null;
   const row = await openwaChatResource(db, endpoint, key);
   const problem = problemOf(row);
-  if (!problem) return chatOf(row!, key);
+  if (!problem) return openwaReportChatOf(row!, key);
   if (audit)
     await recordOpenwaAudit(db, {
       companyId: endpoint.companyId,

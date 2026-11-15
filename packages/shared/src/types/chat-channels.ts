@@ -811,6 +811,7 @@ export const CHAT_AUDIT_ENTRY_KINDS = [
   "linked_read",
   "run_failed",
   "owner_report_fallback",
+  "owner_group_changed",
 ] as const;
 export type ChatAuditEntryKind = (typeof CHAT_AUDIT_ENTRY_KINDS)[number];
 
@@ -875,7 +876,10 @@ export interface OpenwaChatSettings {
   replyPolicy?: OpenwaReplyPolicy;
   note?: string;
   ownerReportChatKey?: string | null;
+  ownerGroupAccess?: OpenwaOwnerGroupAccess;
 }
+
+export type OpenwaOwnerGroupAccess = "auto" | "off";
 
 export interface OpenwaWakeRequestPayload {
   triggerClass: OpenwaTriggerClass;

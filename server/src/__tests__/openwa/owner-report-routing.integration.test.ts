@@ -33,7 +33,7 @@ import { ChatSdkRuntime } from "../../services/chat-sdk-runtime.js";
 import { instanceSettingsService } from "../../services/instance-settings.js";
 import { secretService } from "../../services/secrets.js";
 import { HttpError } from "../../errors.js";
-import { applyOpenwaRunContext, assertOpenwaRunMay, resolveOpenwaRunContext, type OpenwaRunContext } from "../../services/openwa/authority.js";
+import { applyOpenwaRunContext, assertOpenwaRunMay, openwaRunProfile, resolveOpenwaRunContext, type OpenwaRunContext } from "../../services/openwa/authority.js";
 import { buildOpenwaRunGuidance } from "../../services/openwa/guidance.js";
 import type { OpenwaScheduledWakeClock } from "../../services/openwa/scheduled-wakes.js";
 import { executeOpenwaTool, type OpenwaToolBinding } from "../../services/openwa/tools.js";
@@ -46,6 +46,8 @@ const MEMBER_A = "628666000511";
 const PROJECT = "120363000000000511@g.us";
 const BOT_GROUP = "120363000000000512@g.us";
 const NO_OWNER = "120363000000000513@g.us";
+const OWNER_LID = "205402859536511@lid";
+const STRANGER_LID = "305402859536511@lid";
 const jid = (phone: string) => phone + "@c.us";
 
 type WakeupOptions = Parameters<ChatChannelServiceOptions["heartbeat"]["wakeup"]>[1];
@@ -340,6 +342,35 @@ describe("OpenWA owner report routing (embedded Postgres + fake gateway)", () =>
     return sends.map((send) => ({ chatKey: send.chatKey, messageId: send.providerMessageId! }));
   }
 
+  async function monitorRun(t: Setup, issueId: string) {
+    const runId = randomUUID();
+    const contextSnapshot: Record<string, unknown> = { issueId };
+    await db.insert(heartbeatRuns).values({ id: runId, companyId: t.companyId, agentId: t.agentId, status: "running", startedAt: new Date(), contextSnapshot });
+    const openwa = await resolveOpenwaRunContext(db, { companyId: t.companyId, issueId, contextSnapshot, wakeupRequestId: null, runId });
+    expect(openwa).not.toBeNull();
+    applyOpenwaRunContext(contextSnapshot, openwa);
+    await db.update(heartbeatRuns).set({ contextSnapshot }).where(eq(heartbeatRuns.id, runId));
+    const binding: OpenwaToolBinding = { companyId: t.companyId, agentId: t.agentId, runId, issueId };
+    return { runId, issueId, openwa: openwa!, binding, run: { id: runId, companyId: t.companyId, contextSnapshot } };
+  }
+
+  async function ownerGroupAudits(t: Setup) {
+    return db
+      .select()
+      .from(chatAuditEntries)
+      .where(and(eq(chatAuditEntries.endpointId, t.endpointId), eq(chatAuditEntries.kind, "owner_group_changed")))
+      .orderBy(asc(chatAuditEntries.occurredAt));
+  }
+
+  async function conversationWithPendingStranger(t: Setup, chatId: string) {
+    const ownerRun = await runStart(t, await admitted(t, mention(chatId, OWNER_PHONE, "update server lalu laporkan di sini")));
+    await t.service.openwa.putChat(t.endpointId, { chatId, settings: { activation: "on", triggers: { allMessages: true } } }, t.userId);
+    const stranger = await admitted(t, { chatId, author: STRANGER_LID, body: "online backup?" });
+    const [delivery] = await db.select().from(chatDeliveries).where(eq(chatDeliveries.id, stranger.delivery));
+    expect(delivery).toMatchObject({ principalRole: "outside_allowlist", triggerClass: "other" });
+    return ownerRun;
+  }
+
   async function fallbackAudits(t: Setup) {
     return db
       .select()
@@ -536,5 +567,102 @@ describe("OpenWA owner report routing (embedded Postgres + fake gateway)", () =>
         metadata: expect.objectContaining({ destinationChatKey: BOT_GROUP, reason: "unavailable", source: "approval" }),
       }),
     ]);
+  }, 180_000);
+
+  it("lets a monitor run in an owner-only group report there without approval despite a pending outside_allowlist message", async () => {
+    const t = await setup();
+    const ownerRun = await conversationWithPendingStranger(t, BOT_GROUP);
+    expect(ownerRun.openwa).toMatchObject({ triggerClass: "owner", profile: "full" });
+    const monitor = await monitorRun(t, ownerRun.issueId);
+    expect(monitor.openwa).toMatchObject({ triggerClass: "other", profile: "full", toolProfile: "full", ownerOrigin: "owner_group", ownerGroup: true });
+    expect(await assertOpenwaRunMay(db, monitor.run, "create_task")).toBeNull();
+    const guidance = await buildOpenwaRunGuidance(db, {
+      companyId: t.companyId,
+      issueId: monitor.issueId,
+      runId: monitor.runId,
+      wakeupRequestId: null,
+      openwa: monitor.openwa,
+      contextSnapshot: monitor.run.contextSnapshot,
+    });
+    expect(guidance!.markdown).toContain("This group is an owner-only group");
+    expect(guidance!.markdown).toContain("this group holds only owners and this WhatsApp number");
+    await executeOpenwaTool(db, monitor.binding, "openwa_send", { text: "Laporan: update selesai", idempotencyKey: randomUUID() });
+    expect(t.gateway.sends.at(-1)).toMatchObject({ chatId: BOT_GROUP, text: "Laporan: update selesai" });
+    expect(t.gateway.sends.some((send) => send.chatId === jid(OWNER_PHONE))).toBe(false);
+    expect((await db.select().from(chatOwnerApprovalRequests).where(eq(chatOwnerApprovalRequests.endpointId, t.endpointId))).length).toBe(0);
+    expect((await ownerGroupAudits(t)).map((row) => row.metadata)).toEqual([expect.objectContaining({ ownerOnly: true, reason: "owner_only" })]);
+  }, 180_000);
+
+  it("keeps a monitor run in a group with a non-owner read_only and gated", async () => {
+    const t = await setup();
+    const ownerRun = await conversationWithPendingStranger(t, PROJECT);
+    expect(ownerRun.openwa.ownerGroup).toBeUndefined();
+    const monitor = await monitorRun(t, ownerRun.issueId);
+    expect(monitor.openwa).toMatchObject({ triggerClass: "other", profile: "read_only" });
+    expect(monitor.openwa.ownerOrigin).toBeUndefined();
+    await expect(assertOpenwaRunMay(db, monitor.run, "create_task")).rejects.toMatchObject({ status: 403 });
+    const sendsBefore = t.gateway.sends.length;
+    const refused = await failure(executeOpenwaTool(db, monitor.binding, "openwa_send", { text: "Laporan", idempotencyKey: randomUUID() }));
+    expect(JSON.stringify(refused.details)).toContain("reply_outside_allowlist");
+    expect(t.gateway.sends.length).toBe(sendsBefore);
+    expect(await ownerGroupAudits(t)).toEqual([]);
+  }, 180_000);
+
+  it("revokes owner-only authority the moment a non-owner joins during a run and audits the change", async () => {
+    const t = await setup();
+    const ownerRun = await runStart(t, await admitted(t, mention(BOT_GROUP, OWNER_PHONE, "pantau server")));
+    const monitor = await monitorRun(t, ownerRun.issueId);
+    expect(monitor.openwa.ownerOrigin).toBe("owner_group");
+    expect(await openwaRunProfile(db, monitor.run)).toBe("full");
+    t.gateway.groups.get(BOT_GROUP)!.participants.push({ id: jid(MEMBER_A) });
+    expect(await openwaRunProfile(db, monitor.run)).toBe("read_only");
+    await expect(assertOpenwaRunMay(db, monitor.run, "create_task")).rejects.toMatchObject({ status: 403 });
+    t.gateway.emit("group.join", { groupId: BOT_GROUP, actorId: jid(OWNER_PHONE), participantIds: [jid(MEMBER_A)], timestamp: Math.floor(Date.now() / 1000) });
+    await until(async () => (await ownerGroupAudits(t)).length >= 2);
+    expect((await ownerGroupAudits(t)).map((row) => row.metadata)).toEqual([
+      expect.objectContaining({ ownerOnly: true, reason: "owner_only", source: "run_start" }),
+      expect.objectContaining({ ownerOnly: false, reason: "non_owner", source: "run_check" }),
+    ]);
+    t.gateway.groups.get(BOT_GROUP)!.participants.pop();
+    const restored = await monitorRun(t, ownerRun.issueId);
+    expect(restored.openwa.ownerOrigin).toBe("owner_group");
+  }, 180_000);
+
+  it("sends an approval request from an owner-only group to that group, and to the owner's direct chat once the switch is off", async () => {
+    const t = await setup();
+    const ownerRun = await runStart(t, await admitted(t, mention(BOT_GROUP, OWNER_PHONE, "cek invoice 42")));
+    const monitor = await monitorRun(t, ownerRun.issueId);
+    let sendsBefore = t.gateway.sends.length;
+    const inGroup = await requestApproval(monitor.binding, { categories: ["wa_admin"], message: "Boleh ganti nama grup?" });
+    expect(t.gateway.sends.slice(sendsBefore).map((send) => send.chatId)).toEqual([BOT_GROUP]);
+    expect((await bubbleChats(inGroup.requestId)).map((bubble) => bubble.chatKey)).toEqual([BOT_GROUP]);
+
+    const off = (await executeOpenwaTool(db, ownerRun.binding, "openwa_endpoint_config", { chatSettings: { ownerGroupAccess: "off" } })) as {
+      chat: { settings: { ownerGroupAccess?: string } };
+    };
+    expect(off.chat.settings.ownerGroupAccess).toBe("off");
+    const gated = await monitorRun(t, ownerRun.issueId);
+    expect(gated.openwa).toMatchObject({ profile: "read_only" });
+    expect(gated.openwa.ownerOrigin).toBeUndefined();
+    sendsBefore = t.gateway.sends.length;
+    const direct = await requestApproval(gated.binding, { categories: ["wa_admin"], message: "Boleh ganti nama grup lagi?" });
+    expect(t.gateway.sends.slice(sendsBefore).map((send) => send.chatId)).toEqual([jid(OWNER_PHONE)]);
+    expect((await bubbleChats(direct.requestId)).map((bubble) => bubble.chatKey)).toEqual([jid(OWNER_PHONE)]);
+    expect((await ownerGroupAudits(t)).at(-1)!.metadata).toMatchObject({ ownerOnly: false, reason: "disabled" });
+
+    const auto = (await executeOpenwaTool(db, ownerRun.binding, "openwa_endpoint_config", { chatSettings: { ownerGroupAccess: "auto" } })) as {
+      chat: { settings: { ownerGroupAccess?: string } };
+    };
+    expect(auto.chat.settings.ownerGroupAccess).toBe("auto");
+    expect((await monitorRun(t, ownerRun.issueId)).openwa.ownerOrigin).toBe("owner_group");
+  }, 180_000);
+
+  it("gives a group message from an owner's LID without a phone the owner's principal", async () => {
+    const t = await setup();
+    t.gateway.lids.set(OWNER_PHONE, OWNER_LID);
+    const wake = await admitted(t, { chatId: BOT_GROUP, author: OWNER_LID, body: "@" + OWN_PHONE + " ini gambar backup", extra: { mentionedIds: [jid(OWN_PHONE)] } });
+    const [delivery] = await db.select().from(chatDeliveries).where(eq(chatDeliveries.id, wake.delivery));
+    expect(delivery).toMatchObject({ principalRole: "owner", triggerClass: "owner" });
+    expect(wake.request.payload).toMatchObject({ openwa: { triggerClass: "owner" } });
   }, 180_000);
 });

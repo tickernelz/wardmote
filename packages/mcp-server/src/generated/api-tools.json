@@ -41099,6 +41099,13 @@
               "note": {
                 "type": "string"
               },
+              "ownerGroupAccess": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "off"
+                ]
+              },
               "ownerReportChatKey": {
                 "type": "string"
               },

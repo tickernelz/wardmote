@@ -613,6 +613,7 @@ describe("OpenWA admission (embedded Postgres + fake gateway)", () => {
     expect(openwa.map((entry) => entry?.rules)).toEqual([["agent_mentioned"], ["agent_mentioned"], ["agent_mentioned"]]);
     expect(openwa.map((entry) => entry?.agentMentionIds)).toEqual([[ownLid], [ownLid], [jid(OWN_PHONE)]]);
     expect(t.gateway.requests.filter((entry) => entry.path.endsWith("/phone")).map((entry) => decodeURIComponent(entry.path.split("/").at(-2)!))).toEqual([
+      memberLid,
       "110000000000777@lid",
       ownLid,
     ]);
