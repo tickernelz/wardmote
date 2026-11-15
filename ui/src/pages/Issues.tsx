@@ -13,7 +13,7 @@ import { usePublishSharedQueryData, useSharedPollingQuery } from "@/hooks/useSha
 import { queryKeys } from "../lib/queryKeys";
 import { createIssueDetailLocationState } from "../lib/issueDetailBreadcrumb";
 import { EmptyState } from "../components/EmptyState";
-import { IssuesList } from "../components/IssuesList";
+import { IssuesList, loadStoredShowHiddenTasks } from "../components/IssuesList";
 import { TasksLiveNowSection } from "../components/TasksLiveNowSection";
 import { TaskViewsMenu } from "../components/TaskViewsMenu";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,7 @@ import {
 
 const WORKSPACE_FILTER_ISSUE_LIMIT = 1000;
 const ISSUES_PAGE_SIZE = 100;
+const ISSUES_VIEW_STATE_KEY = "wardmote:issues-view";
 export const ISSUES_ROW_PRESENTATION = "task" as const;
 export const ISSUES_TOOLBAR_PRESENTATION = "collection" as const;
 
@@ -227,7 +228,7 @@ function OrganizationIssues({
   }, [setBreadcrumbs]);
 
   const issuePageSize = workspaceIdFilter ? WORKSPACE_FILTER_ISSUE_LIMIT : ISSUES_PAGE_SIZE;
-  const [includeHidden, setIncludeHidden] = useState(false);
+  const [includeHidden, setIncludeHidden] = useState(() => loadStoredShowHiddenTasks(selectedCompanyId, ISSUES_VIEW_STATE_KEY));
 
   const {
     data: issuePages,
@@ -305,7 +306,7 @@ function OrganizationIssues({
       projects={projects}
       liveIssueIds={liveIssueIds}
       liveRuns={liveRuns}
-      viewStateKey="wardmote:issues-view"
+      viewStateKey={ISSUES_VIEW_STATE_KEY}
       rowPresentation={issuesPresentation.rowPresentation}
       toolbarPresentation={issuesPresentation.toolbarPresentation}
       issueLinkState={issueLinkState}
