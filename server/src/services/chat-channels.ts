@@ -61,7 +61,7 @@ import { settleExternalConversation } from "./slack-conversation-lifecycle.js";
 import { takePhotonCompanion } from "./photon/attachments.js";
 import { writePhotonCheckpoint } from "./photon/receiver.js";
 import { PhotonState } from "./photon/state.js";
-import { createOpenwaIngressCallbacks, type OpenwaIngressHooks } from "./openwa/ingress.js";
+import { chatEndpointQueuesInbound, createOpenwaIngressCallbacks, type OpenwaIngressHooks } from "./openwa/ingress.js";
 import { openwaOutboundRegistry } from "./openwa/outbound.js";
 import { OpenwaChatAdapter } from "./openwa/adapter.js";
 import { decideOpenwaRunPublication, openwaTypingAllowed, sendOpenwaPublication } from "./openwa/publication.js";
@@ -15511,7 +15511,9 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     const admission = await db.transaction(async (tx) => {
       const currentEndpoint = await tx
         .select({
+          provider: chatEndpoints.provider,
           status: chatEndpoints.status,
+          lastError: chatEndpoints.lastError,
           setup: chatEndpoints.setup,
           allowDirectMessages: chatEndpoints.allowDirectMessages,
           requireAtMention: chatEndpoints.requireAtMention,
@@ -15546,7 +15548,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           runtimeContext.credentialFingerprint !==
             currentCredentialFingerprint);
       const endpointAccepting =
-        ["verifying", "active"].includes(currentEndpoint.status) &&
+        chatEndpointQueuesInbound(currentEndpoint) &&
         !staleActivation;
       if (
         endpointAccepting &&

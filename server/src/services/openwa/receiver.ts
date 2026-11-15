@@ -44,6 +44,8 @@ const CURSOR_COMMIT_EVENTS = 200;
 const SEEN_KEYS_LIMIT = 20_000;
 const SUBSCRIBE_TIMEOUT_MS = 10_000;
 const CATCH_UP_RESTARTS = 3;
+const SESSION_RECONCILE_INTERVAL_MS = 60_000;
+const SESSION_STATUS_TIMEOUT_MS = 5_000;
 const FATAL_SOCKET_CODES = new Set(["UNAUTHORIZED", "FORBIDDEN_SESSION", "INVALID_SESSION"]);
 const FATAL_GATEWAY_CODES: ReadonlySet<string> = new Set(["unauthorized", "forbidden", "not_found"]);
 
@@ -164,7 +166,12 @@ export interface OpenwaReceiverStats {
   bufferOverflows: number;
   truncatedCatchUps: number;
   cursorCommits: number;
+  sessionStatusReads: number;
+  sessionStatusApplied: number;
+  sessionStatusErrors: number;
 }
+
+export type OpenwaSessionStatusSource = "reconnect" | "reconcile";
 
 export interface OpenwaReceiverOptions {
   gateway: OpenwaGatewayClient;
@@ -181,6 +188,8 @@ export interface OpenwaReceiverOptions {
   beforeCatchUp?(): Promise<void>;
   live?(): Promise<void>;
   commitCursor?(cursor: OpenwaIngestCursor): Promise<void>;
+  sessionStatus?(status: string, source: OpenwaSessionStatusSource): Promise<void>;
+  sessionReconcileIntervalMs?: number;
 }
 
 export function openwaDedupeKey(sessionId: string, waMessageId: string | null, rowUuid?: string | null): string | null {
@@ -251,6 +260,9 @@ export class OpenwaReceiver {
     bufferOverflows: 0,
     truncatedCatchUps: 0,
     cursorCommits: 0,
+    sessionStatusReads: 0,
+    sessionStatusApplied: 0,
+    sessionStatusErrors: 0,
   };
   private stopped = false;
   private started = false;
@@ -265,6 +277,8 @@ export class OpenwaReceiver {
   private cursorLoaded = false;
   private uncommitted = 0;
   private commitTimer?: ReturnType<typeof setInterval>;
+  private reconcileTimer?: ReturnType<typeof setInterval>;
+  private sessionStatus: string | null = null;
   private readonly now: () => number;
 
   constructor(private readonly options: OpenwaReceiverOptions) {
@@ -278,6 +292,12 @@ export class OpenwaReceiver {
       if (this.uncommitted > 0 && !this.stopped) this.enqueue(() => this.commit(true));
     }, this.options.cursorCommitIntervalMs ?? CURSOR_COMMIT_INTERVAL_MS);
     this.commitTimer.unref?.();
+    if (this.options.sessionStatus) {
+      this.reconcileTimer = setInterval(() => {
+        if (this.live && !this.stopped) this.enqueue(() => this.reconcileSession("reconcile"));
+      }, this.options.sessionReconcileIntervalMs ?? SESSION_RECONCILE_INTERVAL_MS);
+      this.reconcileTimer.unref?.();
+    }
     this.options.socket.open({
       connected: () => this.onConnected(),
       disconnected: () => this.onDisconnected(),
@@ -375,6 +395,7 @@ export class OpenwaReceiver {
 
   private async recover(epoch: number): Promise<void> {
     await this.options.beforeCatchUp?.();
+    await this.reconcileSession("reconnect");
     for (;;) {
       if (this.stopped || epoch !== this.epoch) return;
       this.overflowed = false;
@@ -461,6 +482,27 @@ export class OpenwaReceiver {
     return this.cursor;
   }
 
+  private async reconcileSession(source: OpenwaSessionStatusSource): Promise<void> {
+    const apply = this.options.sessionStatus;
+    if (!apply || this.stopped) return;
+    const epoch = this.epoch;
+    let status: string | null;
+    try {
+      const result = await this.options.gateway.call("SessionController_findOne", {}, { timeoutMs: SESSION_STATUS_TIMEOUT_MS });
+      this.stats.sessionStatusReads++;
+      status = result.kind === "json" ? stringField(record(result.data) ?? {}, "status") : null;
+      if (!status) throw new OpenwaReceiverError("protocol", "OpenWA returned no session status", false);
+      if (this.stopped || epoch !== this.epoch || (source === "reconcile" && status === this.sessionStatus)) return;
+      await apply(status, source);
+    } catch {
+      this.stats.sessionStatusErrors++;
+      this.sessionStatus = null;
+      return;
+    }
+    this.sessionStatus = status;
+    this.stats.sessionStatusApplied++;
+  }
+
   private async process(event: OpenwaIngressEvent): Promise<void> {
     await this.options.assertOwned();
     const message = isMessageEvent(event.event);
@@ -471,8 +513,10 @@ export class OpenwaReceiver {
       this.stats.duplicates++;
       return;
     }
+    if (message && this.sessionStatus !== null && this.sessionStatus !== "ready") await this.reconcileSession("reconcile");
     await this.options.admit(event, key);
     this.stats.processed++;
+    if (event.event === "session.status") this.sessionStatus = stringField(event.data, "status") ?? this.sessionStatus;
     if (!key) return;
     if (seenKey) remember(this.seen, seenKey);
     const timestamp = epochSeconds(event.data.timestamp);
@@ -518,6 +562,7 @@ export class OpenwaReceiver {
   private halt(): void {
     this.stopped = true;
     if (this.commitTimer) clearInterval(this.commitTimer);
+    if (this.reconcileTimer) clearInterval(this.reconcileTimer);
     if (this.subscribeRequest) clearTimeout(this.subscribeRequest.timer);
     this.subscribeRequest = null;
     this.options.socket.close();

@@ -101,6 +101,7 @@ export class FakeOpenwaGateway {
   readonly linkedSessions = new Map<string, FakeLinkedSession>();
   engine = "whatsapp-web.js";
   generic = false;
+  ownSessionStatus = "ready";
   readonly overrides: FakeOverride[] = [];
   readonly subscriptions: Array<{ sessionId: string; events: string[] }> = [];
   readonly media = new Map<string, FakeMedia>();
@@ -322,7 +323,7 @@ export class FakeOpenwaGateway {
 
   private ownSessionView() {
     const now = new Date().toISOString();
-    return { id: this.sessionId, name: "agent", status: "ready", phone: this.ownJid.split("@")[0], pushName: "Agent", createdAt: now, updatedAt: now, engineLoaded: true };
+    return { id: this.sessionId, name: "agent", status: this.ownSessionStatus, phone: this.ownJid.split("@")[0], pushName: "Agent", createdAt: now, updatedAt: now, engineLoaded: true };
   }
 
   private linkedSessionView(session: FakeLinkedSession) {
@@ -472,6 +473,7 @@ export class FakeOpenwaGateway {
     const open = this.generic && !apiKey && UNAUTHENTICATED_PATH.test(url.pathname);
     if (!open && (key === null || (key === "admin" && !this.generic))) return reply(401, { message: "Unauthorized" });
     const prefix = "/api/sessions/" + this.sessionId;
+    if (req.method === "GET" && url.pathname === prefix && !this.generic) return reply(200, this.ownSessionView());
     if (req.method === "GET" && url.pathname === prefix + "/messages") return this.listMessages(query, reply);
     if (req.method === "POST" && url.pathname === prefix + "/messages/send-text") {
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as { chatId: string; text: string; quotedMessageId?: string; mentions?: string[] };

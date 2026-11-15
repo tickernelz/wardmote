@@ -28,6 +28,7 @@ import { secretService } from "../../services/secrets.js";
 import { resolveOpenwaRunContext } from "../../services/openwa/authority.js";
 import { buildOpenwaRunGuidance } from "../../services/openwa/guidance.js";
 import { OPENWA_SESSION_HEALTH_WAKE_ACTION_KIND } from "../../services/openwa/session-health.js";
+import { OPENWA_AGENT_ADAPTER_ATTENTION_MESSAGE } from "../../services/openwa/agent-adapter.js";
 import { FAKE_OPENWA_KEY, FakeOpenwaGateway } from "./fake-gateway.js";
 
 const SESSION_ID = "51111111-2222-4333-8444-555555555555";
@@ -227,6 +228,19 @@ describe("OpenWA session_health wakes (embedded Postgres + fake gateway)", () =>
       .orderBy(asc(chatAuditEntries.occurredAt));
   }
 
+  async function settledDeliveries(t: Setup, count: number) {
+    let swept = Date.now();
+    await until(async () => {
+      if (Date.now() - swept > 1_000) {
+        swept = Date.now();
+        await t.service.processPendingDeliveries();
+      }
+      const rows = await db.select().from(chatDeliveries).where(eq(chatDeliveries.endpointId, t.endpointId));
+      return rows.length >= count && rows.every((entry) => entry.state === "processed" || entry.state === "filtered");
+    }, 30_000);
+    return db.select().from(chatDeliveries).where(eq(chatDeliveries.endpointId, t.endpointId)).orderBy(asc(chatDeliveries.createdAt));
+  }
+
   async function endpointStatus(t: Setup) {
     return (await db.select({ status: chatEndpoints.status }).from(chatEndpoints).where(eq(chatEndpoints.id, t.endpointId)))[0]!.status;
   }
@@ -337,5 +351,53 @@ describe("OpenWA session_health wakes (embedded Postgres + fake gateway)", () =>
     expect(await healthActions(t)).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(t.wakeup.mock.calls.length).toBe(baseWakes);
+  }, 120_000);
+
+  it("returns to active and keeps the messages that arrived while the socket reconnected after a missed ready", async () => {
+    const t = await setup();
+    t.gateway.emit("session.status", { sessionId: SESSION_ID, status: "disconnected" });
+    await until(async () => (await endpointStatus(t)) === "attention");
+
+    t.gateway.killSocket();
+    t.gateway.ownSessionStatus = "ready";
+    t.gateway.emit("session.status", { sessionId: SESSION_ID, status: "ready" });
+    t.gateway.inbound({ chatId: jid(OWNER_PHONE), body: "pesan satu", emit: false });
+    t.gateway.inbound({ chatId: jid(OWNER_PHONE), body: "pesan dua", emit: false });
+    t.gateway.restartSocket();
+
+    await until(async () => (await endpointStatus(t)) === "active");
+    const deliveries = await settledDeliveries(t, 2);
+    expect(deliveries.map((entry) => [entry.state, entry.redactedError])).toEqual([
+      ["processed", null],
+      ["processed", null],
+    ]);
+    const audits = await healthAudits(t);
+    expect(audits.map((entry) => entry.metadata as Record<string, unknown>)).toEqual([
+      expect.objectContaining({ healthy: false, status: "disconnected", source: "event" }),
+      expect.objectContaining({ healthy: true, status: "ready", source: "reconnect" }),
+    ]);
+  }, 120_000);
+
+  it("recovers on the next message when the session event went stale and still filters other attention causes", async () => {
+    const t = await setup();
+    t.gateway.emit("session.status", { sessionId: SESSION_ID, status: "disconnected" });
+    await until(async () => (await endpointStatus(t)) === "attention");
+
+    t.gateway.inbound({ chatId: jid(OWNER_PHONE), body: "masih masuk" });
+    const [admitted] = await settledDeliveries(t, 1);
+    expect([admitted!.state, admitted!.redactedError]).toEqual(["processed", null]);
+    expect(await endpointStatus(t)).toBe("active");
+    expect((await healthAudits(t)).map((entry) => entry.metadata as Record<string, unknown>)).toEqual([
+      expect.objectContaining({ healthy: false, status: "disconnected", source: "event" }),
+      expect.objectContaining({ healthy: true, status: "ready", source: "reconcile" }),
+    ]);
+
+    await db
+      .update(chatEndpoints)
+      .set({ status: "attention", lastError: OPENWA_AGENT_ADAPTER_ATTENTION_MESSAGE, healthMessage: OPENWA_AGENT_ADAPTER_ATTENTION_MESSAGE })
+      .where(eq(chatEndpoints.id, t.endpointId));
+    t.gateway.inbound({ chatId: jid(OWNER_PHONE), body: "harus tertahan" });
+    const filtered = (await settledDeliveries(t, 2))[1]!;
+    expect([filtered.state, filtered.redactedError]).toEqual(["filtered", "Connection is not active"]);
   }, 120_000);
 });

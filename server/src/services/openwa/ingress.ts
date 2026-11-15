@@ -19,6 +19,7 @@ import {
   type OpenwaIngressEvent,
   type OpenwaSessionHealth,
   type OpenwaSessionHealthHandler,
+  type OpenwaSessionStatusSource,
 } from "./receiver.js";
 import {
   dispatchOpenwaSessionHealthWake,
@@ -37,6 +38,17 @@ const HEALTH_MESSAGE_LIMIT = 500;
 export const OPENWA_CONNECTION_HEALTH_PREFIX = "OpenWA connection: ";
 export const OPENWA_SESSION_HEALTH_PREFIX = "OpenWA session: ";
 export const OPENWA_RESTRICTION_HEALTH_PREFIX = "OpenWA restriction: ";
+const OPENWA_RECONNECTING_MESSAGE = "connection interrupted; reconnecting";
+
+export type OpenwaSessionHealthSource = "event" | OpenwaSessionStatusSource;
+
+/** True when inbound messages are queued for processing; OpenWA session or reconnect health attention holds them until the endpoint recovers instead of dropping them. */
+export function chatEndpointQueuesInbound(endpoint: Pick<EndpointRow, "provider" | "status" | "lastError">): boolean {
+  if (endpoint.status === "verifying" || endpoint.status === "active") return true;
+  if (endpoint.provider !== "openwa" || endpoint.status !== "attention") return false;
+  const error = endpoint.lastError ?? "";
+  return error.startsWith(OPENWA_SESSION_HEALTH_PREFIX) || error.startsWith(OPENWA_CONNECTION_HEALTH_PREFIX + OPENWA_RECONNECTING_MESSAGE);
+}
 
 export interface OpenwaIngressHooks {
   onInbound?: OpenwaInboundHandler;
@@ -51,6 +63,7 @@ export interface OpenwaIngressCallbacks {
   onOpenwaBeforeCatchUp(gateway: OpenwaGatewayClient): Promise<void>;
   onOpenwaLive(): Promise<void>;
   onOpenwaFailure(error: unknown): Promise<void>;
+  onOpenwaSessionStatus(status: string, source: OpenwaSessionStatusSource): Promise<void>;
 }
 
 export interface OpenwaIngressDeps {
@@ -141,13 +154,13 @@ export function createOpenwaIngressCallbacks(deps: OpenwaIngressDeps): OpenwaIng
     return changed;
   }
 
-  async function sessionHealth(health: OpenwaSessionHealth): Promise<void> {
+  async function sessionHealth(health: OpenwaSessionHealth, source: OpenwaSessionHealthSource): Promise<void> {
     if (health.kind === "status")
       await transition({
         healthy: health.healthy,
         prefix: OPENWA_SESSION_HEALTH_PREFIX,
         message: "session is " + health.status,
-        metadata: { status: health.status },
+        metadata: { status: health.status, source },
         wake: { kind: "status", healthy: health.healthy, status: health.status, restriction: null },
       });
     else
@@ -155,7 +168,7 @@ export function createOpenwaIngressCallbacks(deps: OpenwaIngressDeps): OpenwaIng
         healthy: health.healthy,
         prefix: OPENWA_RESTRICTION_HEALTH_PREFIX,
         message: openwaRestrictionSummary(health.restrictionKind),
-        metadata: { active: health.active, kind: health.restrictionKind, code: health.code, expiresAt: health.expiresAt },
+        metadata: { active: health.active, kind: health.restrictionKind, code: health.code, expiresAt: health.expiresAt, source },
         wake: {
           kind: "restriction",
           healthy: health.healthy,
@@ -173,7 +186,7 @@ export function createOpenwaIngressCallbacks(deps: OpenwaIngressDeps): OpenwaIng
     onInbound: deps.hooks.onInbound,
     onGroup: deps.hooks.onGroup,
     onSessionHealth: async (health, ctx) => {
-      await sessionHealth(health);
+      await sessionHealth(health, "event");
       await deps.hooks.onSessionHealth?.(health, ctx);
     },
   });
@@ -221,10 +234,15 @@ export function createOpenwaIngressCallbacks(deps: OpenwaIngressDeps): OpenwaIng
       await transition({
         healthy: false,
         prefix: OPENWA_CONNECTION_HEALTH_PREFIX,
-        message: fatal ? deps.redact(error) : "connection interrupted; reconnecting (" + deps.redact(error) + ")",
+        message: fatal ? deps.redact(error) : OPENWA_RECONNECTING_MESSAGE + " (" + deps.redact(error) + ")",
         fatal,
       }).catch(() => false);
       if (fatal) deps.invalidate();
+    },
+    async onOpenwaSessionStatus(status, source) {
+      const health: OpenwaSessionHealth = { kind: "status", status, healthy: status === "ready" };
+      await sessionHealth(health, source);
+      await deps.hooks.onSessionHealth?.(health, { companyId: deps.companyId, endpointId: deps.endpointId, outbound: deps.outbound });
     },
   };
 }
