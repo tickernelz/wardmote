@@ -38,10 +38,13 @@ import { openwaOwnerFacingChat, registerOpenwaGroupGateway } from "./owner-group
 import { parseOpenwaThreadId } from "./adapter.js";
 import { openwaApprovalResolveTool, openwaApprovalWithdrawTool, openwaRequestApprovalTool } from "./approvals.js";
 import { logOpenwaActivity, recordOpenwaAudit } from "./audit.js";
+import { autonomyWindowService } from "../autonomy-windows.js";
 import {
   OpenwaApprovalRequiredError,
   assertOpenwaRunMay,
+  isOpenwaConversationTreeIssue,
   openwaHeldGrantValid,
+  openwaMemberWindowRoot,
   openwaRunProfile,
   readOpenwaRunContext,
   restoreOpenwaGrant,
@@ -803,22 +806,25 @@ async function assertSendAllowed(ctx: ToolContext, target: Target, heldGrant: st
   return null;
 }
 
+async function attachmentIssueSendable(ctx: ToolContext, issueId: string): Promise<boolean> {
+  if (issueId === ctx.binding.issueId || issueId === ctx.conversation.issueId) return true;
+  const companyId = ctx.endpoint.companyId;
+  if (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: ctx.conversation.issueId, issueKey: issueId })) return true;
+  const windowRoot = ctx.profile === "full"
+    ? (await autonomyWindowService(ctx.db).findCovering(companyId, ctx.conversation.issueId))?.rootIssueId ?? null
+    : await openwaMemberWindowRoot(ctx.db, ctx.run);
+  return windowRoot !== null && (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: windowRoot, issueKey: issueId }));
+}
+
 async function attachmentBase64(ctx: ToolContext, attachmentId: string, storage: StorageService | undefined) {
-  const issueIds = [...new Set([ctx.binding.issueId, ctx.conversation.issueId])];
   const [row] = await ctx.db
-    .select({ asset: assets })
+    .select({ asset: assets, issueId: issueAttachments.issueId })
     .from(issueAttachments)
     .innerJoin(assets, and(eq(assets.id, issueAttachments.assetId), eq(assets.companyId, ctx.endpoint.companyId)))
-    .where(
-      and(
-        eq(issueAttachments.id, attachmentId),
-        eq(issueAttachments.companyId, ctx.endpoint.companyId),
-        inArray(issueAttachments.issueId, issueIds),
-      ),
-    )
+    .where(and(eq(issueAttachments.id, attachmentId), eq(issueAttachments.companyId, ctx.endpoint.companyId)))
     .limit(1);
-  if (!row || row.asset.byteSize > getMaxAttachmentBytes())
-    throw new OpenwaToolError(422, "attachment_unavailable", "Media must be an attachment of this task within the attachment size limit");
+  if (!row || row.asset.byteSize > getMaxAttachmentBytes() || !(await attachmentIssueSendable(ctx, row.issueId)))
+    throw new OpenwaToolError(422, "attachment_unavailable", "Media must be an attachment of this chat's task tree, or of a live autonomy window's tree, within the attachment size limit");
   const stored = await (storage ?? getStorageService()).getObject(ctx.endpoint.companyId, row.asset.objectKey);
   const chunks: Buffer[] = [];
   let total = 0;
