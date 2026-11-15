@@ -7132,6 +7132,12 @@ describeEmbeddedPostgres("tool access service", () => {
     expect(activity.lifecycleEvents.map((event) => event.type)).toEqual([
       "app_paused",
     ]);
+
+    const tooMany = await request(app).get(`/api/tool-connections/${connection.id}/activity?limit=101`);
+    const fullPage = await request(app).get(`/api/tool-connections/${connection.id}/activity?limit=100`);
+    expect(tooMany.status).toBe(400);
+    expect(fullPage.status).toBe(200);
+    expect(fullPage.body.lifecycleEvents.map((event: { type: string }) => event.type)).toEqual(["app_paused"]);
   });
 
   it("preserves all active personal OAuth declarations through pause, resume, and metadata edits", async () => {

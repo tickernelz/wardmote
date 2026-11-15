@@ -18093,7 +18093,6 @@ export function toolAccessService(
       limit = 20,
     ): Promise<ToolConnectionActivityResponse> => {
       const connection = await getConnectionRow(connectionId, companyId);
-      const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
       const rows = await db
         .select()
         .from(toolCallEvents)
@@ -18104,7 +18103,7 @@ export function toolAccessService(
           ),
         )
         .orderBy(desc(toolCallEvents.createdAt))
-        .limit(safeLimit);
+        .limit(limit);
       const events = rows.map(toToolCallEvent);
 
       const issueIds = [
@@ -18216,7 +18215,7 @@ export function toolAccessService(
       const lifecycleEvents = await listConnectionLifecycleEvents(db, {
         companyId: connection.companyId,
         connectionIds: [connection.id],
-        limit: safeLimit,
+        limit,
       });
 
       return {

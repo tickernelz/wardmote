@@ -465,8 +465,12 @@ const BUILTIN_LOCAL_STDIO_RUNTIME_TEMPLATES: Record<
 };
 
 function requestedLimit(value: unknown, fallback: number): number {
-  const requested = Math.floor(Number(value ?? fallback));
-  return requested >= 1 ? requested : fallback;
+  if (value === undefined || value === null) return fallback;
+  const requested = Number(value);
+  if (!Number.isSafeInteger(requested) || requested < 1) {
+    throw new ToolGatewayHttpError(400, "Parameter limit must be a positive integer", "invalid_parameters");
+  }
+  return requested;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

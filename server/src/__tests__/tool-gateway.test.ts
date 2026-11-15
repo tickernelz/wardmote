@@ -1429,6 +1429,11 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
     });
 
     expect((result.result as { data: { issues: unknown[] } }).data.issues).toHaveLength(61);
+    await expect(gateway.executeTool({
+      sessionToken: session.token,
+      tool: "wardmote-self:list_my_issues",
+      parameters: { limit: 1e19 },
+    })).rejects.toMatchObject({ status: 400, reasonCode: "invalid_parameters" });
   });
 
   it("filters discovery, executes a remote HTTP fixture, and audits run and issue links", async () => {
