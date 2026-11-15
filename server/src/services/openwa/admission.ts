@@ -20,6 +20,7 @@ import { openwaGroupAwaitsCardAnswer } from "./card-routing.js";
 import type { OpenwaGatewayClient } from "./gateway.js";
 import type { OpenwaIngressHooks } from "./ingress.js";
 import { openwaChatKey, type OpenwaOutboundRegistry } from "./outbound.js";
+import { openwaGroupParticipantKeys, openwaOnlyOwnersAndBot, openwaRecordOwnerGroupStatus } from "./owner-group.js";
 import {
   classifyOpenwaEvent,
   detectApprovalReply,
@@ -643,7 +644,13 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
       available: true,
       label,
     });
-    return { label, participantCount: metadata.participantCount, ownerPresent };
+    const ownerOnly = openwaOnlyOwnersAndBot(
+      snapshot.agentDigits,
+      (jid) => snapshot.ownerByJid.get(jid)?.ownerId ?? null,
+      openwaGroupParticipantKeys(group.participants ?? []),
+      group.participants?.length ?? null,
+    );
+    return { label, participantCount: metadata.participantCount, ownerPresent, ownerOnly, providerResourceId };
   }
 
   async function quotedFromAgent(snapshot: OpenwaPolicySnapshot, event: OpenwaInboundEvent): Promise<boolean> {
@@ -732,12 +739,22 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
     await runtime.admit({ threadId, message, trigger: triggerFor(event.chatKind, true), decoration });
   }
 
-  async function onInbound(runtime: OpenwaAdmissionRuntime, event: OpenwaInboundEvent, ctx: OpenwaInboundContext): Promise<void> {
+  /** Gives a LID sender without a phone the phone of the owner holding that LID, else the gateway's LID lookup, so it reaches its own principal. */
+  async function withLidSenderPhone(runtime: OpenwaAdmissionRuntime, snapshot: OpenwaPolicySnapshot, event: OpenwaInboundEvent): Promise<OpenwaInboundEvent> {
+    if (event.fromMe || event.senderPhone) return event;
+    const lid = event.senderJid.trim().toLowerCase();
+    if (!lid.endsWith("@lid")) return event;
+    const digits = snapshot.ownerByJid.get(lid)?.digits || (await lidPhone(runtime, snapshot, lid));
+    return digits ? { ...event, senderPhone: digits } : event;
+  }
+
+  async function onInbound(runtime: OpenwaAdmissionRuntime, inbound: OpenwaInboundEvent, ctx: OpenwaInboundContext): Promise<void> {
     const snapshot = await snapshotFor(runtime);
     if (!snapshot) {
       stats.discarded++;
       return;
     }
+    const event = await withLidSenderPhone(runtime, snapshot, inbound);
     const approvalCandidate = detectApprovalReply(event, snapshot);
     if (
       (approvalCandidate && (await admitApprovalReply(runtime, snapshot, event, approvalCandidate))) ||
@@ -947,6 +964,17 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
     if (!gateway) return;
     const discovered = await upsertGroup(runtime, snapshot, gateway, chatKey).catch(() => null);
     if (!discovered) return;
+    const access = openwaChatSettings(snapshot, chatKey).ownerGroupAccess ?? "auto";
+    await openwaRecordOwnerGroupStatus(
+      db,
+      { companyId: runtime.companyId, endpointId: runtime.endpointId, providerResourceId: discovered.providerResourceId, chatKey },
+      {
+        ownerOnly: access === "auto" && discovered.ownerOnly,
+        reason: access === "off" ? "disabled" : discovered.ownerOnly ? "owner_only" : "non_owner",
+        participantCount: discovered.participantCount,
+      },
+      { source: "group_event" },
+    );
     if (!added) return;
     const active = openwaGroupEnabled(snapshot.policy, openwaChatSettings(snapshot, chatKey), discovered.ownerPresent);
     await audit(snapshot, {

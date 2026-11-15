@@ -420,6 +420,9 @@ export const openwaEndpointPolicySchema = z
 
 export const openwaTriggerOverridesSchema = openwaTriggerRulesInputSchema.omit({ burstWindowSeconds: true });
 
+export const OPENWA_OWNER_GROUP_ACCESS = ["auto", "off"] as const;
+export const openwaOwnerGroupAccessSchema = z.enum(OPENWA_OWNER_GROUP_ACCESS);
+
 export const openwaGroupChatKeySchema = z
   .string()
   .trim()
@@ -434,6 +437,7 @@ export const openwaChatSettingsSchema = z
     replyPolicy: openwaReplyPolicySchema.optional(),
     note: multilineTextSchema.pipe(z.string().trim().max(OPENWA_CHAT_NOTE_MAX_LENGTH)).optional(),
     ownerReportChatKey: openwaGroupChatKeySchema.nullable().optional(),
+    ownerGroupAccess: openwaOwnerGroupAccessSchema.optional(),
   })
   .strict();
 
