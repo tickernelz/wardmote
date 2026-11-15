@@ -368,12 +368,15 @@ export function ChatEndpointDetail() {
                 )
               }
             >
-              Continue setup
+              {endpoint.status === "verifying" ? "Finish setup" : "Continue setup"}
             </Button>
           ) : null}
-          {["paused", "attention", "revoked"].includes(endpoint.status) && <StatusBadge status={endpoint.status} />}
+          {["paused", "attention", "revoked", "verifying"].includes(endpoint.status) && <StatusBadge status={endpoint.status} />}
         </div>
       </header>
+      {setupIncomplete && endpoint.status === "verifying" && endpoint.healthMessage && (
+        <p role="status" className="text-sm text-ink-3">{endpoint.healthMessage}</p>
+      )}
       {endpoint.provider === "github" && <div hidden={activeTab !== "settings" && activeTab !== "access"}>
         <GitHubBotManagement key={endpoint.id} endpoint={endpoint} view={activeTab === "access" ? "access" : "settings"} />
       </div>}

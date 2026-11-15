@@ -12,6 +12,7 @@ import {
   agentWakeupRequests,
   authUsers,
   chatActions,
+  chatAuditEntries,
   chatDeliveries,
   chatEndpoints,
   companies,
@@ -244,6 +245,24 @@ describe("OpenWA activation through the owner test DM (embedded Postgres + fake 
       .where(and(eq(chatActions.deliveryId, member.delivery.id), eq(chatActions.kind, "inbound_wakeup")));
     expect(memberWake).toEqual([]);
     expect(t.wakeup).not.toHaveBeenCalled();
+    const memberAudit = await db
+      .select({ kind: chatAuditEntries.kind, metadata: chatAuditEntries.metadata })
+      .from(chatAuditEntries)
+      .where(and(eq(chatAuditEntries.endpointId, t.endpointId), eq(chatAuditEntries.kind, "trigger_filtered")));
+    expect(memberAudit).toEqual([
+      expect.objectContaining({
+        kind: "trigger_filtered",
+        metadata: expect.objectContaining({
+          reason: "Only an endpoint owner can send the OpenWA setup test message",
+          endpointStatus: "verifying",
+          principalRole: "allowed",
+          deliveryId: member.delivery.id,
+        }),
+      }),
+    ]);
+    expect((await endpointRow(t)).healthMessage).toBe(
+      "Setup is waiting for an owner test message; messages from other senders are dropped until setup is finished",
+    );
     const afterMember = await request(t.app).post("/api/chat-endpoints/" + t.endpointId + "/test").send({});
     expect(afterMember.status).toBe(409);
     expect((await endpointRow(t)).status).toBe("verifying");
@@ -399,6 +418,33 @@ describe("OpenWA activation through the owner test DM (embedded Postgres + fake 
       .from(chatActions)
       .where(and(eq(chatActions.deliveryId, member.delivery.id), eq(chatActions.kind, "inbound_wakeup")));
     expect(memberWake).toHaveLength(1);
+  }, 120_000);
+
+  it("returns an endpoint in session-health attention to active when the wizard reconnects the same session and key, so members are admitted again", async () => {
+    const t = await setup();
+    const { activatedAt } = await activeEndpoint(t);
+    await t.service.openwa.addSenderRule(t.endpointId, { list: "allow", e164: "+" + MEMBER_PHONE }, t.userId);
+    await db
+      .update(chatEndpoints)
+      .set({ status: "attention", healthMessage: "OpenWA session: session is disconnected", lastError: "OpenWA session: session is disconnected" })
+      .where(eq(chatEndpoints.id, t.endpointId));
+
+    const reconnected = await request(t.app)
+      .post("/api/chat-endpoints/" + t.endpointId + "/setup")
+      .send({
+        action: "reconnect",
+        openwa: { baseUrl: t.gateway.baseUrl, sessionId: SESSION_ID, numberMode: "agent_number", attestations: { pacing: true, soleClient: true } },
+      });
+    expect(reconnected.status).toBe(200);
+    expect(reconnected.body).toMatchObject({ status: "active", setup: { step: "complete" } });
+    const after = await endpointRow(t);
+    expect(after).toMatchObject({ status: "active", healthMessage: "Connected", lastError: null });
+    expect(after.setup).toMatchObject({ step: "complete", activatedAt });
+
+    await t.service.reconcileProviderRuntimes();
+    await t.gateway.waitForFirstCatchUp();
+    const member = await settled(t, { chatId: jid(MEMBER_PHONE), body: "sudah tersambung lagi?" });
+    expect(member.delivery).toMatchObject({ state: "processed", principalRole: "allowed" });
   }, 120_000);
 
   it("still sends an active endpoint back to verifying when a reconnect changes the operator key, and refuses a session change", async () => {

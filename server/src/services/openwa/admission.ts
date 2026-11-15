@@ -156,6 +156,46 @@ export async function recordOpenwaTriggerAdmitted(
   });
 }
 
+/** Layer-2 trigger_filtered entry for an admitted trigger that delivery processing dropped; written in the transaction that marks its delivery filtered. */
+export async function recordOpenwaTriggerFiltered(
+  database: DbOrTransaction,
+  input: {
+    companyId: string;
+    endpointId: string;
+    deliveryId: string;
+    decoration: OpenwaAdmissionDecoration;
+    reason: string;
+    endpointStatus: string;
+    text: string | null;
+    retentionDays: number;
+  },
+): Promise<void> {
+  const { decoration } = input;
+  const occurredAt = new Date();
+  await database.insert(chatAuditEntries).values({
+    companyId: input.companyId,
+    endpointId: input.endpointId,
+    chatKey: decoration.chatKey,
+    kind: "trigger_filtered",
+    actorKind: "chat_principal",
+    actorRef: openwaPrincipalExternalId(decoration.sender.jid, decoration.sender.phone),
+    metadata: {
+      reason: input.reason,
+      endpointStatus: input.endpointStatus,
+      event: decoration.event,
+      triggerClass: decoration.triggerClass,
+      principalRole: decoration.principalRole,
+      rules: decoration.rules,
+      chatKind: decoration.chatKind,
+      waMessageId: decoration.waMessageId,
+      deliveryId: input.deliveryId,
+      senderMasked: decoration.sender.phone ? maskOpenwaPhoneNumber(decoration.sender.phone) : null,
+    },
+    ...auditContent(input.text, input.retentionDays, occurredAt),
+    occurredAt,
+  });
+}
+
 export interface OpenwaWakePayload {
   event: OpenwaWakeEvent;
   triggerClass: OpenwaTriggerClass;
