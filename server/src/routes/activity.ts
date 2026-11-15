@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Db } from "@tickernelz/wardmote-db";
 import { normalizeIssueIdentifier } from "@tickernelz/wardmote-shared";
 import { validate } from "../middleware/validate.js";
-import { activityService, normalizeActivityLimit } from "../services/activity.js";
+import { activityService } from "../services/activity.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
 import { accessService, heartbeatService, issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
@@ -104,6 +104,11 @@ const createActivitySchema = z.object({
 });
 
 const agentActionAuditActorScopeSchema = z.enum(["agents", "all"]);
+
+const companyActivityQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  before: z.string().uuid().optional(),
+});
 
 const issueActivityPageQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
@@ -233,13 +238,16 @@ export function activityRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     if (!(await assertCompanyScopeReadAllowed(req, res, companyId))) return;
+    const page = companyActivityQuerySchema.safeParse(req.query);
+    if (!page.success) throw badRequest("Invalid activity query", page.error.issues);
 
     const filters = {
       companyId,
       agentId: req.query.agentId as string | undefined,
       entityType: req.query.entityType as string | undefined,
       entityId: req.query.entityId as string | undefined,
-      limit: normalizeActivityLimit(Number(req.query.limit)),
+      limit: page.data.limit,
+      beforeId: page.data.before,
       readCondition: await issueReadSqlCondition(db, req.actor),
     };
     const result = await svc.list(filters);

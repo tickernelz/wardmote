@@ -483,6 +483,24 @@ describePg("decisionService", () => {
     })]));
   });
 
+  it("pages decisions through the before cursor without skipping rows that share a timestamp", async () => {
+    const created = await Promise.all(["page-1", "page-2", "page-3"].map((key) => createCommentDecision("lenient", { idempotencyKey: key })));
+    const ids = created.map((decision) => decision.id);
+    await db.update(decisions).set({ createdAt: new Date("2030-01-01T00:00:00.000Z") }).where(inArray(decisions.id, ids));
+
+    const seen: string[] = [];
+    let before: string | undefined;
+    for (let page = 0; page < 500; page += 1) {
+      const rows = await service().list(companyId, { limit: 1, before });
+      if (rows.length === 0) break;
+      seen.push(rows[0]!.id);
+      before = rows[0]!.id;
+    }
+
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.filter((id) => ids.includes(id))).toEqual([...ids].sort().reverse());
+  });
+
   it("bounds the open-decision slice of the attention feed", async () => {
     const older = await createCommentDecision("lenient", { idempotencyKey: "attention-older" });
     const newer = await createCommentDecision("lenient", { idempotencyKey: "attention-newer" });

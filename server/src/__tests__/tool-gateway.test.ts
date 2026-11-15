@@ -1407,6 +1407,35 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
     });
   });
 
+  it("returns as many of the agent's issues as the caller's limit asks for", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { project, run } = await createIssueAndRun(db, company.id, agent.id);
+    await db.insert(issues).values(Array.from({ length: 60 }, (_, index) => ({
+      companyId: company.id,
+      projectId: project.id,
+      title: `Gateway backlog ${index}`,
+      status: "todo",
+      assigneeAgentId: agent.id,
+    })));
+    await allowToolsForAgent(db, company.id, agent.id, ["wardmote-self:list_my_issues"]);
+    const gateway = createTestToolGatewayService(db, { runtimeSupervisor: { idleTtlMs: 25 } });
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+
+    const result = await gateway.executeTool({
+      sessionToken: session.token,
+      tool: "wardmote-self:list_my_issues",
+      parameters: { limit: 100 },
+    });
+
+    expect((result.result as { data: { issues: unknown[] } }).data.issues).toHaveLength(61);
+    await expect(gateway.executeTool({
+      sessionToken: session.token,
+      tool: "wardmote-self:list_my_issues",
+      parameters: { limit: 1e19 },
+    })).rejects.toMatchObject({ status: 400, reasonCode: "invalid_parameters" });
+  });
+
   it("filters discovery, executes a remote HTTP fixture, and audits run and issue links", async () => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);

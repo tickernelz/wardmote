@@ -29,6 +29,7 @@ export interface ActivityFilters {
   entityType?: string;
   entityId?: string;
   limit?: number;
+  beforeId?: string;
   readCondition?: SQL<boolean>;
 }
 
@@ -38,12 +39,6 @@ export interface IssueActivityPage {
 }
 
 const DEFAULT_ACTIVITY_LIMIT = 100;
-const MAX_ACTIVITY_LIMIT = 500;
-
-export function normalizeActivityLimit(limit: number | undefined) {
-  if (!Number.isFinite(limit)) return DEFAULT_ACTIVITY_LIMIT;
-  return Math.max(1, Math.min(MAX_ACTIVITY_LIMIT, Math.floor(limit ?? DEFAULT_ACTIVITY_LIMIT)));
-}
 
 function issueRunIdCondition(companyId: string, issueId: string) {
   return sql<boolean>`${heartbeatRuns.id} in (
@@ -439,7 +434,7 @@ export function activityService(db: Db) {
   return {
     list: (filters: ActivityFilters) => {
       const conditions = [eq(activityLog.companyId, filters.companyId)];
-      const limit = normalizeActivityLimit(filters.limit);
+      const limit = filters.limit ?? DEFAULT_ACTIVITY_LIMIT;
 
       if (filters.agentId) {
         conditions.push(eq(activityLog.agentId, filters.agentId));
@@ -449,6 +444,9 @@ export function activityService(db: Db) {
       }
       if (filters.entityId) {
         conditions.push(eq(activityLog.entityId, filters.entityId));
+      }
+      if (filters.beforeId) {
+        conditions.push(sql<boolean>`(${activityLog.createdAt}, ${activityLog.id}) < (select cursor.created_at, cursor.id from ${activityLog} cursor where cursor.id = ${filters.beforeId} and cursor.company_id = ${filters.companyId})`);
       }
 
       return db
@@ -470,7 +468,7 @@ export function activityService(db: Db) {
             ),
           ),
         )
-        .orderBy(desc(activityLog.createdAt))
+        .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
         .limit(limit)
         .then((rows) => rows.map((r) => r.activityLog));
     },

@@ -252,6 +252,19 @@ describeEmbeddedPostgres("heartbeat run privacy routes", { concurrent: false }, 
     return app;
   }
 
+  it("rejects run history limits outside 1..1000 instead of cutting them", async () => {
+    const fixture = await seedFixture();
+    const app = createApp(fixture.companyId, fixture.otherAgentId);
+    const base = `/api/companies/${fixture.companyId}/heartbeat-runs`;
+
+    const statuses = [];
+    for (const limit of ["1001", "0", "lots", "1000"]) {
+      statuses.push((await request(app).get(`${base}?limit=${limit}`)).status);
+    }
+
+    expect(statuses).toEqual([400, 400, 400, 200]);
+  });
+
   it("returns 404 for direct private-run content and metadata-only list stubs to a non-member", async () => {
     const fixture = await seedFixture();
     const app = createApp(fixture.companyId, fixture.otherAgentId);

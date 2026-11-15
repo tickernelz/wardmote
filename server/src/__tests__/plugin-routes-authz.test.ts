@@ -278,6 +278,23 @@ describe("plugin install and upgrade authz", () => {
     expect(mockLifecycle.disable).not.toHaveBeenCalled();
   }, 20_000);
 
+  it("rejects plugin log limits above the page ceiling and malformed cursors instead of cutting them", async () => {
+    readyPlugin();
+    const limit = vi.fn(() => Promise.resolve([]));
+    const select = vi.fn(() => ({ from: () => ({ where: () => ({ orderBy: () => ({ limit }) }) }) }));
+    const { app } = await createApp(boardActor({ isInstanceAdmin: true }), {}, { db: { select } });
+
+    const tooMany = await request(app).get(`/api/plugins/${pluginId}/logs?limit=501`);
+    const notANumber = await request(app).get(`/api/plugins/${pluginId}/logs?limit=lots`);
+    const badCursor = await request(app).get(`/api/plugins/${pluginId}/logs?before=not-an-id`);
+    expect([tooMany.status, notANumber.status, badCursor.status]).toEqual([400, 400, 400]);
+    expect(select).not.toHaveBeenCalled();
+
+    const page = await request(app).get(`/api/plugins/${pluginId}/logs?limit=500&before=${secretId}`);
+    expect(page.status).toBe(200);
+    expect(limit).toHaveBeenCalledWith(500);
+  });
+
   it("resolves plugin keys without probing the UUID id column for core plugin actions", async () => {
     const pluginKey = "wardmoteqa.hello-plugin";
     const plugin = {

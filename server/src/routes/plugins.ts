@@ -25,7 +25,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { Db } from "@tickernelz/wardmote-db";
 import {
   agents,
@@ -2120,11 +2120,23 @@ export function pluginRoutes(
       return;
     }
 
-    const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 25, 1), 500);
+    const limit = req.query.limit === undefined ? 25 : Number(req.query.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      res.status(400).json({ error: "limit must be a number between 1 and 500; page with before=<oldest id>" });
+      return;
+    }
     const level = req.query.level as string | undefined;
     const since = req.query.since as string | undefined;
+    const before = typeof req.query.before === "string" ? req.query.before : undefined;
+    if (before !== undefined && !UUID_REGEX.test(before)) {
+      res.status(400).json({ error: "before must be a plugin log entry id" });
+      return;
+    }
 
     const conditions = [eq(pluginLogs.pluginId, plugin.id)];
+    if (before) {
+      conditions.push(sql<boolean>`(${pluginLogs.createdAt}, ${pluginLogs.id}) < (select cursor.created_at, cursor.id from ${pluginLogs} cursor where cursor.id = ${before} and cursor.plugin_id = ${plugin.id})`);
+    }
     if (level) {
       conditions.push(eq(pluginLogs.level, level));
     }
@@ -2139,7 +2151,7 @@ export function pluginRoutes(
       .select()
       .from(pluginLogs)
       .where(and(...conditions))
-      .orderBy(desc(pluginLogs.createdAt))
+      .orderBy(desc(pluginLogs.createdAt), desc(pluginLogs.id))
       .limit(limit);
 
     res.json(rows);

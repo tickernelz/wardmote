@@ -49,7 +49,7 @@ const channelLabels: Record<ChatOwnerApprovalChannel, string> = { whatsapp: "Wha
 
 const OWNER_ONLY_MESSAGE = "Only owners of this WhatsApp connection can approve or reject requests. Ask an owner, or add and link your number under Settings → Owners.";
 const NETWORK_MESSAGE = "Couldn't reach Wardmote. Check your connection and try again.";
-const REASON_MAX_LENGTH = 2000;
+const REASON_MAX_LENGTH = 20_000;
 
 function alreadyResolvedMessage(error: ApiError): string {
   const body = error.body as { details?: { requestStatus?: unknown } } | null;

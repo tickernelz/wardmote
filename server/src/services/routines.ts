@@ -3103,8 +3103,7 @@ export function routineService(
       });
     },
 
-    listRuns: async (routineId: string, limit = 50): Promise<RoutineRunSummary[]> => {
-      const cappedLimit = Math.max(1, Math.min(limit, 200));
+    listRuns: async (routineId: string, limit = 50, beforeId?: string): Promise<RoutineRunSummary[]> => {
       const rows = await db
         .select({
           id: routineRuns.id,
@@ -3135,9 +3134,14 @@ export function routineService(
         .from(routineRuns)
         .leftJoin(routineTriggers, eq(routineRuns.triggerId, routineTriggers.id))
         .leftJoin(issues, eq(routineRuns.linkedIssueId, issues.id))
-        .where(eq(routineRuns.routineId, routineId))
-        .orderBy(desc(routineRuns.createdAt))
-        .limit(cappedLimit);
+        .where(and(
+          eq(routineRuns.routineId, routineId),
+          beforeId
+            ? sql<boolean>`(${routineRuns.createdAt}, ${routineRuns.id}) < (select cursor.created_at, cursor.id from ${routineRuns} cursor where cursor.id = ${beforeId} and cursor.routine_id = ${routineId})`
+            : undefined,
+        ))
+        .orderBy(desc(routineRuns.createdAt), desc(routineRuns.id))
+        .limit(limit);
 
       return rows.map((row) => ({
         id: row.id,

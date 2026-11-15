@@ -464,6 +464,15 @@ const BUILTIN_LOCAL_STDIO_RUNTIME_TEMPLATES: Record<
   },
 };
 
+function requestedLimit(value: unknown, fallback: number): number {
+  if (value === undefined || value === null) return fallback;
+  const requested = Number(value);
+  if (!Number.isSafeInteger(requested) || requested < 1) {
+    throw new ToolGatewayHttpError(400, "Parameter limit must be a positive integer", "invalid_parameters");
+  }
+  return requested;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -2962,7 +2971,7 @@ export function createToolGatewayService(
     const params = asRecord(parameters) ?? {};
     const query =
       typeof params.query === "string" ? params.query.trim().toLowerCase() : "";
-    const limit = Math.max(1, Math.min(50, Number(params.limit ?? 10) || 10));
+    const limit = requestedLimit(params.limit, 10);
     const tools = (await searchableOnDemandTools(session))
       .filter((tool) => {
         if (!query) return true;
@@ -3179,7 +3188,7 @@ export function createToolGatewayService(
           "agent_context_required",
         );
       }
-      const limit = Math.max(1, Math.min(50, Number(params.limit ?? 10) || 10));
+      const limit = requestedLimit(params.limit, 10);
       const rows = await db
         .select({
           id: issues.id,

@@ -147,7 +147,7 @@ export function decisionRoutes(db: Db, options: DecisionServiceOptions) {
   });
   router.get("/companies/:companyId/decisions", async (req, res) => {
     const companyId = req.params.companyId as string; assertBoardOrAgentAuthority(req, "work:read", companyId);
-    const query = z.object({ status: z.enum(["open", "decided", "expired", "cancelled"]).optional(), bundleId: z.string().guid().optional(), targetIssueId: z.string().guid().optional(), originAgentId: z.string().guid().optional(), limit: z.coerce.number().int().positive().max(100).optional() }).safeParse(req.query);
+    const query = z.object({ status: z.enum(["open", "decided", "expired", "cancelled"]).optional(), bundleId: z.string().guid().optional(), targetIssueId: z.string().guid().optional(), originAgentId: z.string().guid().optional(), limit: z.coerce.number().int().positive().max(100).optional(), before: z.string().guid().optional() }).safeParse(req.query);
     if (!query.success) { res.status(400).json({ error: "Invalid decision filters", details: query.error.flatten() }); return; }
     res.json(await svc.list(companyId, query.data));
   });

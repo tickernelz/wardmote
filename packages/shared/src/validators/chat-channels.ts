@@ -504,7 +504,7 @@ export const updateOpenwaEndpointPolicySchema = z.looseObject({ inflightMode: ch
 export const resolveOpenwaApprovalSchema = z
   .object({
     decision: z.enum(["approve", "reject"]),
-    reason: z.string().trim().min(1).max(2000).optional(),
+    reason: z.string().trim().min(1).max(20_000).optional(),
   })
   .strict();
 

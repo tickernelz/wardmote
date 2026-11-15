@@ -2,6 +2,7 @@ import { isCrossSiteOAuthCallbackNavigation, oauthCallbackInterstitialHtml } fro
 import { composioAppSetupSchema, composioAppsRefreshSchema, composioAppsSyncSchema, composioAppAccountSchema } from "@tickernelz/wardmote-shared";
 import { aggregatorAppsSyncSchema, aggregatorAppsRefreshSchema, arcadeDiscoverySetupSchema } from "@tickernelz/wardmote-shared/aggregator-apps";
 import { Router, type Request, type Response } from "express";
+import { z } from "zod";
 import type { Db } from "@tickernelz/wardmote-db";
 import { agents, companies, connectionGrants, issueThreadInteractions, toolConnectionInstalls } from "@tickernelz/wardmote-db";
 import { and, eq, or } from "drizzle-orm";
@@ -70,6 +71,10 @@ import { connectionIntentService } from "../services/connection-intents.js";
 import { redactRemoteUrlCredential } from "../services/remote-url-credentials.js";
 import { connectionIntentDeliveryService } from "../services/connection-intent-delivery.js";
 import type { heartbeatService } from "../services/heartbeat.js";
+
+const toolConnectionActivityQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 
 const COMPANY_INSTALL_DENIAL_REASON =
   "Only someone who can configure this connection can choose this.";
@@ -1963,9 +1968,9 @@ function connectorEnrollmentPrincipal(req: Request): string {
     assertBoard(req);
     const existing = await getAccessibleResource(req, res, svc.getConnection(req.params.connectionId as string), "Tool connection not found");
     if (!existing) return;
-    const limitRaw = Number(req.query.limit ?? 20);
-    const limit = Number.isFinite(limitRaw) ? limitRaw : 20;
-    res.json(await svc.listConnectionActivity(existing.id, existing.companyId, limit));
+    const page = toolConnectionActivityQuerySchema.safeParse(req.query);
+    if (!page.success) throw badRequest("Invalid tool connection activity query", page.error.issues);
+    res.json(await svc.listConnectionActivity(existing.id, existing.companyId, page.data.limit));
   });
 
   router.get("/companies/:companyId/tools/profiles", async (req, res) => {
