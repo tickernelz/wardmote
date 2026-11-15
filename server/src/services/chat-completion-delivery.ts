@@ -18,7 +18,6 @@ export const OPENWA_COMPLETION_STATUSES = ["done", "cancelled", "blocked"] as co
 export const OPENWA_COMPLETION_COALESCE_MS = 60_000;
 const OPENWA_TITLE_LIMIT = 200;
 const OPENWA_COMMENT_LIMIT = 600;
-const OPENWA_MAX_BLOCKERS = 10;
 function ids(run: Run): string[] {
   const value = run.contextSnapshot?.chatCompletionDeliveryIds;
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
@@ -181,6 +180,12 @@ function clipText(value: string, max: number) {
   return text.length > max ? text.slice(0, max - 1) + "\u2026" : text;
 }
 
+function clippedField<K extends string>(key: K, value: string, max: number) {
+  const text = clipText(value, max);
+  return { [key]: text, ...(text.length < value.replace(/\s+/g, " ").trim().length ? { [key + "Truncated"]: true, [key + "Chars"]: value.length } : {}) } as
+    Record<K, string> & Partial<Record<`${K}Truncated`, true> & Record<`${K}Chars`, number>>;
+}
+
 async function assigneeName(tx: Connection, task: Issue) {
   if (task.assigneeAgentId) {
     const [agent] = await tx.select({ name: agents.name }).from(agents).where(and(eq(agents.id, task.assigneeAgentId), eq(agents.companyId, task.companyId)));
@@ -195,7 +200,7 @@ async function assigneeName(tx: Connection, task: Issue) {
 
 /** Per-task facts for an OpenWA completion report; comment and title text is worker-authored data. */
 export async function openwaTaskReport(tx: Connection, task: Issue) {
-  const [comment] = await tx.select({ body: issueComments.body, createdAt: issueComments.createdAt }).from(issueComments)
+  const [comment] = await tx.select({ id: issueComments.id, body: issueComments.body, createdAt: issueComments.createdAt }).from(issueComments)
     .where(and(eq(issueComments.companyId, task.companyId), eq(issueComments.issueId, task.id),
       task.assigneeAgentId ? eq(issueComments.authorAgentId, task.assigneeAgentId) : sql`${issueComments.authorAgentId} is not null`))
     .orderBy(desc(issueComments.createdAt)).limit(1);
@@ -203,17 +208,17 @@ export async function openwaTaskReport(tx: Connection, task: Issue) {
     ? await tx.select({ identifier: issues.identifier, title: issues.title, status: issues.status }).from(issueRelations)
       .innerJoin(issues, and(eq(issues.id, issueRelations.issueId), eq(issues.companyId, issueRelations.companyId)))
       .where(and(eq(issueRelations.companyId, task.companyId), eq(issueRelations.relatedIssueId, task.id), eq(issueRelations.type, "blocks")))
-      .orderBy(asc(issues.issueNumber)).limit(OPENWA_MAX_BLOCKERS)
+      .orderBy(asc(issues.issueNumber))
     : [];
   const reference = task.identifier ?? task.id;
   return {
     identifier: task.identifier,
-    title: clipText(task.title, OPENWA_TITLE_LIMIT),
+    ...clippedField("title", task.title, OPENWA_TITLE_LIMIT),
     status: task.status,
     assignee: await assigneeName(tx, task),
     url: publicChatTaskUrl(reference) ?? `/issues/${reference}`,
     at: (task.status === "done" ? task.completedAt : task.status === "cancelled" ? task.cancelledAt : task.blockedTransitionAt)?.toISOString() ?? null,
-    latestComment: comment ? clipText(comment.body, OPENWA_COMMENT_LIMIT) : null,
+    ...(comment ? { latestCommentId: comment.id, ...clippedField("latestComment", comment.body, OPENWA_COMMENT_LIMIT) } : { latestComment: null }),
     ...(task.status === "blocked"
       ? { blockedBy: blockers.map(blocker => ({ identifier: blocker.identifier, title: clipText(blocker.title, OPENWA_TITLE_LIMIT), status: blocker.status })),
         unblock: task.unblockDescriptor ?? null }

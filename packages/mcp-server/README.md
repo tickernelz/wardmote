@@ -76,6 +76,15 @@ The surface is bounded by the OpenAPI registry - 441 tools for an agent, 716 for
 
 `readOnlyHint`, `destructiveHint` and `idempotentHint` are **not** in the `tools/list` payload by default: they cost 30 KB of a 190 KB listing and the only host of this server (OMP) cannot consume them, because its tool type carries no annotations field and its `tools/list` decoder keeps only `name`, `description` and `inputSchema`. The tool definitions still hold the annotations internally. A caller that needs them can pass `annotations: true` to `wardmoteToolCatalog` or set `WARDMOTE_MCP_LIST_ANNOTATIONS=1`; the two listing shapes are memoized separately, so one caller's choice never changes another's.
 
+### Size and count limits
+
+The caller picks the size of what it reads; nothing on the agent paths is cut without a marker.
+
+- `wardmoteListIssues` takes any positive `limit` with `offset` paging. Its `view: "compact"` cuts each description at 1200 characters and sets `descriptionTruncated`; `wardmoteGetIssue` returns the whole row.
+- Issue comment lists take any positive `limit`; chat endpoint audit and activity pages take any positive `limit` and follow `nextCursor`. Audit entries store their content whole, so `config_changed` entries carry the full before and after values.
+- `wardmoteCreateChildIssue` has no per-parent child count cap, and task monitor `notes` have no length cap.
+- OpenWA tools (`openwa_*`) take `maxBytes`, `maxChars`, `limit` and `cursor`; `skills/openwa/SKILL.md` lists them with the fixed limits WhatsApp and the OpenWA gateway impose.
+
 ## Error contract
 
 A `tools/call` that fails is still a JSON-RPC success with a `result`, but the result carries the MCP error flag so a host cannot mistake it for data:

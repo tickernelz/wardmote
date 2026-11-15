@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   OPENWA_CHAT_ACTIVATIONS,
-  OPENWA_CHAT_NOTE_MAX_LENGTH,
   OPENWA_REPLY_POLICIES,
   type OpenwaChatActivation,
   type OpenwaChatSettings,
@@ -442,7 +441,7 @@ function ChatEditor({
           onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value }))}
         />
         <p className="text-xs text-ink-3">
-          <span className="font-mono">{draft.note.length}</span> / <span className="font-mono">{OPENWA_CHAT_NOTE_MAX_LENGTH}</span> characters
+          <span className="font-mono">{draft.note.length}</span> characters
         </p>
         <FieldMessage id="openwa-chat-note" error={fieldError(errors, "note")} />
       </div>

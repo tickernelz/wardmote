@@ -9,12 +9,11 @@ import {
 } from "@tickernelz/wardmote-shared";
 import { HttpError } from "../../errors.js";
 import type { OpenwaAgentConfigOrigin } from "./owners.js";
-import { OpenwaToolError, chatRef, fitPage, openwaToolOwners, resolveTarget, type ToolContext } from "./tools.js";
+import { OpenwaToolError, chatRef, fitPage, openwaToolOwners, resolveTarget, resultBytes, type ToolContext } from "./tools.js";
 
 type Args = Record<string, unknown>;
 type SenderList = "allow" | "deny";
 
-const RESULT_TEXT_LIMIT = 4000;
 const CHAT_SETTING_KEYS = ["activation", "triggers", "absenceSeconds", "replyPolicy", "note", "ownerReportChatKey"] as const;
 const ENDPOINT_SETTING_KEYS = ["approvals", "burstWindowSeconds", "customInstructions"] as const;
 
@@ -69,7 +68,15 @@ function toolError(error: unknown): unknown {
   return error;
 }
 
-async function view(ctx: ToolContext, chatKey: string, changed: Record<string, unknown> | null): Promise<Record<string, unknown>> {
+function senderOffset(cursor: unknown): number {
+  if (cursor === undefined) return 0;
+  const match = typeof cursor === "string" ? /^i:(\d+)$/.exec(cursor) : null;
+  if (!match) throw new OpenwaToolError(400, "invalid_cursor", "The cursor is malformed");
+  return Number(match[1]);
+}
+
+async function view(ctx: ToolContext, chatKey: string, changed: Record<string, unknown> | null, args: Args): Promise<Record<string, unknown>> {
+  const offset = senderOffset(args.cursor);
   const owners = openwaToolOwners(ctx.db);
   const [[endpoint], rules, chats] = await Promise.all([
     ctx.db
@@ -83,7 +90,6 @@ async function view(ctx: ToolContext, chatKey: string, changed: Record<string, u
   const chat = chats.find((entry) => entry.chatKey === chatKey) ?? null;
   const reportKey = chat?.settings.ownerReportChatKey ?? null;
   const reportChat = reportKey ? (chats.find((entry) => entry.chatKey === reportKey) ?? null) : null;
-  const custom = [...policy.customInstructions];
   const { reminderMinutes, maxReminders, pendingTtlHours, grantTtlHours: _grantTtlHours, ...toggles } = policy.approvals;
   const envelope = {
     ...(changed ? { changed } : {}),
@@ -100,12 +106,13 @@ async function view(ctx: ToolContext, chatKey: string, changed: Record<string, u
     approvals: toggles,
     reminders: { reminderMinutes, maxReminders, pendingTtlHours },
     burstWindowSeconds: policy.triggers.burstWindowSeconds,
-    customInstructions: custom.length > RESULT_TEXT_LIMIT ? custom.slice(0, RESULT_TEXT_LIMIT).join("") + "…" : policy.customInstructions,
-    ...(custom.length > RESULT_TEXT_LIMIT ? { customInstructionsTruncated: true } : {}),
+    customInstructions: policy.customInstructions,
+    sendersTotal: rules.length,
   };
   const senders = rules.map((rule) => ({ list: rule.list, number: maskOpenwaPhoneNumber(rule.e164), label: rule.label }));
-  const fitted = fitPage(envelope, senders);
-  return { ...envelope, senders: fitted.page, ...(fitted.truncated ? { sendersTruncated: true } : {}) };
+  const fitted = fitPage(envelope, senders.slice(offset), resultBytes(args));
+  const next = offset + fitted.page.length;
+  return { ...envelope, senders: fitted.page, ...(next < senders.length ? { truncated: true, nextCursor: "i:" + next } : {}) };
 }
 
 export async function openwaEndpointConfigTool(ctx: ToolContext, args: Args): Promise<Record<string, unknown>> {
@@ -150,5 +157,5 @@ export async function openwaEndpointConfigTool(ctx: ToolContext, args: Args): Pr
   } catch (error) {
     throw toolError(error);
   }
-  return view(ctx, target.chatKey, Object.keys(changed).length ? changed : null);
+  return view(ctx, target.chatKey, Object.keys(changed).length ? changed : null, args);
 }

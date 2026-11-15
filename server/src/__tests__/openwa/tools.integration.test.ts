@@ -996,6 +996,26 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     expect(String(live.nextCursor)).toMatch(/^l:\d+$/);
   });
 
+  it("returns caller-sized pages past the default budget and the gateway page, and full text on request", async () => {
+    const t = await setup();
+    const c = await conversation(t, MEMBER);
+    for (let index = 0; index < 150; index++) t.gateway.inbound({ chatId: MEMBER, body: index + ":" + "x".repeat(300), emit: false });
+    t.gateway.inbound({ chatId: MEMBER, body: "long:" + "y".repeat(5_000), emit: false });
+    const binding = await run(t, c, { triggerClass: "other" });
+
+    const wide = await executeOpenwaTool(db, binding, "openwa_read_chat", { limit: 151, maxBytes: 1_000_000 });
+    const messages = wide.messages as Array<{ text: string; textTruncated?: true; textChars?: number }>;
+    expect(messages).toHaveLength(151);
+    expect(wide).not.toHaveProperty("truncated");
+    expect(Buffer.byteLength(JSON.stringify(wide))).toBeGreaterThan(16_384);
+    expect(messages[0]).toMatchObject({ textTruncated: true, textChars: 5_005 });
+    expect(messages[0]!.text.length).toBeLessThan(5_005);
+
+    const full = await executeOpenwaTool(db, binding, "openwa_read_chat", { limit: 1, maxChars: 10_000 });
+    expect((full.messages as Array<{ text: string }>)[0]!.text).toBe("long:" + "y".repeat(5_000));
+    expect((full.messages as Array<Record<string, unknown>>)[0]).not.toHaveProperty("textTruncated");
+  });
+
   it("reads any visible chat in agent_number mode but only enabled chats in owner_number mode", async () => {
     const agentNumber = await setup();
     const c1 = await conversation(agentNumber, MEMBER);

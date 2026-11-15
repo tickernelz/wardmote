@@ -34,9 +34,6 @@ import { chatChannelService, type ChatChannelService } from "../../services/chat
 import { ChatSdkRuntime } from "../../services/chat-sdk-runtime.js";
 import { REDACTED_EVENT_VALUE } from "../../redaction.js";
 import {
-  OPENWA_AUDIT_ARG_LIMIT_BYTES,
-  OPENWA_AUDIT_CONTENT_LIMIT_BYTES,
-  OPENWA_AUDIT_RESULT_LIMIT_BYTES,
   expireOpenwaGrants,
   listOpenwaAudit,
   openwaAuditPurgeScheduler,
@@ -302,7 +299,8 @@ describeEmbeddedPostgres("OpenWA audit and retention", () => {
 
     expect((await request(owner).get(path).query({ cursor: "invalid" })).status).toBe(400);
     expect((await request(owner).get(path).query({ kind: "not_a_kind" })).status).toBe(400);
-    expect((await request(owner).get(path).query({ limit: "101" })).status).toBe(400);
+    expect((await request(owner).get(path).query({ limit: "0" })).status).toBe(400);
+    expect((await request(owner).get(path).query({ limit: "500" })).status).toBe(200);
     expect((await request(owner).get(path).query({ unknown: "x" })).status).toBe(400);
   });
 
@@ -365,7 +363,7 @@ describeEmbeddedPostgres("OpenWA audit and retention", () => {
     expect(await scheduler.runDue()).toEqual({ purged: 1, batches: 1, expiredGrants: 0 });
   });
 
-  it("redacts credentials and bounds content sizes", async () => {
+  it("redacts credentials and stores content whole", async () => {
     const t = await seed();
     await recordOpenwaAudit(db, {
       companyId: t.companyId, endpointId: t.endpointId, kind: "tool_called", actorKind: "agent",
@@ -382,11 +380,10 @@ describeEmbeddedPostgres("OpenWA audit and retention", () => {
     expect(serialized).not.toContain("sk-live-abcdefghijklmnopqrstuvwxyz0123456789");
     expect(row!.metadata).toMatchObject({ operation: "openwa.sendText", apiKey: REDACTED_EVENT_VALUE });
     const content = row!.content as Record<string, unknown>;
-    const bytes = (value: unknown) => Buffer.byteLength(typeof value === "string" ? value : JSON.stringify(value));
-    expect(bytes(content.args)).toBeLessThanOrEqual(OPENWA_AUDIT_ARG_LIMIT_BYTES);
-    expect(bytes(content.resultSummary)).toBeLessThanOrEqual(OPENWA_AUDIT_RESULT_LIMIT_BYTES);
-    expect(bytes(content)).toBeLessThanOrEqual(OPENWA_AUDIT_CONTENT_LIMIT_BYTES);
-    expect(String(content.resultSummary)).toContain("[truncated 5000 bytes]");
+    expect((content.args as Record<string, unknown>).blob).toBe("x".repeat(10_000));
+    expect(content.resultSummary).toBe("y".repeat(5_000));
+    expect(content.text).toBe("z".repeat(40_000));
+    expect(serialized).not.toContain("[truncated");
   });
 
   async function grantFixture(t: Fixture, input: { expiresAt: Date; scope?: "one_action" | "requester" }) {

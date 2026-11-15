@@ -41,9 +41,9 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { instanceSettingsService } from "../services/instance-settings.ts";
 import {
-  clampIssueListLimit,
+  normalizeIssueListLimit,
   deriveIssueCommentRunLogAttribution,
-  ISSUE_LIST_MAX_LIMIT,
+  ISSUE_COUNT_BATCH_SIZE,
   issueService,
   readIssueCommentRunLogText,
 } from "../services/issues.ts";
@@ -70,9 +70,9 @@ function deferred<T>() {
 
 describe("issue list limit helpers", () => {
   it("clamps untrusted issue-list limits to the server maximum", () => {
-    expect(clampIssueListLimit(0)).toBe(1);
-    expect(clampIssueListLimit(25.9)).toBe(25);
-    expect(clampIssueListLimit(ISSUE_LIST_MAX_LIMIT + 10)).toBe(ISSUE_LIST_MAX_LIMIT);
+    expect(normalizeIssueListLimit(0)).toBe(1);
+    expect(normalizeIssueListLimit(25.9)).toBe(25);
+    expect(normalizeIssueListLimit(ISSUE_COUNT_BATCH_SIZE + 10)).toBe(ISSUE_COUNT_BATCH_SIZE + 10);
   });
 });
 

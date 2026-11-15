@@ -112,7 +112,7 @@ export const setTaskMonitorSchema = z.object({
   taskId: z.string().uuid().optional(),
   idempotencyKey: z.string().trim().min(1).max(240),
   monitor: issueExecutionMonitorPolicySchema.omit({ scheduledBy: true }).extend({
-    notes: z.string().trim().min(1).max(500),
+    notes: z.string().trim().min(1),
   }).strict().refine(monitor => monitor.serviceName !== PROVIDER_QUOTA_MONITOR_SERVICE_NAME, {
     message: "This serviceName is reserved for server-owned quota recovery; use a different service name for an ordinary task check",
     path: ["serviceName"],

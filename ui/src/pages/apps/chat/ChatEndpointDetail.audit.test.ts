@@ -60,9 +60,8 @@ describe("OpenWA settings validation", () => {
     expect(openwaPolicyPatchErrors(policy, { absenceSeconds: 5 })).toHaveProperty("absenceSeconds");
     expect(openwaPolicyPatchErrors(policy, { approvals: { maxReminders: 11 } })).toEqual({ "approvals.maxReminders": "Use at most 10" });
     expect(openwaPolicyPatchErrors(policy, { absenceSeconds: 5 })).toEqual({ absenceSeconds: "Use at least 10" });
-    expect(openwaPolicyPatchErrors(policy, { customInstructions: "x".repeat(8001) })).toEqual({ customInstructions: "Use at most 8000 characters" });
+    expect(openwaPolicyPatchErrors(policy, { customInstructions: "x".repeat(50_000) })).toBeNull();
     expect(openwaPolicyPatchErrors(policy, { auditContentRetentionDays: wholeNumber("") })).toEqual({ auditContentRetentionDays: "Enter a whole number" });
-    expect(openwaPolicyPatchErrors(policy, { customInstructions: "x".repeat(8001) })).toHaveProperty("customInstructions");
     expect(openwaPolicyPatchErrors(policy, { triggers: { ...policy.triggers, commandPrefix: { enabled: true, prefix: "two words" } } })).toHaveProperty([
       "triggers.commandPrefix.prefix",
     ]);

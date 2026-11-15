@@ -36,9 +36,9 @@ export {
 } from "./issue-continuation-summary.js";
 export { projectService } from "./projects.js";
 export {
-  clampIssueListLimit,
+  normalizeIssueListLimit,
   ISSUE_LIST_DEFAULT_LIMIT,
-  ISSUE_LIST_MAX_LIMIT,
+  ISSUE_COUNT_BATCH_SIZE,
   issueService,
   type IssueFilters,
 } from "./issues.js";

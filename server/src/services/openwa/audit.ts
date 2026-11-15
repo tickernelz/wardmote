@@ -18,9 +18,6 @@ import { readOpenwaRunContext } from "./authority.js";
 type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 export type OpenwaAuditDb = Db | DbTransaction;
 
-export const OPENWA_AUDIT_ARG_LIMIT_BYTES = 4096;
-export const OPENWA_AUDIT_RESULT_LIMIT_BYTES = 1024;
-export const OPENWA_AUDIT_CONTENT_LIMIT_BYTES = 16384;
 export const DEFAULT_OPENWA_AUDIT_CONTENT_RETENTION_DAYS = 90;
 export const OPENWA_AUDIT_PURGE_BATCH_SIZE = 1000;
 export const OPENWA_AUDIT_PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -113,42 +110,6 @@ export function openwaAuditRetentionDays(policy: unknown): number {
     : DEFAULT_OPENWA_AUDIT_CONTENT_RETENTION_DAYS;
 }
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-function byteLength(text: string): number {
-  return encoder.encode(text).length;
-}
-
-function truncateText(text: string, maxBytes: number): string {
-  const bytes = encoder.encode(text);
-  if (bytes.length <= maxBytes) return text;
-  const marker = "…[truncated " + bytes.length + " bytes]";
-  const keep = Math.max(0, maxBytes - byteLength(marker));
-  return decoder.decode(bytes.subarray(0, keep)).replace(/\uFFFD+$/, "") + marker;
-}
-
-function boundValue(value: unknown, maxBytes: number): unknown {
-  if (typeof value === "string") return truncateText(value, maxBytes);
-  const json = JSON.stringify(value) ?? "null";
-  if (byteLength(json) <= maxBytes) return value;
-  return { truncated: true, bytes: byteLength(json), preview: truncateText(json, Math.max(0, maxBytes - 64)) };
-}
-
-function fieldLimit(key: string): number {
-  if (key === "args") return OPENWA_AUDIT_ARG_LIMIT_BYTES;
-  if (key === "resultSummary") return OPENWA_AUDIT_RESULT_LIMIT_BYTES;
-  return OPENWA_AUDIT_CONTENT_LIMIT_BYTES;
-}
-
-/** Redacts credentials and bounds content: args 4 KB, resultSummary 1 KB, whole entry 16 KB. */
-export function boundOpenwaAuditContent(content: Record<string, unknown>): Record<string, unknown> {
-  const fields = Object.entries(sanitizeRecord(content)).map(([key, value]) => [key, boundValue(value, fieldLimit(key))] as const);
-  const bounded = Object.fromEntries(fields);
-  if (fields.length === 0 || byteLength(JSON.stringify(bounded)) <= OPENWA_AUDIT_CONTENT_LIMIT_BYTES) return bounded;
-  const share = Math.floor(OPENWA_AUDIT_CONTENT_LIMIT_BYTES / fields.length) - 32;
-  return Object.fromEntries(fields.map(([key, value]) => [key, boundValue(value, share)]));
-}
 
 async function endpointRetentionDays(db: OpenwaAuditDb, companyId: string, endpointId: string): Promise<number> {
   const [row] = await db
@@ -162,7 +123,7 @@ async function endpointRetentionDays(db: OpenwaAuditDb, companyId: string, endpo
 /** Records a Layer-2 content-bearing audit entry; pass a transaction so it commits with the mutation. */
 export async function recordOpenwaAudit(db: OpenwaAuditDb, write: OpenwaAuditWrite): Promise<void> {
   const occurredAt = write.occurredAt ?? new Date();
-  const content = write.content ? boundOpenwaAuditContent(write.content) : null;
+  const content = write.content ? sanitizeRecord(write.content) : null;
   const retentionDays = content
     ? write.retentionDays ?? (await endpointRetentionDays(db, write.companyId, write.endpointId))
     : null;
@@ -302,7 +263,7 @@ export async function listOpenwaAudit(
   },
 ): Promise<OpenwaAuditPage> {
   const limit = input.limit ?? 25;
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw badRequest("Audit limit must be between 1 and 100");
+  if (!Number.isInteger(limit) || limit < 1) throw badRequest("Audit limit must be a positive integer");
   const before = input.cursor === undefined ? null : parseCursor(input.cursor);
   const [endpoint] = await db
     .select({ id: chatEndpoints.id })

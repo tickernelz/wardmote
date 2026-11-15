@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Copy, Trash2 } from "lucide-react";
 import {
-  OPENWA_CUSTOM_INSTRUCTIONS_MAX_LENGTH,
   OPENWA_GATEWAY_ADMIN_TOOL_LEVELS,
   OPENWA_REPLY_POLICIES,
   OPENWA_SENDER_POLICY_MODES,
@@ -752,7 +751,7 @@ function CustomInstructionsSection({ endpoint }: { endpoint: OpenwaEndpoint }) {
         onChange={(event) => setText(event.target.value)}
       />
       <p className="text-xs text-ink-3">
-        <span className="font-mono">{text.length}</span> / <span className="font-mono">{OPENWA_CUSTOM_INSTRUCTIONS_MAX_LENGTH}</span> characters
+        <span className="font-mono">{text.length}</span> characters
       </p>
       <FieldMessage id="openwa-custom-instructions" error={error} />
     </SettingsSection>

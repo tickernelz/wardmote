@@ -19,7 +19,18 @@ import { createOpenwaGatewayClient, OpenwaGatewayError, type OpenwaGatewayClient
 import type { OpenwaIngestedMedia } from "./media.js";
 import { openwaChatKey } from "./outbound.js";
 import { openwaPhoneDigits, openwaSetupError } from "./setup.js";
-import { OpenwaToolError, WA_MESSAGE_CHAT, fitPage, liveView, openwaMediaResult, type ToolContext } from "./tools.js";
+import {
+  OpenwaToolError,
+  WA_MESSAGE_CHAT,
+  fitPage,
+  liveCeiling,
+  liveView,
+  messageChars,
+  openwaMediaResult,
+  resultBytes,
+  type MessageChars,
+  type ToolContext,
+} from "./tools.js";
 
 type EndpointRow = typeof chatEndpoints.$inferSelect;
 type LinkedRow = typeof chatOpenwaLinkedSessions.$inferSelect;
@@ -474,8 +485,8 @@ async function allowedLinkedChat(ctx: ToolContext, linked: OpenwaLinkedService, 
   return { row, chatId, allowed };
 }
 
-function linkedMessageView(ctx: Pick<ToolContext, "sessionId">, message: OpenwaHistoryMessage) {
-  const view = liveView(ctx, message);
+function linkedMessageView(ctx: Pick<ToolContext, "sessionId">, message: OpenwaHistoryMessage, chars: MessageChars) {
+  const view = liveView(ctx, message, undefined, chars);
   if (view.media) return { ...view, media: { kind: message.type, ...view.media } };
   return MEDIA_TYPES.has(message.type) ? { ...view, media: { kind: message.type } } : view;
 }
@@ -521,7 +532,8 @@ export async function openwaLinkedReadTool(ctx: ToolContext, linked: OpenwaLinke
   if (cursor && !/^l:\d{1,4}$/.test(cursor)) throw new OpenwaToolError(400, "invalid_cursor", "The cursor is malformed");
   const offset = cursor ? Number(cursor.slice(2)) : 0;
   if (offset >= DEEP_LIMIT) throw new OpenwaToolError(400, "invalid_cursor", "The cursor is malformed");
-  const limit = Math.min(Number(args.limit ?? 50), LIVE_LIMIT);
+  const requested = Math.floor(Number(args.limit ?? 50));
+  const limit = Number.isFinite(requested) && requested >= 1 ? requested : 50;
   const want = Math.min(offset + limit, offset + limit > LIVE_LIMIT ? DEEP_LIMIT : LIVE_LIMIT);
   const client = await linked.viewerFor(ctx.endpoint, row);
   let history: OpenwaHistoryMessage[];
@@ -535,11 +547,18 @@ export async function openwaLinkedReadTool(ctx: ToolContext, linked: OpenwaLinke
   const scoped = { ...ctx, sessionId: row.sessionId };
   const ordered = [...history].sort((a, b) => b.timestamp - a.timestamp).slice(offset, offset + limit);
   const envelope = { linkedRef: row.id, chatRef: linkedChatRef(row, chatId), label: allowed.label, untrusted: true };
-  const fitted = fitPage(envelope, ordered.map((message) => linkedMessageView(scoped, message)));
+  const chars = messageChars(args);
+  const fitted = fitPage(envelope, ordered.map((message) => linkedMessageView(scoped, message, chars)), resultBytes(args));
   const consumed = offset + fitted.page.length;
   const more = fitted.truncated || (history.length >= want && consumed < DEEP_LIMIT);
   await auditLinked(ctx, chatId, { tool: "openwa_linked_read", linkedSessionId: row.id, count: fitted.page.length });
-  return { ...envelope, messages: fitted.page, nextCursor: more ? "l:" + consumed : null, ...(fitted.truncated ? { truncated: true } : {}) };
+  return {
+    ...envelope,
+    messages: fitted.page,
+    nextCursor: more ? "l:" + consumed : null,
+    ...(fitted.truncated ? { truncated: true } : {}),
+    ...liveCeiling(history.length, want, consumed),
+  };
 }
 
 export async function openwaLinkedGetMediaTool(ctx: ToolContext, linked: OpenwaLinkedService, args: Args): Promise<Record<string, unknown>> {
@@ -567,5 +586,5 @@ export async function openwaLinkedGetMediaTool(ctx: ToolContext, linked: OpenwaL
   }
   await linked.setStatus(row, "active");
   await auditLinked(ctx, chatId, { tool: "openwa_linked_get_media", linkedSessionId: row.id, messageId, count: items.length });
-  return openwaMediaResult(ctx, handle, { linkedRef: row.id, chatRef: linkedChatRef(row, chatId), messageId }, items);
+  return openwaMediaResult(ctx, handle, { linkedRef: row.id, chatRef: linkedChatRef(row, chatId), messageId }, items, args);
 }

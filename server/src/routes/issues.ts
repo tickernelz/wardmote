@@ -232,12 +232,12 @@ import {
   issueThreadInteractionService,
   inboxAgentPolicyService,
   ISSUE_LIST_DEFAULT_LIMIT,
-  ISSUE_LIST_MAX_LIMIT,
+  ISSUE_COUNT_BATCH_SIZE,
   issueReferenceService,
   issueService,
   type ActivityPublication,
   type IssueFilters,
-  clampIssueListLimit,
+  normalizeIssueListLimit,
   documentService,
   documentAnnotationService,
   logActivity,
@@ -437,7 +437,6 @@ import {
 } from "../services/message-steering.js";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const MAX_ISSUE_COMMENT_LIMIT = 500;
 type QueueActor = ReturnType<typeof getActorInfo> | OpenwaSystemSteerActor;
 export type SteeringRetryPolicy = { delaysMs: readonly number[]; budgetMs: number; minAttemptMs: number };
 const DEFAULT_STEERING_RETRY: SteeringRetryPolicy = { delaysMs: [1_000, 3_000], budgetMs: 10_000, minAttemptMs: 2_000 };
@@ -488,7 +487,7 @@ const editQueuedCommentSchema = queuedCommentMutationTargetSchema.extend({
     ),
 });
 const reorderQueuedCommentsSchema = queuedCommentMutationTargetSchema.extend({
-  orderedCommentIds: z.array(z.string().min(1)).max(MAX_ISSUE_COMMENT_LIMIT),
+  orderedCommentIds: z.array(z.string().min(1)),
 });
 
 function assertInteractionNoteSupported(
@@ -8729,7 +8728,7 @@ export function issueRoutes(
     const limit =
       parsedLimit === null
         ? ISSUE_LIST_DEFAULT_LIMIT
-        : clampIssueListLimit(parsedLimit);
+        : normalizeIssueListLimit(parsedLimit);
     const rawOffset = req.query.offset as string | undefined;
     const parsedOffset =
       rawOffset !== undefined && /^\d+$/.test(rawOffset)
@@ -8851,7 +8850,7 @@ export function issueRoutes(
         parsedLimit <= 0)
     ) {
       res.status(400).json({
-        error: `limit must be a positive integer up to ${ISSUE_LIST_MAX_LIMIT}`,
+        error: "limit must be a positive integer",
       });
       return;
     }
@@ -9263,11 +9262,11 @@ export function issueRoutes(
       while (true) {
         const rows = await svc.list(companyId, {
           ...blockedCountFilters,
-          limit: ISSUE_LIST_MAX_LIMIT,
+          limit: ISSUE_COUNT_BATCH_SIZE,
           offset,
         });
         visibleCount += (await filterIssuesForActor(req, rows)).length;
-        if (rows.length < ISSUE_LIST_MAX_LIMIT) break;
+        if (rows.length < ISSUE_COUNT_BATCH_SIZE) break;
         offset += rows.length;
       }
       res.json({ count: visibleCount });
@@ -17284,7 +17283,7 @@ export function issueRoutes(
         : null;
     const limit =
       limitRaw && Number.isFinite(limitRaw) && limitRaw > 0
-        ? Math.min(Math.floor(limitRaw), MAX_ISSUE_COMMENT_LIMIT)
+        ? Math.floor(limitRaw)
         : null;
     const comments = await svc.listComments(id, {
       afterCommentId,

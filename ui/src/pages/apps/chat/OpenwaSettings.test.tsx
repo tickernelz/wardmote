@@ -316,16 +316,16 @@ describe("OpenWA settings", () => {
     expect(mocks.api.updateOpenwaPolicy.mock.lastCall?.[1]).toMatchObject({ triggers: { burstWindowSeconds: 6 } });
   });
 
-  it("rejects over-long custom instructions and prefix with whitespace before saving", async () => {
+  it("rejects a prefix with whitespace before saving and saves long custom instructions whole", async () => {
     render();
     await loaded();
-    setValue(field<HTMLTextAreaElement>("#openwa-custom-instructions"), "x".repeat(8001));
-    click(button(section("Custom instructions"), "Save instructions"));
-    expect(field("#openwa-custom-instructions-error").textContent).toBeTruthy();
     setValue(field<HTMLInputElement>("#openwa-command-prefix"), "two words");
     click(button(section("Triggers and replies"), "Save triggers"));
     expect(field("#openwa-command-prefix-error").textContent).toBeTruthy();
     expect(mocks.api.updateOpenwaPolicy).not.toHaveBeenCalled();
+    setValue(field<HTMLTextAreaElement>("#openwa-custom-instructions"), "x".repeat(20_000));
+    click(button(section("Custom instructions"), "Save instructions"));
+    await vi.waitFor(() => expect(mocks.api.updateOpenwaPolicy.mock.lastCall?.[1]).toMatchObject({ customInstructions: "x".repeat(20_000) }));
   });
 
   it("replaces the admin key through reconnect credentials without echoing it", async () => {
