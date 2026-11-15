@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agentWakeupRequests, agents, approvals, companies, createDb, heartbeatRuns } from "@tickernelz/wardmote-db";
+import { agentWakeupRequests, agents, approvals, companies, createDb, heartbeatRuns, issues } from "@tickernelz/wardmote-db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -51,6 +51,7 @@ describeEmbeddedPostgres("dashboard service", () => {
     await db.delete(agentWakeupRequests);
     await db.delete(approvals);
     await db.delete(heartbeatRuns);
+    await db.delete(issues);
     await db.delete(agents);
     await db.delete(companies);
   });
@@ -276,7 +277,7 @@ describeEmbeddedPostgres("dashboard service", () => {
     // process_lost kills that recovered must not leak into the failed breakdown.
     expect(bucket?.failedByErrorCode.process_lost).toBeUndefined();
   });
-  it("names the agents with unrecovered failures, the run duration spread, the waiting wakes and the oldest approval", async () => {
+  it("names the agents with unrecovered failures, the run duration spread, the wakes still waiting on open work and the oldest approval", async () => {
     const companyId = randomUUID();
     const otherCompanyId = randomUUID();
     const flaky = randomUUID();
@@ -305,14 +306,26 @@ describeEmbeddedPostgres("dashboard service", () => {
       finished(steady, companyId, 5, "succeeded"),
       finished(otherAgent, otherCompanyId, 90, "failed"),
     ]);
+    const openTask = randomUUID();
+    const doneTask = randomUUID();
+    const cancelledTask = randomUUID();
+    await db.insert(issues).values([
+      { id: openTask, companyId, title: "Open", status: "todo", priority: "medium" },
+      { id: doneTask, companyId, title: "Done", status: "done", priority: "medium" },
+      { id: cancelledTask, companyId, title: "Cancelled", status: "cancelled", priority: "medium" },
+    ]);
     const requestedAt = new Date("2026-09-25T06:00:00.000Z");
-    const wake = (cid: string, agentId: string, status: string, at: Date) => ({
-      companyId: cid, agentId, source: "assignment", status, requestedAt: at,
+    const wake = (cid: string, agentId: string, status: string, at: Date, payload: Record<string, unknown> | null = null) => ({
+      companyId: cid, agentId, source: "assignment", status, requestedAt: at, payload,
     });
     await db.insert(agentWakeupRequests).values([
-      wake(companyId, flaky, "deferred_issue_execution", requestedAt),
+      wake(companyId, flaky, "deferred_issue_execution", requestedAt, { issueId: openTask }),
       wake(companyId, steady, "queued", new Date("2026-11-01T00:00:00.000Z")),
       wake(companyId, steady, "completed", new Date("2026-08-01T00:00:00.000Z")),
+      wake(companyId, flaky, "deferred_issue_execution", new Date("2026-09-01T00:00:00.000Z"), { issueId: doneTask }),
+      wake(companyId, flaky, "deferred_issue_execution", new Date("2026-09-02T00:00:00.000Z"), {
+        _wardmoteWakeContext: { issueId: cancelledTask },
+      }),
       wake(otherCompanyId, otherAgent, "queued", new Date("2026-01-01T00:00:00.000Z")),
     ]);
     const approvalAt = new Date("2026-11-10T00:00:00.000Z");

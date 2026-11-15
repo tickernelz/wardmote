@@ -184,6 +184,14 @@ export function dashboardService(db: Db) {
           .where(and(
             eq(agentWakeupRequests.companyId, companyId),
             inArray(agentWakeupRequests.status, WAITING_WAKE_STATUSES),
+            sql`not exists (
+              select 1 from ${issues} closed
+              where closed.company_id = ${agentWakeupRequests.companyId}
+                and closed.id::text = coalesce(${agentWakeupRequests.payload}->>'issueId', ${agentWakeupRequests.payload}->>'taskId',
+                  ${agentWakeupRequests.payload}->'_wardmoteWakeContext'->>'issueId',
+                  ${agentWakeupRequests.payload}->'_wardmoteWakeContext'->>'taskId')
+                and closed.status in ('done', 'cancelled')
+            )`,
           ))
           .then((rows) => rows[0])),
       ]);
