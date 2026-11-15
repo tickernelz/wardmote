@@ -517,6 +517,58 @@ describe("openwa_endpoint_config (embedded Postgres + fake gateway)", () => {
     expect(invalid).toMatchObject({ status: 400, code: "invalid_target" });
   }, 90_000);
 
+  it("reads long custom instructions, notes and sender lists whole so a read-modify-write keeps them intact", async () => {
+    const rules = Array.from({ length: 30 }, (_, index) => "Rule " + (index + 1) + ": " + "keep the owner informed and quote the source. ".repeat(8).trim()).join("\n");
+    expect(rules.length).toBeGreaterThan(8_000);
+    const t = await setup({ customInstructions: rules });
+    const c = await conversation(t, OWNER_DM);
+    const binding = await run(t, c, "owner");
+
+    const read = await executeOpenwaTool(db, binding, "openwa_endpoint_config", {});
+    expect(read.customInstructions).toBe(rules);
+    expect(read).not.toHaveProperty("customInstructionsTruncated");
+
+    const extended = read.customInstructions + "\nRule 31: answer in the owner's language.";
+    const note = "Supplier escalation path. ".repeat(150).trim();
+    const written = await executeOpenwaTool(db, binding, "openwa_endpoint_config", { customInstructions: extended, chatSettings: { note } });
+    expect(written.customInstructions).toBe(extended);
+    expect((written.chat as { settings: { note: string } }).settings.note).toBe(note);
+    expect(openwaEndpointPolicySchema.parse((await endpointRow(t)).policy).customInstructions).toBe(extended);
+
+    const audit = await executeOpenwaTool(db, binding, "openwa_call", {
+      operation: "wardmote.audit.list",
+      args: { kinds: ["config_changed"] },
+      maxBytes: 200_000,
+    });
+    const items = audit.items as Array<{ metadata: { scope: string }; content: { before: { customInstructions?: string }; after: { customInstructions?: string } } }>;
+    const endpointChange = items.find((item) => item.metadata.scope === "endpoint")!;
+    expect(endpointChange.content.before.customInstructions).toBe(rules);
+    expect(endpointChange.content.after.customInstructions).toBe(extended);
+    expect(audit).not.toHaveProperty("truncated");
+
+    const numbers = Array.from({ length: 60 }, (_, index) => "+62812" + String(index).padStart(7, "0"));
+    await executeOpenwaTool(db, binding, "openwa_endpoint_config", {
+      senders: { add: numbers.map((number) => ({ list: "allow" as const, number, label: "Supplier contact " + number })) },
+    });
+    const seen: unknown[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = await executeOpenwaTool(db, binding, "openwa_endpoint_config", { maxBytes: 4_096, ...(cursor ? { cursor } : {}) });
+      expect(page.customInstructions).toBe(extended);
+      seen.push(...(page.senders as unknown[]));
+      cursor = page.nextCursor as string | undefined;
+      if (cursor) expect(page.truncated).toBe(true);
+      pages++;
+    } while (cursor);
+    expect(pages).toBeGreaterThan(1);
+    expect(seen).toHaveLength(60);
+    const whole = await executeOpenwaTool(db, binding, "openwa_endpoint_config", { maxBytes: 1_000_000 });
+    expect(whole).toMatchObject({ sendersTotal: 60 });
+    expect(whole.senders).toHaveLength(60);
+    expect(whole).not.toHaveProperty("nextCursor");
+  }, 90_000);
+
   it("reads and sets the endpoint burst window with before/after audit", async () => {
     const t = await setup();
     const c = await conversation(t, OWNER_DM);

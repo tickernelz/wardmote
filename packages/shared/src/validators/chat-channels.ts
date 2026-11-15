@@ -305,8 +305,8 @@ export const openwaGatewayAdminToolLevelSchema = z.enum(OPENWA_GATEWAY_ADMIN_TOO
 
 export const OPENWA_DEFAULT_COMMAND_PREFIX = "/ai";
 export const OPENWA_DEFAULT_OWNER_NUMBER_PREFIX = "\u{1F916} *Assistant:*";
-export const OPENWA_CUSTOM_INSTRUCTIONS_MAX_LENGTH = 8000;
-export const OPENWA_CHAT_NOTE_MAX_LENGTH = 2000;
+export const OPENWA_CUSTOM_INSTRUCTIONS_MAX_LENGTH = 16_000;
+export const OPENWA_CHAT_NOTE_MAX_LENGTH = 4_000;
 
 const openwaCommandPrefixSchema = z.string().trim().min(1).max(32).regex(/^\S+$/);
 const openwaKeywordsSchema = z.array(z.string().trim().min(1).max(100)).max(50);

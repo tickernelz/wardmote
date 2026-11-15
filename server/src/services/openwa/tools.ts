@@ -16,7 +16,8 @@ import {
   type Db,
 } from "@tickernelz/wardmote-db";
 import {
-  OPENWA_TOOL_RESULT_LIMIT_BYTES,
+  OPENWA_TOOL_RESULT_DEFAULT_BYTES,
+  OPENWA_TOOL_RESULT_MIN_BYTES,
   maskOpenwaPhoneNumber,
   openwaChatSettingsSchema,
   openwaEndpointPolicySchema,
@@ -87,9 +88,12 @@ export const OPENWA_HANDOFF_ACTION_KIND = "openwa_handoff";
 const USABLE_ENDPOINT_STATUSES = new Set(["active", "verifying", "attention"]);
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running"]);
 const ISSUE_ANCESTRY_DEPTH = 8;
-const READ_TEXT_LIMIT = 2000;
-const TRANSCRIPT_LIMIT = 8000;
-const FIND_LIMIT = 20;
+const READ_TEXT_DEFAULT_CHARS = 4000;
+const QUOTE_DEFAULT_CHARS = 500;
+const TRANSCRIPT_DEFAULT_CHARS = 16000;
+const FIND_DEFAULT_LIMIT = 40;
+const GATEWAY_LIST_LIMIT = 1000;
+const STORED_PAGE_LIMIT = 100;
 const RESULT_ENVELOPE_BYTES = 1024;
 const CHAT_ID = /^[A-Za-z0-9._-]{1,128}@(c\.us|g\.us|lid|s\.whatsapp\.net)$/i;
 const CHAT_REF = /^openwa:([A-Za-z0-9-]{1,64}):(.+)$/;
@@ -197,6 +201,30 @@ function str(value: unknown): string | null {
 function clip(value: string, limit: number): { text: string; truncated: boolean } {
   const chars = [...value];
   return chars.length <= limit ? { text: value, truncated: false } : { text: chars.slice(0, limit).join("") + "…", truncated: true };
+}
+
+export function resultBytes(args: Args): number {
+  const value = Number(args.maxBytes);
+  return Number.isFinite(value) && value >= OPENWA_TOOL_RESULT_MIN_BYTES ? Math.floor(value) : OPENWA_TOOL_RESULT_DEFAULT_BYTES;
+}
+
+export function textChars(args: Args, fallback: number): number {
+  const value = Number(args.maxChars);
+  return Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
+}
+
+export interface MessageChars {
+  text: number;
+  quote: number;
+}
+
+export function messageChars(args: Args): MessageChars {
+  return { text: textChars(args, READ_TEXT_DEFAULT_CHARS), quote: textChars(args, QUOTE_DEFAULT_CHARS) };
+}
+
+function countArg(value: unknown, fallback: number): number {
+  const count = Math.floor(Number(value ?? fallback));
+  return Number.isFinite(count) && count >= 1 ? count : fallback;
 }
 
 function bytes(value: unknown): number {
@@ -1203,10 +1231,10 @@ async function ownerSenderKeys(ctx: ToolContext): Promise<ReadonlySet<string>> {
   return new Set(owners.flatMap((owner) => [...owner.jids.map((jid) => openwaChatKey(jid)), ...(owner.digits ? [owner.digits] : [])]));
 }
 
-function textView(value: unknown) {
+function textView(value: unknown, maxChars: number) {
   const text = typeof value === "string" ? value : "";
-  const clipped = clip(text, READ_TEXT_LIMIT);
-  return clipped.truncated ? { text: clipped.text, textTruncated: true } : { text: clipped.text };
+  const clipped = clip(text, maxChars);
+  return clipped.truncated ? { text: clipped.text, textTruncated: true, textChars: [...text].length } : { text: clipped.text };
 }
 
 function mentionView(value: unknown): string[] {
@@ -1214,7 +1242,6 @@ function mentionView(value: unknown): string[] {
     ? value
         .map(openwaWidString)
         .filter((entry): entry is string => entry !== null)
-        .slice(0, 50)
         .map((jid) => (phoneDigits(jid) ? maskOpenwaPhoneNumber(phoneDigits(jid)!) : maskOpenwaDigits(jid)))
     : [];
 }
@@ -1225,17 +1252,17 @@ function locationView(value: unknown) {
   const lng = Number(location.longitude ?? location.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
   const name = str(location.description) ?? str(location.name);
-  return name ? { lat, lng, name: clip(name, 200).text } : { lat, lng };
+  return name ? { lat, lng, name } : { lat, lng };
 }
 
-function quotedView(value: unknown) {
+function quotedView(value: unknown, maxChars: number) {
   const quoted = record(value);
   const id = str(quoted.id) ?? str(quoted.waMessageId);
   if (!id) return null;
-  return { id, text: clip(typeof quoted.body === "string" ? quoted.body : "", 200).text };
+  return { id, ...textView(quoted.body, maxChars) };
 }
 
-function storedView(ctx: ToolContext, message: OpenwaStoredMessage, ownerKeys: ReadonlySet<string>) {
+function storedView(ctx: ToolContext, message: OpenwaStoredMessage, ownerKeys: ReadonlySet<string>, chars: MessageChars) {
   const metadata = record(message.metadata);
   const fromMe = message.direction === "outgoing";
   return {
@@ -1244,15 +1271,20 @@ function storedView(ctx: ToolContext, message: OpenwaStoredMessage, ownerKeys: R
     sender: fromMe ? null : senderView(ctx, message.author ?? message.from, message.chatName, undefined, ownerKeys),
     type: message.type,
     timestamp: message.timestamp ?? Math.floor(Date.parse(message.createdAt) / 1000),
-    ...textView(message.body),
-    quoted: quotedView(metadata.quotedMessage ?? metadata.quoted),
+    ...textView(message.body, chars.text),
+    quoted: quotedView(metadata.quotedMessage ?? metadata.quoted, chars.quote),
     mentions: mentionView(metadata.mentionedIds),
     media: message.mediaMimetype ? { mime: message.mediaMimetype } : null,
     location: locationView(metadata.location),
   };
 }
 
-export function liveView(ctx: Pick<ToolContext, "sessionId">, message: OpenwaHistoryMessage, ownerKeys?: ReadonlySet<string>) {
+export function liveView(
+  ctx: Pick<ToolContext, "sessionId">,
+  message: OpenwaHistoryMessage,
+  ownerKeys?: ReadonlySet<string>,
+  chars: MessageChars = { text: READ_TEXT_DEFAULT_CHARS, quote: QUOTE_DEFAULT_CHARS },
+) {
   const media = record(message.media);
   const contact = record(message.contact);
   return {
@@ -1263,8 +1295,8 @@ export function liveView(ctx: Pick<ToolContext, "sessionId">, message: OpenwaHis
       : senderView(ctx, message.author ?? message.from, contact.name ?? contact.pushName, message.senderPhone, ownerKeys),
     type: message.type,
     timestamp: message.timestamp,
-    ...textView(message.body),
-    quoted: quotedView(message.quotedMessage),
+    ...textView(message.body, chars.text),
+    quoted: quotedView(message.quotedMessage, chars.quote),
     mentions: mentionView(message.mentionedIds),
     media: str(media.mimetype)
       ? { mime: str(media.mimetype), ...(str(media.filename) ? { filename: str(media.filename) } : {}), ...(typeof media.sizeBytes === "number" ? { size: media.sizeBytes } : {}) }
@@ -1273,14 +1305,22 @@ export function liveView(ctx: Pick<ToolContext, "sessionId">, message: OpenwaHis
   };
 }
 
-export function fitPage<T>(envelope: Record<string, unknown>, items: T[]): { page: T[]; truncated: boolean } {
-  const budget = OPENWA_TOOL_RESULT_LIMIT_BYTES - bytes(envelope) - RESULT_ENVELOPE_BYTES;
+export function byteBudget(envelope: Record<string, unknown>, maxBytes = OPENWA_TOOL_RESULT_DEFAULT_BYTES): (item: unknown, taken: number) => boolean {
+  const budget = maxBytes - bytes(envelope) - RESULT_ENVELOPE_BYTES;
   let used = 0;
+  return (item, taken) => {
+    const size = bytes(item) + 1;
+    if (used + size > budget && taken > 0) return false;
+    used += size;
+    return true;
+  };
+}
+
+export function fitPage<T>(envelope: Record<string, unknown>, items: T[], maxBytes = OPENWA_TOOL_RESULT_DEFAULT_BYTES): { page: T[]; truncated: boolean } {
+  const fits = byteBudget(envelope, maxBytes);
   const page: T[] = [];
   for (const item of items) {
-    const size = bytes(item) + 1;
-    if (used + size > budget && page.length > 0) return { page, truncated: true };
-    used += size;
+    if (!fits(item, page.length)) return { page, truncated: true };
     page.push(item);
   }
   return { page, truncated: false };
@@ -1293,19 +1333,37 @@ async function openwaReadChat(ctx: ToolContext, args: Args): Promise<Record<stri
   const cursor = str(args.cursor);
   const source = args.source === "live" || (args.source === undefined && cursor?.startsWith("l:")) ? "live" : "stored";
   const deep = args.deep === true;
-  const limit = Math.min(Number(args.limit ?? 50), deep ? DEEP_LIMIT : LIVE_LIMIT);
+  const limit = countArg(args.limit, 50);
+  const chars = messageChars(args);
+  const maxBytes = resultBytes(args);
   const ref = chatRef(ctx, target.chatId);
   const ownerKeys = await ownerSenderKeys(ctx);
   if (source === "stored") {
     if (cursor && !cursor.startsWith("s:")) throw new OpenwaToolError(400, "invalid_cursor", "The cursor belongs to the live source");
-    const after = cursor ? cursor.slice(2) : null;
-    const page = await gatewayCall(ctx, (gateway) => gateway.listStoredMessages({ chatId: target.chatId, limit: Math.min(limit, LIVE_LIMIT), after, inlineMedia: false }));
-    const views = page.messages.map((message) => ({ row: message.id, view: storedView(ctx, message, ownerKeys) }));
+    let after = cursor ? cursor.slice(2) : null;
     const envelope = { chatRef: ref, source };
-    const fitted = fitPage(envelope, views.map((entry) => entry.view));
-    const last = views[fitted.page.length - 1];
-    const more = fitted.truncated || page.messages.length >= Math.min(limit, LIVE_LIMIT);
-    return { ...envelope, messages: fitted.page, nextCursor: more && last ? "s:" + last.row : null, ...(fitted.truncated ? { truncated: true } : {}) };
+    const fits = byteBudget(envelope, maxBytes);
+    const messages: ReturnType<typeof storedView>[] = [];
+    let lastRow: string | null = null;
+    let truncated = false;
+    let exhausted = false;
+    while (messages.length < limit && !truncated && !exhausted) {
+      const want = Math.min(limit - messages.length, STORED_PAGE_LIMIT);
+      const page = await gatewayCall(ctx, (gateway) => gateway.listStoredMessages({ chatId: target.chatId, limit: want, after, inlineMedia: false }));
+      for (const message of page.messages) {
+        const view = storedView(ctx, message, ownerKeys, chars);
+        if (!fits(view, messages.length)) {
+          truncated = true;
+          break;
+        }
+        messages.push(view);
+        lastRow = message.id;
+      }
+      exhausted = page.messages.length < want;
+      after = page.messages.at(-1)?.id ?? after;
+    }
+    const more = truncated || !exhausted;
+    return { ...envelope, messages, nextCursor: more && lastRow ? "s:" + lastRow : null, ...(truncated ? { truncated: true } : {}) };
   }
   if (cursor && !cursor.startsWith("l:")) throw new OpenwaToolError(400, "invalid_cursor", "The cursor belongs to the stored source");
   const offset = cursor ? Number(cursor.slice(2)) : 0;
@@ -1316,14 +1374,24 @@ async function openwaReadChat(ctx: ToolContext, args: Args): Promise<Record<stri
   );
   const ordered = [...history].sort((a, b) => b.timestamp - a.timestamp).slice(offset, offset + limit);
   const envelope = { chatRef: ref, source };
-  const fitted = fitPage(envelope, ordered.map((message) => liveView(ctx, message, ownerKeys)));
+  const fitted = fitPage(envelope, ordered.map((message) => liveView(ctx, message, ownerKeys, chars)), maxBytes);
   const consumed = offset + fitted.page.length;
   const more = fitted.truncated || (history.length >= want && consumed < DEEP_LIMIT);
-  return { ...envelope, messages: fitted.page, nextCursor: more ? "l:" + consumed : null, ...(fitted.truncated ? { truncated: true } : {}) };
+  return {
+    ...envelope,
+    messages: fitted.page,
+    nextCursor: more ? "l:" + consumed : null,
+    ...(fitted.truncated ? { truncated: true } : {}),
+    ...liveCeiling(history.length, want, consumed),
+  };
 }
 
-function mediaView(item: OpenwaIngestedMedia, localPaths: ReadonlyMap<string, string>) {
-  const transcript = item.transcript ? clip(item.transcript, TRANSCRIPT_LIMIT) : null;
+export function liveCeiling(fetched: number, want: number, consumed: number): { historyCeiling?: number } {
+  return fetched >= want && consumed >= DEEP_LIMIT ? { historyCeiling: DEEP_LIMIT } : {};
+}
+
+function mediaView(item: OpenwaIngestedMedia, localPaths: ReadonlyMap<string, string>, maxChars: number) {
+  const transcript = item.transcript ? clip(item.transcript, maxChars) : null;
   const localPath = item.attachmentId ? localPaths.get(item.attachmentId) : undefined;
   return {
     kind: item.kind,
@@ -1339,7 +1407,7 @@ function mediaView(item: OpenwaIngestedMedia, localPaths: ReadonlyMap<string, st
     ...(transcript ? { transcript: transcript.text, ...(transcript.truncated || item.transcriptTruncated ? { transcriptTruncated: true } : {}) } : {}),
     ...(item.transcriptAttachmentId ? { transcriptAttachmentId: item.transcriptAttachmentId } : {}),
     ...(item.location ? { location: { lat: item.location.lat, lng: item.location.lng, name: item.location.name } } : {}),
-    ...(item.contact ? { contact: { name: item.contact.name, phones: item.contact.numbers.slice(0, 10).map((entry) => maskOpenwaPhoneNumber(entry)) } } : {}),
+    ...(item.contact ? { contact: { name: item.contact.name, phones: item.contact.numbers.map((entry) => maskOpenwaPhoneNumber(entry)) } } : {}),
   };
 }
 
@@ -1365,6 +1433,7 @@ export async function openwaMediaResult(
   handle: OpenwaToolRuntimeHandle,
   envelope: Record<string, unknown>,
   items: OpenwaIngestedMedia[],
+  args: Args = {},
 ): Promise<Record<string, unknown>> {
   const localPaths = await openwaAttachmentLocalPaths(
     ctx.db,
@@ -1372,7 +1441,8 @@ export async function openwaMediaResult(
     ctx.endpoint.companyId,
     items.flatMap((item) => (item.status === "stored" && item.attachmentId ? [item.attachmentId] : [])),
   );
-  const fitted = fitMedia(envelope, items.map((item) => mediaView(item, localPaths)));
+  const maxChars = textChars(args, TRANSCRIPT_DEFAULT_CHARS);
+  const fitted = fitMedia(envelope, items.map((item) => mediaView(item, localPaths, maxChars)), resultBytes(args));
   return { ...envelope, media: fitted.media, ...(fitted.omitted ? { truncated: true, omittedMedia: fitted.omitted } : {}) };
 }
 
@@ -1395,11 +1465,15 @@ async function openwaGetMedia(ctx: ToolContext, args: Args): Promise<Record<stri
     chatId: target.chatId,
     messageId: messageId!,
   });
-  return openwaMediaResult(ctx, handle, { chatRef: chatRef(ctx, target.chatId), messageId }, items);
+  return openwaMediaResult(ctx, handle, { chatRef: chatRef(ctx, target.chatId), messageId }, items, args);
 }
 
-function fitMedia(envelope: Record<string, unknown>, views: Array<ReturnType<typeof mediaView>>): { media: Array<ReturnType<typeof mediaView>>; omitted: number } {
-  const budget = OPENWA_TOOL_RESULT_LIMIT_BYTES - bytes(envelope) - RESULT_ENVELOPE_BYTES;
+function fitMedia(
+  envelope: Record<string, unknown>,
+  views: Array<ReturnType<typeof mediaView>>,
+  maxBytes: number,
+): { media: Array<ReturnType<typeof mediaView>>; omitted: number } {
+  const budget = maxBytes - bytes(envelope) - RESULT_ENVELOPE_BYTES;
   let used = 0;
   const media: Array<ReturnType<typeof mediaView>> = [];
   for (const [index, view] of views.entries()) {
@@ -1452,10 +1526,14 @@ async function openwaFind(ctx: ToolContext, args: Args): Promise<Record<string, 
   const query = String(args.query);
   const cursor = str(args.cursor);
   const offset = cursor ? Number(cursor.slice(2)) : 0;
-  if (cursor && (!cursor.startsWith("f:") || !Number.isInteger(offset) || offset <= 0 || offset >= FIND_LIMIT * 2))
+  if (cursor && (!cursor.startsWith("f:") || !Number.isInteger(offset) || offset <= 0))
     throw new OpenwaToolError(400, "invalid_cursor", "The cursor is malformed");
+  const limit = countArg(args.limit, FIND_DEFAULT_LIMIT);
   const [contactsResult, chatsResult] = await gatewayCall(ctx, (gateway) =>
-    Promise.all([gateway.call("ContactController_findAll", { limit: 1000 }), gateway.call("SessionController_getChats", { limit: 1000 })]),
+    Promise.all([
+      gateway.call("ContactController_findAll", { limit: GATEWAY_LIST_LIMIT }),
+      gateway.call("SessionController_getChats", { limit: GATEWAY_LIST_LIMIT }),
+    ]),
   );
   const list = (result: unknown) => {
     const data = record(result).data;
@@ -1466,12 +1544,10 @@ async function openwaFind(ctx: ToolContext, args: Args): Promise<Record<string, 
     .filter((chat) => typeof chat.id === "string" && CHAT_ID.test(chat.id))
     .filter((chat) => !enabled || enabled.has(openwaChatKey(String(chat.id))))
     .filter((chat) => matches(query, chat.name, chat.id))
-    .slice(0, FIND_LIMIT)
     .map((chat) => ({ chatRef: chatRef(ctx, openwaChatKey(String(chat.id))), name: displayName(chat.name), kind: String(chat.id).endsWith("@g.us") ? "group" : "dm" }));
   const contacts = list(contactsResult)
     .filter((contact) => typeof contact.id === "string" && CHAT_ID.test(contact.id))
     .filter((contact) => matches(query, contact.name, contact.pushName, contact.number))
-    .slice(0, FIND_LIMIT)
     .map((contact) => {
       const digits = str(contact.number) ?? phoneDigits(String(contact.id));
       return {
@@ -1480,14 +1556,19 @@ async function openwaFind(ctx: ToolContext, args: Args): Promise<Record<string, 
         phone: digits ? maskOpenwaPhoneNumber(digits) : null,
       };
     });
-  const remaining = [...chats.map((chat) => ({ chat })), ...contacts.map((contact) => ({ contact }))].slice(offset);
-  const fitted = fitPage({ query, nextCursor: "f:" + FIND_LIMIT * 2 }, remaining);
+  const matched = [...chats.map((chat) => ({ chat })), ...contacts.map((contact) => ({ contact }))];
+  const pageItems = matched.slice(offset, offset + limit);
+  const fitted = fitPage({ query, nextCursor: "f:" + matched.length, total: matched.length }, pageItems, resultBytes(args));
+  const next = offset + fitted.page.length;
+  const gatewayCapped = list(contactsResult).length >= GATEWAY_LIST_LIMIT || list(chatsResult).length >= GATEWAY_LIST_LIMIT;
   return {
     query,
     chats: fitted.page.flatMap((entry) => ("chat" in entry ? [entry.chat] : [])),
     contacts: fitted.page.flatMap((entry) => ("contact" in entry ? [entry.contact] : [])),
-    nextCursor: fitted.truncated ? "f:" + (offset + fitted.page.length) : null,
+    total: matched.length,
+    nextCursor: next < matched.length ? "f:" + next : null,
     ...(fitted.truncated ? { truncated: true } : {}),
+    ...(gatewayCapped ? { gatewayListLimit: GATEWAY_LIST_LIMIT } : {}),
   };
 }
 

@@ -319,7 +319,7 @@ describe("OpenWA settings", () => {
   it("rejects over-long custom instructions and prefix with whitespace before saving", async () => {
     render();
     await loaded();
-    setValue(field<HTMLTextAreaElement>("#openwa-custom-instructions"), "x".repeat(8001));
+    setValue(field<HTMLTextAreaElement>("#openwa-custom-instructions"), "x".repeat(16_001));
     click(button(section("Custom instructions"), "Save instructions"));
     expect(field("#openwa-custom-instructions-error").textContent).toBeTruthy();
     setValue(field<HTMLInputElement>("#openwa-command-prefix"), "two words");

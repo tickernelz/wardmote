@@ -417,6 +417,20 @@ describe("OpenWA delegated task reports (embedded Postgres + fake gateway)", () 
     expect((await t.rows()).map((row) => row.status)).toEqual(["delivered", "delivered", "pending"]);
   }, 60_000);
 
+  it("lists at most 10 blockers of a blocked task and counts the rest", async () => {
+    const t = await setup();
+    const blocked = await t.delegate("Ship the release");
+    const blockers = [];
+    for (let index = 0; index < 12; index++) blockers.push(await t.delegate("Blocker " + index, { assignee: t.lead }));
+    await t.svc.update(blocked.id, { status: "blocked", blockedByIssueIds: blockers.map((blocker) => blocker.id) });
+    await t.makeDue();
+    await t.deliveries.sweepPending();
+    const turn = await t.startTurn((await t.wakeRuns())[0]!);
+    const report = turn.guidance!.wakeEvent.completedTasks!;
+    expect(report[0]!.blockedBy).toHaveLength(10);
+    expect(report[0]).toMatchObject({ identifier: blocked.identifier, blockedByOmitted: 2 });
+  }, 60_000);
+
   it("(d) two tasks finishing inside the window share one wake and one message", async () => {
     const t = await setup();
     const first = await t.delegate("Translate the brochure");

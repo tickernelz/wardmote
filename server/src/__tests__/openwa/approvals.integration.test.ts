@@ -34,7 +34,6 @@ import {
   type Db,
 } from "@tickernelz/wardmote-db";
 import { OPENWA_APPROVAL_MESSAGE_MAX_LENGTH, SPEECH_TO_TEXT_DEFAULTS } from "@tickernelz/wardmote-shared";
-import { OPENWA_TEXT_LIMIT } from "../../services/openwa/format.js";
 import { startEmbeddedPostgresTestDatabase } from "../helpers/embedded-postgres.js";
 import { createLocalDiskStorageProvider } from "../../storage/local-disk-provider.js";
 import { createStorageService } from "../../storage/service.js";
@@ -811,29 +810,22 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     expect(await grantsOf(request.id)).toHaveLength(1);
   }, 120_000);
 
-  it("shortens a messageToOwners longer than one WhatsApp bubble and reports it instead of failing", async () => {
+  it("refuses a messageToOwners longer than one WhatsApp bubble and sends one that fits whole", async () => {
     const t = await setup();
     const memberRun = await runStart(t, await admitted(t, { chatId: jid(MEMBER_A), body: "tolong buatkan task" }));
     const long = "Ringkasan permintaan anggota. ".repeat(400).trim();
     expect(long.length).toBeGreaterThan(OPENWA_APPROVAL_MESSAGE_MAX_LENGTH);
-    const created = (await requestApproval(memberRun.binding, { message: long })) as Awaited<ReturnType<typeof requestApproval>> & {
-      messageShortened?: { originalLength: number; sentLength: number };
-    };
+    await expect(requestApproval(memberRun.binding, { message: long })).rejects.toMatchObject({
+      name: "ZodError",
+      message: expect.stringContaining("<=" + OPENWA_APPROVAL_MESSAGE_MAX_LENGTH + " characters"),
+    });
+    expect(t.gateway.sends.filter((send) => send.chatId === jid(OWNER_PHONE))).toHaveLength(0);
+    const full = "Ringkasan permintaan anggota. ".repeat(130).trim();
+    expect(full.length).toBeLessThanOrEqual(OPENWA_APPROVAL_MESSAGE_MAX_LENGTH);
+    const created = await requestApproval(memberRun.binding, { message: full });
     expect(created.bubbles).toEqual([expect.objectContaining({ state: "sent" })]);
-    expect(created.messageShortened).toMatchObject({ originalLength: long.length });
-    const ownerSend = t.gateway.sends.find((send) => send.chatId === jid(OWNER_PHONE))!;
-    expect(ownerSend.text.length).toBeLessThanOrEqual(OPENWA_TEXT_LIMIT);
-    expect(ownerSend.text.length).toBe(created.messageShortened!.sentLength);
-    expect(ownerSend.text.endsWith("[…]")).toBe(true);
-    expect(ownerSend.text).toContain("Ringkasan permintaan anggota.");
-    const short = await requestApproval(memberRun.binding, { message: "Approve invoice task?" });
-    expect(short).not.toHaveProperty("messageShortened");
-    const spaced = "a" + " ".repeat(3400) + "b cx" + " filler".repeat(600);
-    const started = performance.now();
-    const cut = (await requestApproval(memberRun.binding, { message: spaced })) as Awaited<ReturnType<typeof requestApproval>> & { messageShortened?: unknown };
-    expect(performance.now() - started).toBeLessThan(5_000);
-    expect(cut.messageShortened).toMatchObject({ originalLength: spaced.length });
-    expect(t.gateway.sends.at(-1)!.text.endsWith("[…]")).toBe(true);
+    expect(created).not.toHaveProperty("messageShortened");
+    expect(t.gateway.sends.find((send) => send.chatId === jid(OWNER_PHONE))!.text).toBe(full);
   }, 120_000);
 
   it("rejects approval requests from owner-class runs", async () => {
@@ -958,6 +950,29 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     expect((await requestRow(second.requestId)).status).toBe("approved");
     expect(await grantsOf(second.requestId)).toHaveLength(1);
   }, 120_000);
+
+  it("lists the newest 10 pending approvals in the wake and counts the rest", async () => {
+    const t = await setup();
+    const ownerWake = await admitted(t, { chatId: jid(OWNER_PHONE), body: "status?" });
+    const ownerRun = await runStart(t, ownerWake);
+    await db.insert(chatOwnerApprovalRequests).values(Array.from({ length: 12 }, (_, index) => ({
+      companyId: t.companyId, endpointId: t.endpointId, originChatKey: ownerRun.openwa.chatKey, categories: ["create_task" as const],
+      scope: "one_action" as const, summary: "Request " + index, proposedAction: "create_task", status: "pending" as const,
+      createdAt: new Date(Date.UTC(2026, 9, 1, 0, index)),
+    })));
+    const guidance = await buildOpenwaRunGuidance(db, {
+      companyId: t.companyId,
+      issueId: ownerRun.issueId,
+      runId: ownerRun.runId,
+      wakeupRequestId: ownerWake.request.id,
+      openwa: ownerRun.openwa,
+      contextSnapshot: ownerRun.run.contextSnapshot,
+    });
+    expect(guidance!.wakeEvent.pendingApprovals).toHaveLength(10);
+    expect(guidance!.wakeEvent.pendingApprovals[0]).toMatchObject({ summary: "Request 11" });
+    expect(guidance!.wakeEvent.pendingApprovalsOmitted).toBe(2);
+    expect(guidance!.markdown).toContain("Pending approval requests for this chat: 12 (");
+  });
 
   it("lets an owner run or the requesting run withdraw a pending request; foreign chats, foreign agents and non-pending requests are refused", async () => {
     const t = await setup();

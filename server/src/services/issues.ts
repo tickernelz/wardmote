@@ -214,10 +214,9 @@ const ALL_ISSUE_STATUSES = [
   "done",
   "cancelled",
 ];
-const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
 const MAX_CHAT_PRESENTATION_ATTACHMENTS = 20;
 export const ISSUE_LIST_DEFAULT_LIMIT = 500;
-export const ISSUE_LIST_MAX_LIMIT = 1000;
+export const ISSUE_COUNT_BATCH_SIZE = 1000;
 export const ISSUE_BLOCKER_DIAGNOSTICS_MAX_BLOCKERS = 100;
 export const ISSUE_WAKE_DIAGNOSTICS_MAX_WAKE_REQUESTS = 50;
 export const ISSUE_WAKE_DIAGNOSTICS_MAX_ACTIVITY_RECORDS = 50;
@@ -228,7 +227,7 @@ export const ISSUE_SUBTREE_DIAGNOSTICS_MAX_BLOCKERS_PER_NODE = 20;
 export const ISSUE_SUBTREE_DIAGNOSTICS_MAX_WAKE_REQUESTS_PER_NODE = 5;
 export const ISSUE_SUBTREE_DIAGNOSTICS_MAX_ACTIVITY_RECORDS_PER_NODE = 5;
 const ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE = 500;
-export const MAX_CHILD_ISSUES_CREATED_BY_HELPER = 25;
+export const MAX_CHILD_ISSUES_CREATED_BY_HELPER = 200;
 const MAX_CHILD_COMPLETION_SUMMARIES = 20;
 const CHILD_COMPLETION_SUMMARY_BODY_MAX_CHARS = 500;
 // Non-human author sentinels that agents post under. These ARE eligible for
@@ -2092,8 +2091,8 @@ function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
-export function clampIssueListLimit(limit: number): number {
-  return Math.min(ISSUE_LIST_MAX_LIMIT, Math.max(1, Math.floor(limit)));
+export function normalizeIssueListLimit(limit: number): number {
+  return Math.max(1, Math.floor(limit));
 }
 
 function chunkList<T>(values: T[], size: number): T[][] {
@@ -9528,7 +9527,7 @@ export function issueService(db: Db) {
         );
       if (childCount >= MAX_CHILD_ISSUES_CREATED_BY_HELPER) {
         throw unprocessable(
-          `Parent issue already has the maximum ${MAX_CHILD_ISSUES_CREATED_BY_HELPER} child issues for this helper`,
+          `Parent issue already has the maximum ${MAX_CHILD_ISSUES_CREATED_BY_HELPER} child issues for this helper; create more with POST /api/companies/{companyId}/issues and parentId (wardmoteCreateIssue)`,
         );
       }
 
@@ -12386,10 +12385,7 @@ export function issueService(db: Db) {
     ) => {
       const order = opts?.order === "asc" ? "asc" : "desc";
       const afterCommentId = opts?.afterCommentId?.trim() || null;
-      const limit =
-        opts?.limit && opts.limit > 0
-          ? Math.min(Math.floor(opts.limit), MAX_ISSUE_COMMENT_PAGE_LIMIT)
-          : null;
+      const limit = opts?.limit && opts.limit > 0 ? Math.floor(opts.limit) : null;
 
       const conditions = [eq(issueComments.issueId, issueId)];
       if (afterCommentId) {

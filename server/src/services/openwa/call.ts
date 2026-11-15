@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { chatActions, issueThreadInteractions } from "@tickernelz/wardmote-db";
-import { OPENWA_TOOL_RESULT_LIMIT_BYTES, type OpenwaApprovalCategory } from "@tickernelz/wardmote-shared";
+import type { OpenwaApprovalCategory } from "@tickernelz/wardmote-shared";
 import type { OpenwaOperation } from "@tickernelz/wardmote-shared/openwa-operations";
 import { HttpError } from "../../errors.js";
 import { listOpenwaAudit, logOpenwaActivity } from "./audit.js";
@@ -32,7 +32,9 @@ import {
   assertReadable,
   chatRef,
   consumeReplyGrants,
+  byteBudget,
   fitPage,
+  resultBytes,
   messageIdOf,
   prefixFor,
   replyRequirementFailure,
@@ -58,7 +60,6 @@ type Args = Record<string, unknown>;
 
 const PROBE_TTL_MS = 5 * 60_000;
 const RESULT_ENVELOPE_BYTES = 1024;
-const TEXT_PAGE_BYTES = OPENWA_TOOL_RESULT_LIMIT_BYTES - RESULT_ENVELOPE_BYTES;
 const INLINE_MEDIA_MIN_LENGTH = 512;
 const INLINE_MEDIA = /^(data:[^;,]{1,100};base64,)?[A-Za-z0-9+/=\s]+$/;
 const SCRUB_DEPTH = 12;
@@ -141,24 +142,29 @@ function parseCursor(cursor: unknown): { kind: "i" | "t"; offset: number } | nul
   return { kind: match[1] as "i" | "t", offset: Number(match[2]) };
 }
 
-function pageResult(value: unknown, cursor: { kind: "i" | "t"; offset: number } | null): { result: unknown; truncated: boolean; nextCursor: string | null } {
+function pageResult(
+  value: unknown,
+  cursor: { kind: "i" | "t"; offset: number } | null,
+  maxBytes: number,
+): { result: unknown; truncated: boolean; nextCursor: string | null } {
+  const textPageBytes = maxBytes - RESULT_ENVELOPE_BYTES;
   const container = Array.isArray(value) ? null : PAGED_KEYS.find((key) => Array.isArray(record(value)[key])) ?? null;
   const items = Array.isArray(value) ? value : container ? (record(value)[container] as unknown[]) : null;
   if (items) {
     if (cursor?.kind === "t") throw refusal(400, "invalid_cursor", "This result pages by item");
     const offset = cursor?.offset ?? 0;
     const envelope = container ? { ...record(value), [container]: [] } : {};
-    const fitted = fitPage(envelope, items.slice(offset));
+    const fitted = fitPage(envelope, items.slice(offset), maxBytes);
     const result = container ? { ...envelope, [container]: fitted.page } : fitted.page;
     return { result, truncated: fitted.truncated, nextCursor: fitted.truncated ? "i:" + (offset + fitted.page.length) : null };
   }
   if (cursor?.kind === "i") throw refusal(400, "invalid_cursor", "This result pages by text");
   const serialized = typeof value === "string" ? value : JSON.stringify(value ?? null);
   const offset = cursor?.offset ?? 0;
-  if (offset === 0 && Buffer.byteLength(serialized) <= TEXT_PAGE_BYTES) return { result: value ?? null, truncated: false, nextCursor: null };
+  if (offset === 0 && Buffer.byteLength(serialized) <= textPageBytes) return { result: value ?? null, truncated: false, nextCursor: null };
   if (offset > serialized.length) throw refusal(400, "invalid_cursor", "The cursor is past the end of the result");
-  let end = Math.min(serialized.length, offset + TEXT_PAGE_BYTES);
-  while (end > offset && Buffer.byteLength(serialized.slice(offset, end)) > TEXT_PAGE_BYTES) end -= Math.ceil((end - offset) / 8);
+  let end = Math.min(serialized.length, offset + textPageBytes);
+  while (end > offset && Buffer.byteLength(serialized.slice(offset, end)) > textPageBytes) end -= Math.ceil((end - offset) / 8);
   const more = end < serialized.length;
   return { result: { text: serialized.slice(offset, end) }, truncated: more, nextCursor: more ? "t:" + end : null };
 }
@@ -404,7 +410,7 @@ async function selfSessionConfirmation(ctx: ToolContext, operation: OpenwaOperat
   });
 }
 
-async function wardmoteAuditList(ctx: ToolContext, args: Args, cursor: string | null): Promise<Record<string, unknown>> {
+async function wardmoteAuditList(ctx: ToolContext, args: Args, cursor: string | null, maxBytes: number): Promise<Record<string, unknown>> {
   if (!isOwnerRun(ctx)) throw refusal(403, "owner_only", "Only owner-triggered runs may read this endpoint's audit");
   const parsed = openwaAuditListArgsSchema.safeParse(args);
   if (!parsed.success)
@@ -424,15 +430,12 @@ async function wardmoteAuditList(ctx: ToolContext, args: Args, cursor: string | 
     },
     ...(cursor ? { cursor } : {}),
     limit: filters.limit ?? 25,
+    fits: byteBudget({ operation: OPENWA_AUDIT_LIST_OPERATION, access: "metadata" }, maxBytes),
   }).catch((error: unknown) => {
     if (error instanceof HttpError && error.status === 403) throw refusal(403, "owner_only", error.message);
     throw error;
   });
-  const envelope = { operation: OPENWA_AUDIT_LIST_OPERATION, access: page.access };
-  const fitted = fitPage(envelope, page.items);
-  const last = fitted.page.at(-1);
-  const nextCursor = fitted.truncated && last ? Buffer.from(JSON.stringify([last.occurredAt, last.id])).toString("base64url") : page.nextCursor;
-  return { ...envelope, items: fitted.page, nextCursor, ...(fitted.truncated ? { truncated: true } : {}) };
+  return { operation: OPENWA_AUDIT_LIST_OPERATION, access: page.access, items: page.items, nextCursor: page.nextCursor, ...(page.truncated ? { truncated: true } : {}) };
 }
 
 async function dispatch(ctx: ToolContext, resolved: ResolvedScope, effective: OpenwaEffectiveOperation, args: Args): Promise<OpenwaCallResult> {
@@ -456,7 +459,14 @@ async function dispatch(ctx: ToolContext, resolved: ResolvedScope, effective: Op
   }
 }
 
-async function executeWrite(ctx: ToolContext, resolved: ResolvedScope, effective: OpenwaEffectiveOperation, args: Args, idempotencyKey: string): Promise<Record<string, unknown>> {
+async function executeWrite(
+  ctx: ToolContext,
+  resolved: ResolvedScope,
+  effective: OpenwaEffectiveOperation,
+  args: Args,
+  idempotencyKey: string,
+  maxBytes: number,
+): Promise<Record<string, unknown>> {
   const { operation } = effective;
   const scope: OpenwaWriteScope = {
     companyId: ctx.endpoint.companyId,
@@ -585,7 +595,7 @@ async function executeWrite(ctx: ToolContext, resolved: ResolvedScope, effective
         })
       : [];
   if (toOrigin) await consumeReplyGrants(ctx);
-  const paged = pageResult(value, null);
+  const paged = pageResult(value, null, maxBytes);
   const receipt = {
     operation: operation.id,
     result: paged.result,
@@ -608,7 +618,7 @@ export async function openwaCatalogTool(ctx: ToolContext, args: Args): Promise<R
   if (cursor?.kind === "t") throw refusal(400, "invalid_cursor", "The catalog pages by item");
   const offset = cursor?.offset ?? 0;
   const envelope = { engine: scope.engine, gatewayAdminTools: scope.gatewayAdminTools, adminKey: scope.hasAdminKey, total: entries.length };
-  const fitted = fitPage(envelope, entries.slice(offset));
+  const fitted = fitPage(envelope, entries.slice(offset), resultBytes(args));
   const next = offset + fitted.page.length;
   return { ...envelope, operations: fitted.page, nextCursor: next < entries.length ? "i:" + next : null };
 }
@@ -628,7 +638,8 @@ export async function openwaCallTool(ctx: ToolContext, input: Args): Promise<Rec
   const operationId = String(input.operation);
   ctx.audit.operation = operationId;
   const rawArgs = record(input.args);
-  if (operationId === OPENWA_AUDIT_LIST_OPERATION) return wardmoteAuditList(ctx, rawArgs, str(input.cursor));
+  const maxBytes = resultBytes(input);
+  if (operationId === OPENWA_AUDIT_LIST_OPERATION) return wardmoteAuditList(ctx, rawArgs, str(input.cursor), maxBytes);
   const operation = openwaCatalogOperation(operationId);
   if (!operation) throw refusal(404, "not_found", "Unknown OpenWA operation; list operations with openwa_catalog", { operationId });
   if (OPENWA_SECRET_ISSUING_OPERATIONS.has(operationId)) throw secretIssuingError(operationId);
@@ -648,7 +659,7 @@ export async function openwaCallTool(ctx: ToolContext, input: Args): Promise<Rec
     if (input.cursor !== undefined) throw refusal(400, "invalid_cursor", "Only read operations page with a cursor");
     const idempotencyKey = str(input.idempotencyKey);
     if (!idempotencyKey) throw refusal(400, "invalid_arguments", operationId + " changes state and needs an idempotencyKey", { operationId });
-    return executeWrite(ctx, resolved, effective, args, idempotencyKey);
+    return executeWrite(ctx, resolved, effective, args, idempotencyKey, maxBytes);
   }
   const cursor = parseCursor(input.cursor);
   const { grant } = await assertGate(ctx, effective, args, false, null);
@@ -659,6 +670,6 @@ export async function openwaCallTool(ctx: ToolContext, input: Args): Promise<Rec
     if (grant) await restoreOpenwaGrant(ctx.db, { companyId: ctx.endpoint.companyId, runId: ctx.run.id, grantId: grant });
     throw toolErrorFromGateway(error, false);
   }
-  const paged = pageResult(resultValue(effective, ctx, result), cursor);
+  const paged = pageResult(resultValue(effective, ctx, result), cursor, maxBytes);
   return { operation: operationId, result: paged.result, ...(paged.truncated ? { truncated: true } : {}), nextCursor: paged.nextCursor };
 }

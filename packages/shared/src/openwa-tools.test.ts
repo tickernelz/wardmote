@@ -6,7 +6,7 @@ describe("OpenWA tool catalog", () => {
   it("keeps every tool schema within the context budget", () => {
     const listing = OPENWA_TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
     expect(Buffer.byteLength(JSON.stringify(listing))).toBeLessThanOrEqual(OPENWA_TOOL_SCHEMA_BUDGET_BYTES);
-    expect(OPENWA_TOOL_SCHEMA_BUDGET_BYTES).toBe(12_000);
+    expect(OPENWA_TOOL_SCHEMA_BUDGET_BYTES).toBe(12_800);
   });
 
   it("exposes the first-class tools with a risk and no run-context arguments", () => {
@@ -107,7 +107,9 @@ describe("OpenWA tool catalog", () => {
     expect(read.schema.safeParse({ chat: "628111222333@c.us" }).success).toBe(false);
     expect(read.schema.safeParse({ linkedRef: "not-a-uuid", chat: "628111222333@c.us" }).success).toBe(false);
     expect(read.schema.safeParse({ linkedRef }).success).toBe(false);
-    expect(read.schema.safeParse({ linkedRef, chat: "628111222333@c.us", limit: 101 }).success).toBe(false);
+    expect(read.schema.safeParse({ linkedRef, chat: "628111222333@c.us", limit: 0 }).success).toBe(false);
+    expect(read.schema.safeParse({ linkedRef, chat: "628111222333@c.us", limit: 5000, maxChars: 100_000, maxBytes: 1_000_000 }).success).toBe(true);
+    expect(read.schema.safeParse({ linkedRef, chat: "628111222333@c.us", maxBytes: 512 }).success).toBe(false);
     expect(read.schema.safeParse({ linkedRef, chat: "628111222333@c.us", text: "hi" }).success).toBe(false);
     expect(z.toJSONSchema(read.schema)).toMatchObject({ required: ["linkedRef", "chat"] });
     for (const tool of [list, read, media]) expect(tool.description).toMatch(/Owner-triggered runs only/);
@@ -129,7 +131,9 @@ describe("OpenWA tool catalog", () => {
     expect(config.schema.safeParse({ approvals: { pendingTtlHours: 168 } }).success).toBe(true);
     expect(config.schema.safeParse({ approvals: { pendingTtlHours: 0 } }).success).toBe(false);
     expect(config.schema.safeParse({ approvals: { pendingTtlHours: 169 } }).success).toBe(false);
-    expect(config.schema.safeParse({ customInstructions: "x".repeat(8001) }).success).toBe(false);
+    expect(config.schema.safeParse({ customInstructions: "x".repeat(16_000), chatSettings: { note: "y".repeat(4_000) } }).success).toBe(true);
+    expect(config.schema.safeParse({ customInstructions: "x".repeat(16_001) }).success).toBe(false);
+    expect(config.schema.safeParse({ chatSettings: { note: "y".repeat(4_001) } }).success).toBe(false);
     const properties = Object.keys((config.inputSchema.properties ?? {}) as Record<string, unknown>);
     for (const field of OPENWA_CONFIG_UI_ONLY_FIELDS) {
       expect(properties).not.toContain(field);

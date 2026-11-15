@@ -189,7 +189,7 @@ Each chat has an **Activation** (`activation`): `auto` (Automatic, default),
 Per-chat settings override the endpoint defaults: **Activation**, **Replies to
 non-owners**, **Trigger overrides** (Default/On/Off per rule), **Prefix
 override**, **Chat keywords**, **Absence timer (seconds)** (blank uses the
-endpoint default) and **Note for the agent** (up to 2000 characters). **Add a
+endpoint default) and **Note for the agent** (up to 4000 characters; the agent reads it whole). **Add a
 chat from WhatsApp** lists the gateway's chats. Routes:
 `GET`/`PUT` `/api/chat-endpoints/:endpointId/openwa/chats` (body `chatId` ending in
 `@c.us`, `@g.us` or `@lid`, optional `label`, `settings`),
@@ -381,7 +381,7 @@ final output is never published (reason `completion_report`).
 | Typing indicator | `typingIndicator` | on | |
 | Owner number label: Show the label / Label text | `ownerNumberPrefix.enabled` / `.text` | on / `🤖 *Assistant:*` | 1 to 64 characters |
 | Gateway admin tools | `gatewayAdminTools` | `off` | `off`, `read`, `full` |
-| Custom instructions | `customInstructions` | empty | up to 8000 characters |
+| Custom instructions | `customInstructions` | empty | up to 16000 characters; `openwa_endpoint_config` returns it whole |
 | Keep content for (days) | `auditContentRetentionDays` | 90 | 1 to 3650 |
 
 Each chat keeps one conversation task until it has been idle for
@@ -461,7 +461,7 @@ to such an adapter puts the endpoint in Attention and stops admission.
 ## Approvals and grants
 
 The agent asks with `openwa_request_approval` (categories, scope, summary,
-proposed action and an agent-written `messageToOwners`, up to 3500 characters).
+proposed action and an agent-written `messageToOwners`, sent as one WhatsApp bubble of at most 4096 characters, the gateway's text limit; a longer argument is refused with `invalid_arguments`; text that formatting pushes past the bubble is cut at a word boundary, marked `[…]`, and the tool returns `truncated: true` with `messageShortened`).
 The server records the request and sends one bubble per owner approval chat (the
 agent number's DM with each owner, or the owner's self-chat in `owner_number`
 mode), or a single bubble to the origin chat's owner report group when one is
@@ -591,7 +591,7 @@ Exposure: native runner tools; the HTTP route
 toolset `openwa`. The bundled skill is `skills/openwa/SKILL.md`. Tools are offered on
 runs of OpenWA conversation issues and their child issues. The server binds
 company, endpoint, session, issue, run and profile; arguments never carry them.
-Results are capped at 16 KB with continuation cursors, and media is never inlined.
+Read results page at `maxBytes` (default 32 KB, at least 1 KB, no upper bound) with `truncated: true` and a continuation cursor; `maxChars` sets the per-message text and transcript cut (each cut marked `textTruncated` or `transcriptTruncated`), and media is never inlined. Free-text arguments and id lists carry loose caps listed in `skills/openwa/SKILL.md` (for example 200000 characters of send text, 16000 of custom instructions, 4000 per chat note). Fixed limits are the gateway's: 4096 characters per bubble, 2000 messages of live history (`historyCeiling`), poll 12 options, location text 1024, contact name and filename 255, 1000 contacts or chats per listing (`gatewayListLimit`).
 Every call is audited as `tool_called`.
 
 | Tool | Risk | Purpose |
@@ -1102,7 +1102,7 @@ of the task's siblings and parent.
   `other`, profile `read_only`) on the conversation. If the chat rotated to a
   new conversation issue meanwhile, the wake goes to the newest one.
 - The wake event's `completedTasks` lists identifier, title, status, assignee,
-  link, the assignee's latest comment (shortened) and, for blocked tasks, the
+  link, the assignee's latest comment (cut at 4000 characters with `latestCommentTruncated` and `latestCommentId` for the full read) and, for blocked tasks, the
   blockers and unblock descriptor. The guidance tells the agent to send one
   message in the owner's language covering only those tasks: who did the work
   and the link; for cancelled tasks, whether to continue or take another route;

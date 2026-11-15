@@ -111,7 +111,7 @@ describe("OpenWA endpoint policy", () => {
     [{ rotateAfterIdleHours: 0 }],
     [{ progressNudgeSeconds: -1 }],
     [{ auditContentRetentionDays: 0 }],
-    [{ customInstructions: "x".repeat(8001) }],
+    [{ customInstructions: "x".repeat(16_001) }],
     [{ ownerNumberPrefix: { text: "" } }],
     [{ triggers: { commandPrefix: { prefix: "two words" } } }],
     [{ triggers: { keywords: [""] } }],
@@ -125,14 +125,14 @@ describe("OpenWA endpoint policy", () => {
     const policy = openwaEndpointPolicySchema.parse({
       absenceSeconds: 10,
       progressNudgeSeconds: 0,
-      customInstructions: "x".repeat(8000),
+      customInstructions: "x".repeat(16_000),
       approvals: { maxReminders: 0, pendingTtlHours: 1 },
     });
     expect(openwaEndpointPolicySchema.parse({ approvals: { pendingTtlHours: 168 } }).approvals.pendingTtlHours).toBe(168);
     expect(policy.approvals.pendingTtlHours).toBe(1);
     expect(policy.absenceSeconds).toBe(10);
     expect(policy.progressNudgeSeconds).toBe(0);
-    expect(policy.customInstructions).toHaveLength(8000);
+    expect(policy.customInstructions).toHaveLength(16_000);
     expect(policy.approvals.maxReminders).toBe(0);
   });
 
@@ -175,7 +175,7 @@ describe("OpenWA per-chat settings", () => {
         triggers: { allMessages: true },
         absenceSeconds: 300,
         replyPolicy: "owner_absent_only",
-        note: "n".repeat(2000),
+        note: "n".repeat(4_000),
       }),
     ).toMatchObject({ activation: "on", absenceSeconds: 300, replyPolicy: "owner_absent_only" });
   });
@@ -192,7 +192,7 @@ describe("OpenWA per-chat settings", () => {
     [{ activation: "maybe" }],
     [{ ownerReportChatKey: "628333000511@c.us" }],
     [{ ownerReportChatKey: "" }],
-    [{ note: "n".repeat(2001) }],
+    [{ note: "n".repeat(4_001) }],
     [{ absenceSeconds: 5 }],
     [{ replyPolicy: "never" }],
     [{ triggers: { unknown: true } }],

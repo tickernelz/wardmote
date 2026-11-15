@@ -1,3 +1,4 @@
+import { OPENWA_TOOL_RESULT_DEFAULT_BYTES } from "@tickernelz/wardmote-shared";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -976,13 +977,13 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     }
   });
 
-  it("caps read results at 16 KB with a continuation cursor", async () => {
+  it("caps read results at the default page budget with a continuation cursor", async () => {
     const t = await setup();
     const c = await conversation(t, MEMBER);
     for (let index = 0; index < 60; index++) t.gateway.inbound({ chatId: MEMBER, body: index + ":" + "x".repeat(1800), emit: false });
     const binding = await run(t, c, { triggerClass: "other" });
     const first = await executeOpenwaTool(db, binding, "openwa_read_chat", { limit: 60 });
-    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(16_384);
+    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(OPENWA_TOOL_RESULT_DEFAULT_BYTES);
     expect(first).toMatchObject({ truncated: true, source: "stored" });
     expect(String(first.nextCursor)).toMatch(/^s:/);
     const firstIds = (first.messages as Array<{ id: string }>).map((message) => message.id);
@@ -992,8 +993,42 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     expect(secondIds.some((id) => firstIds.includes(id))).toBe(false);
     expect(JSON.stringify(first)).not.toContain("base64");
     const live = await executeOpenwaTool(db, binding, "openwa_read_chat", { source: "live", limit: 60 });
-    expect(Buffer.byteLength(JSON.stringify(live))).toBeLessThanOrEqual(16_384);
+    expect(Buffer.byteLength(JSON.stringify(live))).toBeLessThanOrEqual(OPENWA_TOOL_RESULT_DEFAULT_BYTES);
     expect(String(live.nextCursor)).toMatch(/^l:\d+$/);
+  });
+
+  it("stops fetching stored gateway pages once the byte budget is full", async () => {
+    const t = await setup();
+    const c = await conversation(t, MEMBER);
+    for (let index = 0; index < 250; index++) t.gateway.inbound({ chatId: MEMBER, body: index + ":" + "x".repeat(1800), emit: false });
+    const binding = await run(t, c, { triggerClass: "other" });
+    const storedLists = () => t.gateway.requests.filter((entry) => entry.method === "GET" && entry.path.endsWith("/messages")).length;
+    const before = storedLists();
+    const read = await executeOpenwaTool(db, binding, "openwa_read_chat", { limit: 5_000 });
+    expect(storedLists() - before).toBe(1);
+    expect(read).toMatchObject({ truncated: true, source: "stored" });
+    expect(Buffer.byteLength(JSON.stringify(read))).toBeLessThanOrEqual(OPENWA_TOOL_RESULT_DEFAULT_BYTES);
+    expect(String(read.nextCursor)).toMatch(/^s:/);
+  });
+
+  it("returns caller-sized pages past the default budget and the gateway page, and full text on request", async () => {
+    const t = await setup();
+    const c = await conversation(t, MEMBER);
+    for (let index = 0; index < 150; index++) t.gateway.inbound({ chatId: MEMBER, body: index + ":" + "x".repeat(300), emit: false });
+    t.gateway.inbound({ chatId: MEMBER, body: "long:" + "y".repeat(5_000), emit: false });
+    const binding = await run(t, c, { triggerClass: "other" });
+
+    const wide = await executeOpenwaTool(db, binding, "openwa_read_chat", { limit: 151, maxBytes: 1_000_000 });
+    const messages = wide.messages as Array<{ text: string; textTruncated?: true; textChars?: number }>;
+    expect(messages).toHaveLength(151);
+    expect(wide).not.toHaveProperty("truncated");
+    expect(Buffer.byteLength(JSON.stringify(wide))).toBeGreaterThan(OPENWA_TOOL_RESULT_DEFAULT_BYTES);
+    expect(messages[0]).toMatchObject({ textTruncated: true, textChars: 5_005 });
+    expect(messages[0]!.text.length).toBeLessThan(5_005);
+
+    const full = await executeOpenwaTool(db, binding, "openwa_read_chat", { limit: 1, maxChars: 10_000 });
+    expect((full.messages as Array<{ text: string }>)[0]!.text).toBe("long:" + "y".repeat(5_000));
+    expect((full.messages as Array<Record<string, unknown>>)[0]).not.toHaveProperty("textTruncated");
   });
 
   it("reads any visible chat in agent_number mode but only enabled chats in owner_number mode", async () => {
@@ -1212,12 +1247,12 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     expect(JSON.stringify(found)).not.toContain("628666000999\"");
   });
 
-  it("pages oversized find results under 16 KB and truncates long media transcripts with a flag", async () => {
+  it("pages oversized find results under the default page budget and truncates long media transcripts with a flag", async () => {
     const t = await setup();
     const c = await conversation(t, MEMBER);
     const binding = await run(t, c, { triggerClass: "owner" });
     const wide = "名".repeat(200);
-    for (let index = 0; index < 20; index++) {
+    for (let index = 0; index < 40; index++) {
       const digits = "6287770" + String(index).padStart(5, "0");
       t.gateway.chats.push({ id: digits + "@c.us", name: "Zed " + wide + index });
       t.gateway.contacts.push({ id: digits + "@c.us", name: "Zed " + wide + index, number: digits });
@@ -1228,16 +1263,16 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     let pages = 0;
     do {
       const page = await executeOpenwaTool(db, binding, "openwa_find", { query: "zed", ...(cursor ? { cursor } : {}) });
-      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(16_384);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(OPENWA_TOOL_RESULT_DEFAULT_BYTES);
       chats.push(...(page.chats as unknown[]));
       contacts.push(...(page.contacts as unknown[]));
       cursor = page.nextCursor as string | null;
       pages++;
     } while (cursor);
     expect(pages).toBeGreaterThan(1);
-    expect(chats).toHaveLength(20);
-    expect(contacts).toHaveLength(20);
-    expect(new Set(chats.map((chat) => (chat as { chatRef: string }).chatRef)).size).toBe(20);
+    expect(chats).toHaveLength(40);
+    expect(contacts).toHaveLength(40);
+    expect(new Set(chats.map((chat) => (chat as { chatRef: string }).chatRef)).size).toBe(40);
     expect((await rejection(executeOpenwaTool(db, binding, "openwa_find", { query: "zed", cursor: "l:5" }))).code).toBe("invalid_cursor");
 
     const row = t.gateway.inbound({ chatId: MEMBER, body: "", emit: false });
@@ -1269,7 +1304,7 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
       },
     });
     const media = await executeOpenwaTool(db, binding, "openwa_get_media", { messageId: row.waMessageId });
-    expect(Buffer.byteLength(JSON.stringify(media))).toBeLessThanOrEqual(16_384);
+    expect(Buffer.byteLength(JSON.stringify(media))).toBeLessThanOrEqual(OPENWA_TOOL_RESULT_DEFAULT_BYTES);
     const items = media.media as Array<{ transcript?: string; transcriptTruncated?: boolean }>;
     expect(items).toHaveLength(2);
     expect(items.every((item) => item.transcriptTruncated === true)).toBe(true);

@@ -16,7 +16,6 @@ import {
   type Db,
 } from "@tickernelz/wardmote-db";
 import {
-  OPENWA_APPROVAL_MESSAGE_MAX_LENGTH,
   OPENWA_GRANT_CATEGORIES,
   openwaEndpointPolicySchema,
   type ChatOwnerApprovalChannel,
@@ -32,7 +31,7 @@ import type { IssueAssignmentWakeupDeps } from "../issue-assignment-wakeup.js";
 import { issueService } from "../issues.js";
 import { openwaThreadId } from "./adapter.js";
 import { logOpenwaActivity, recordOpenwaAudit } from "./audit.js";
-import { formatOpenwaPublication } from "./format.js";
+import { OPENWA_TEXT_LIMIT, formatOpenwaPublication } from "./format.js";
 import { OpenwaGatewayError } from "./gateway.js";
 import { maskOpenwaDigits } from "./guidance.js";
 import { openwaOwnerFacingChat } from "./owner-group.js";
@@ -268,7 +267,7 @@ function bubbleText(ctx: ToolContext, markdown: string): { text: string; shorten
   };
   const whole = single(markdown);
   if (whole !== null) return { text: whole, shortenedFrom: null };
-  for (let room = Math.min(markdown.length, OPENWA_APPROVAL_MESSAGE_MAX_LENGTH); room >= APPROVAL_SHORTEN_FLOOR; room = Math.floor(room * 0.9)) {
+  for (let room = Math.min(markdown.length, OPENWA_TEXT_LIMIT); room >= APPROVAL_SHORTEN_FLOOR; room = Math.floor(room * 0.9)) {
     const slice = markdown.slice(0, room);
     let end = slice.length;
     while (end > 0 && !/\s/.test(slice[end - 1]!)) end--;
@@ -409,7 +408,7 @@ export async function openwaRequestApprovalTool(ctx: ToolContext, args: Args): P
   const planned = await plannedBubbles(ctx, owners);
   if (!planned.length) throw new OpenwaToolError(409, "no_owner_chat", "No current owner has a WhatsApp number to receive the request");
   const { text: body, shortenedFrom } = bubbleText(ctx, String(args.messageToOwners));
-  const shortened = shortenedFrom === null ? {} : { messageShortened: { originalLength: shortenedFrom, sentLength: body.length } };
+  const shortened = shortenedFrom === null ? {} : { truncated: true, messageShortened: { originalLength: shortenedFrom, sentLength: body.length } };
   const { registry } = await ctx.runtime();
   const reserved: OpenwaOutboundRecord[] = [];
   const db = ctx.db;

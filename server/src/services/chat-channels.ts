@@ -30320,7 +30320,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
   }
 
   async function listActivityPage(endpointId: string, limit = 25, cursor?: string) {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw badRequest("Activity limit must be between 1 and 100");
+    if (!Number.isInteger(limit) || limit < 1) throw badRequest("Activity limit must be a positive integer");
     let before: { createdAt: string; id: string } | undefined;
     if (cursor !== undefined) {
       try {

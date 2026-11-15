@@ -77,7 +77,7 @@ export const openwaAuditListArgsSchema = z
     actorKind: z.enum(CHAT_AUDIT_ACTOR_KINDS).optional(),
     from: z.string().datetime({ offset: true }).optional(),
     to: z.string().datetime({ offset: true }).optional(),
-    limit: z.number().int().min(1).max(100).optional(),
+    limit: z.number().int().min(1).optional(),
   })
   .strict();
 

@@ -222,11 +222,11 @@ function registerRouteMocks() {
   vi.doMock("../services/index.js", () => ({
     issueTreeControlService: () => mockIssueTreeControlService,
     ISSUE_LIST_DEFAULT_LIMIT: 100,
-    ISSUE_LIST_MAX_LIMIT: 500,
+    ISSUE_COUNT_BATCH_SIZE: 500,
     accessService: () => mockAccessService,
     agentService: () => mockAgentService,
     budgetService: () => mockBudgetService,
-    clampIssueListLimit: (value: number) => Math.min(Math.max(value, 1), 500),
+    normalizeIssueListLimit: (value: number) => Math.max(value, 1),
     companySkillService: () => ({
       completeTestRunForIssue: vi.fn(async () => null),
     }),

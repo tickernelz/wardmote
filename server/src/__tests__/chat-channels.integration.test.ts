@@ -17135,7 +17135,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     expect(found).toEqual(expected);
     expect(await service.listActivity(endpoint.id)).toHaveLength(100);
     await expect(service.listActivityPage(endpoint.id, 0)).rejects.toMatchObject({ status: 400 });
-    await expect(service.listActivityPage(endpoint.id, 101)).rejects.toMatchObject({ status: 400 });
+    await expect(service.listActivityPage(endpoint.id, 500)).resolves.toMatchObject({ nextCursor: null });
     await expect(service.listActivityPage(endpoint.id, 25, "invalid")).rejects.toMatchObject({ status: 400 });
   });
 

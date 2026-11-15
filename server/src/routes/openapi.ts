@@ -3732,8 +3732,8 @@ registry.registerPath({
   tags: ["chat-channels"],
   summary: "List chat endpoint delivery and publication activity",
   description:
-    "Returns the endpoint's recent redacted inbound-delivery and outbound-publication ledger, including whether a failed item can be replayed. Supply limit (1–100) for a page object and follow nextCursor for older activity. Requests without pagination parameters retain the legacy recent-100 array.",
-  request: { params: z.object({ endpointId: z.string().uuid() }), query: z.object({ limit: z.coerce.number().int().min(1).max(100).optional(), cursor: z.string().max(256).optional() }) },
+    "Returns the endpoint's recent redacted inbound-delivery and outbound-publication ledger, including whether a failed item can be replayed. Supply limit (a positive integer, no upper bound) for a page object and follow nextCursor for older activity. Requests without pagination parameters retain the legacy recent-100 array.",
+  request: { params: z.object({ endpointId: z.string().uuid() }), query: z.object({ limit: z.coerce.number().int().min(1).optional(), cursor: z.string().max(256).optional() }) },
   responses: {
     200: r.ok(z.union([z.array(chatActivityResponseSchema), z.object({ items: z.array(chatActivityResponseSchema), nextCursor: z.string().nullable() })])),
     400: r.badRequest,
@@ -3763,11 +3763,11 @@ registry.registerPath({
   tags: ["chat-channels"],
   summary: "List the OpenWA endpoint audit trail",
   description:
-    "Returns the endpoint's audit entries newest first with cursor paging (limit 1–100, default 25; follow nextCursor). Filters: kind (comma-separated or repeated), chatKey, actorKind, actorRef, from and to (ISO timestamps, inclusive). Endpoint owners and company owners receive content (message text, owner text, redacted tool arguments); other board users with endpoint access receive metadata only and `access` is `metadata`. Content is purged after the endpoint's retention period; purged entries keep their metadata and report contentPurged.",
+    "Returns the endpoint's audit entries newest first with cursor paging (limit is any positive integer, default 25; follow nextCursor). Filters: kind (comma-separated or repeated), chatKey, actorKind, actorRef, from and to (ISO timestamps, inclusive). Endpoint owners and company owners receive content (message text, owner text, redacted tool arguments); other board users with endpoint access receive metadata only and `access` is `metadata`. Content is purged after the endpoint's retention period; purged entries keep their metadata and report contentPurged.",
   request: {
     params: z.object({ endpointId: z.string().uuid() }),
     query: z.object({
-      limit: z.coerce.number().int().min(1).max(100).optional(),
+      limit: z.coerce.number().int().min(1).optional(),
       cursor: z.string().max(256).optional(),
       kind: z.string().optional(),
       chatKey: z.string().max(256).optional(),
