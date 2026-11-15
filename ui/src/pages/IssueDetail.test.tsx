@@ -971,9 +971,10 @@ function createPauseHold(
     companyId: "company-1",
     rootIssueId: "issue-1",
     mode: "pause",
+    scope: "subtree",
     status: "active",
     reason: null,
-    releasePolicy: { strategy: "manual", note: "full_pause" },
+    releasePolicy: { strategy: "manual" },
     createdByActorType: "user",
     createdByAgentId: null,
     createdByUserId: "user-1",
@@ -4807,7 +4808,7 @@ describe("IssueDetail", () => {
         isRoot: true,
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "full_pause" },
+        releasePolicy: { strategy: "manual" },
       };
 
       mockIssuesApi.get.mockResolvedValue(createIssue());
@@ -4926,7 +4927,7 @@ describe("IssueDetail", () => {
       id: "pause-hold-1",
       mode: "pause",
       reason: null,
-      releasePolicy: { strategy: "manual", note: "full_pause" },
+      releasePolicy: { strategy: "manual" },
       members: [],
     });
 
@@ -4985,7 +4986,9 @@ describe("IssueDetail", () => {
     expect(mockIssuesApi.createTreeHold).toHaveBeenCalledWith("PAP-1", {
       mode: "pause",
       reason: null,
-      releasePolicy: { strategy: "manual", note: "full_pause" },
+      releasePolicy: { strategy: "manual" },
+      scope: "subtree",
+      stopAt: "safe_point",
     });
   });
 
@@ -5009,7 +5012,7 @@ describe("IssueDetail", () => {
         id: "leaf-pause-hold-1",
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "leaf_pause" },
+        releasePolicy: { strategy: "manual" },
         members: [],
       });
 
@@ -5080,7 +5083,9 @@ describe("IssueDetail", () => {
       } else expect(mockIssuesApi.createTreeHold).toHaveBeenCalledWith("PAP-1", {
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "leaf_pause" },
+        releasePolicy: { strategy: "manual" },
+        scope: "task",
+        stopAt: "safe_point",
         metadata: { source: "issue_active_run_control", runId: "run-active-1" },
       });
 
@@ -5106,7 +5111,9 @@ describe("IssueDetail", () => {
       expect(mockIssuesApi.createTreeHold).toHaveBeenLastCalledWith("PAP-1", {
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "leaf_pause" },
+        releasePolicy: { strategy: "manual" },
+        scope: "task",
+        stopAt: "safe_point",
       });
       expect(mockPushToast).not.toHaveBeenCalled();
       mockIssuesApi.createTreeHold.mockRejectedValueOnce(
@@ -5661,7 +5668,7 @@ describe("IssueDetail", () => {
         isRoot: true,
         mode: "pause",
         reason: null,
-        releasePolicy: { strategy: "manual", note: "leaf_pause" },
+        releasePolicy: { strategy: "manual" },
       },
     });
     mockIssuesApi.listTreeHolds.mockResolvedValue([activeHold]);

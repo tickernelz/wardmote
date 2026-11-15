@@ -49,6 +49,7 @@ export interface ActiveRunForIssue {
   currentToolName?: string | null;
   lastAssistantSnippet?: string | null;
   lastEventAt?: string | Date | null;
+  safePointPause?: boolean;
 }
 
 export interface LiveRunForIssue {
@@ -83,6 +84,7 @@ export interface LiveRunForIssue {
   lastAssistantSnippet?: string | null;
   lastEventAt?: string | null;
   modelFallback?: RunModelFallbackState | null;
+  safePointPause?: boolean;
 }
 
 export interface WatchdogDecisionInput {

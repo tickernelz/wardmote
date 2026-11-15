@@ -625,8 +625,9 @@ export function TaskChatComposer({
     return () => window.removeEventListener("beforeunload", flushDraft);
   }, [draftKey]);
 
+  const pauseBlocksInput = Boolean(pause) && Boolean(conversationMode);
   const canAcceptFiles =
-    !pause &&
+    !pauseBlocksInput &&
     !queuedEdit &&
     !uncertainSubmission &&
     Boolean(creation || onAttachImage || onImageUpload);
@@ -821,7 +822,7 @@ export function TaskChatComposer({
    * the paste when it carries no images the plugin should handle.
    */
   function handlePasteCapture(evt: ReactClipboardEvent<HTMLDivElement>) {
-    if (pause || !canAcceptFiles) return;
+    if (pauseBlocksInput || !canAcceptFiles) return;
     const files = Array.from(evt.clipboardData?.files ?? []);
     if (files.length === 0) return;
     if (creation) {
@@ -867,7 +868,7 @@ export function TaskChatComposer({
     Boolean(onStop || stopControl.stopping);
   const uploadPending = attachments.some((item) => item.status === "uploading");
   const uploadFailed = attachments.some((item) => item.status === "error");
-  const takeoverVisible = Boolean(takeover && !pause && !queuedEdit);
+  const takeoverVisible = Boolean(takeover && !pauseBlocksInput && !queuedEdit);
   const [editorFocused, setEditorFocused] = useState(false);
   const [takeoverFocusedId, setTakeoverFocusedId] = useState<string | null>(null);
   const [takeoverExpandedId, setTakeoverExpandedId] = useState<string | null>(null);
@@ -896,7 +897,7 @@ export function TaskChatComposer({
   const canResetPausedConversation = conversationMode && !queuedEdit && body.trim() === "/new" && attachments.length === 0;
 
   async function submit() {
-    if (disabled || (pause && !canResetPausedConversation)) return;
+    if (disabled || (pauseBlocksInput && !canResetPausedConversation)) return;
     if (creation) {
       if (submittingRef.current || uploadPending || uploadFailed || creation.submitDisabled || (!bodyRef.current.trim() && !creation.canSubmitWithoutBody)) return;
       submittingRef.current = true;
@@ -1223,7 +1224,7 @@ export function TaskChatComposer({
     </Button>
   ) : null;
 
-  if (pause && (!conversationMode || queuedEdit)) {
+  if (pause && conversationMode && queuedEdit) {
     return <TaskChatPausedTakeover {...pause} hasDraft={Boolean(body.trim() || attachments.length)} />;
   }
 
@@ -1473,6 +1474,7 @@ export function TaskChatComposer({
               <p className="text-xs text-ink-3">Send /new to start a fresh session and resume this conversation.</p>
             </div>
           ) : null}
+          {pause && !conversationMode ? <TaskChatPausedTakeover {...pause} acceptsMessages /> : null}
           <div
             data-testid="task-chat-composer-input"
             onFocus={(event) => {
@@ -1700,7 +1702,7 @@ export function TaskChatComposer({
                 (showStop
                   ? disabled || stopControl.stopping
                   : disabled ||
-                    (Boolean(pause) && !canResetPausedConversation) ||
+                    (pauseBlocksInput && !canResetPausedConversation) ||
                     submitting ||
                     !!uncertainSubmission ||
                     uploadPending ||

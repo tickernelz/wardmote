@@ -1996,40 +1996,28 @@ describe("TaskChatComposer", () => {
       expect(onAdd).toHaveBeenCalledWith("/new", undefined, undefined, undefined, expect.any(String), undefined);
     });
 
-    it("preserves a typed draft and blocks sending until resume completes", async () => {
-      const onAdd = vi.fn();
+    it("keeps a paused task's composer open so the message waits for Resume", async () => {
+      const onAdd = vi.fn().mockResolvedValue(undefined);
       const onResume = vi.fn();
-      const props = { onAdd, workMode: "standard" as const, draftKey: "paused-draft" };
-      act(() => root!.render(<TaskChatComposer {...props} />));
+      act(() => root!.render(<TaskChatComposer onAdd={onAdd} workMode="standard" pause={{ scope: "leaf", onResume }} />));
+      expect(container.textContent).toContain("This task is paused.");
+      expect(container.textContent).toContain("Your message waits until Resume.");
       typeText("Please check mobile too.");
-      act(() => root!.render(<TaskChatComposer {...props} pause={{ scope: "leaf", onResume }} />));
-      expect(container.querySelector('[contenteditable="true"]')).toBeNull();
-      expect(container.querySelector('button[aria-label="Send"]')).toBeNull();
-      expect(container.textContent).toContain("Your draft is saved.");
-      act(() => container.querySelector("button")!.click());
-      expect(onResume).toHaveBeenCalledOnce();
-      expect(onAdd).not.toHaveBeenCalled();
-      act(() => root!.render(<TaskChatComposer {...props} pause={{ scope: "leaf", pending: true, onResume }} />));
-      expect(container.querySelector("button")!.disabled).toBe(true);
-      act(() => root!.render(<TaskChatComposer {...props} />));
-      expect(editable().textContent).toBe("Please check mobile too.");
       await act(async () => sendButton().click());
       expect(onAdd).toHaveBeenCalledWith("Please check mobile too.", undefined, undefined, undefined, expect.any(String), undefined);
+      const resume = [...container.querySelectorAll("button")].find((button) => button.textContent === "Resume")!;
+      act(() => resume.click());
+      expect(onResume).toHaveBeenCalledOnce();
     });
 
-    it("takes precedence over pending questions and queued-message edits", () => {
-      const onSkip = vi.fn();
+    it("keeps a paused conversation's queued-message edit behind the pause takeover", () => {
       act(() => root!.render(<TaskChatComposer
-        onAdd={vi.fn()} workMode="standard"
+        onAdd={vi.fn()} workMode="standard" conversationMode
         pause={{ scope: "subtree" }}
         queuedEdit={{ commentId: "queued", body: "Queued draft" }}
-        takeover={{ id: "question", label: "Pending input", pendingCount: 1, content: <button>Answer question</button>, onDismiss: vi.fn(), onSkip }}
       />));
       expect(container.textContent).toContain("Subtree is paused.");
-      expect(container.textContent).not.toContain("Answer question");
-      expect(container.textContent).not.toContain("Skip");
       expect(container.querySelector('[contenteditable="true"]')).toBeNull();
-      expect(container.querySelector("button")!.disabled).toBe(true);
     });
   });
 

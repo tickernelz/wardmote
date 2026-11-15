@@ -43,6 +43,7 @@ import type {
   UpsertIssueWatchdog,
   UpsertIssueDocument,
   AgentTodoSnapshot,
+  PausedTask,
 } from "@tickernelz/wardmote-shared";
 import { api, ApiError, detachInflightGet, oversizedUploadError, type RequestOptions } from "./client";
 import type { MessageDeliveryDisposition, MessageDeliveryMode } from "@/lib/message-delivery-command";
@@ -333,6 +334,8 @@ export const issuesApi = {
     ),
   getTreeHold: (id: string, holdId: string) =>
     api.get<IssueTreeHold>(`/issues/${id}/tree-holds/${holdId}`),
+  listPausedTasks: (companyId: string) =>
+    api.get<PausedTask[]>(`/companies/${companyId}/paused-tasks`),
   listTreeHolds: (
     id: string,
     filters?: {

@@ -138,6 +138,7 @@ import { environmentService } from "../services/environments.js";
 import { environmentRuntimeService } from "../services/environment-runtime.js";
 import { resolvePluginSandboxProviderDriverByKey } from "../services/plugin-environment-driver.js";
 import type { AdapterExecutionTarget } from "@tickernelz/wardmote-adapter-utils/execution-target";
+import { getAdapterSteerTarget } from "@tickernelz/wardmote-adapter-utils/adapter-steer-registry";
 import type {
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestResult,
@@ -325,6 +326,10 @@ function readRunLogLimitBytes(value: unknown) {
   const parsed = Number(value ?? RUN_LOG_DEFAULT_LIMIT_BYTES);
   if (!Number.isFinite(parsed)) return RUN_LOG_DEFAULT_LIMIT_BYTES;
   return Math.max(1, Math.min(RUN_LOG_MAX_LIMIT_BYTES, Math.trunc(parsed)));
+}
+
+function canPauseRunAtSafePoint(run: { id: string; status: string }) {
+  return run.status === "queued" || Boolean(getAdapterSteerTarget(run.id)?.stopAtSafePoint);
 }
 
 function readLiveRunsQueryInt(value: unknown, max: number, fallback = 0) {
@@ -6796,6 +6801,7 @@ export function agentRoutes(
       avatarUrl: agentAvatarUrl(resolveAgentAppearance(run.agentAppearance, run.agentId), 512),
       execution: projections.get(run.id) ?? null,
       outputSilence: await heartbeat.buildRunOutputSilence(run),
+      safePointPause: canPauseRunAtSafePoint(run),
     }))), req.actor.type === "board" ? getActorInfo(req).actorId : null));
   });
 
@@ -7437,6 +7443,7 @@ export function agentRoutes(
       avatarUrl: agentAvatarUrl(resolveAgentAppearance(run.agentAppearance, run.agentId), 512),
       execution: projections.get(run.id) ?? null,
       outputSilence: await heartbeat.buildRunOutputSilence({ ...run, companyId: issue.companyId }),
+      safePointPause: canPauseRunAtSafePoint(run),
     }))));
   });
 
