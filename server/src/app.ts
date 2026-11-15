@@ -8,6 +8,7 @@ import { DELIVERY_QUEUES } from "./services/delivery-work-notifications.js";
 import { createLifecycleDriver } from "./services/agent-lifecycle-driver.js";
 import { startAgentLifecycle } from "./services/agent-lifecycle.js";
 import { idleAdmissionMiddleware, trackIdleRequestHandlers } from "./middleware/idle-admission.js";
+import { openwaOwnerGroupRequestScope } from "./services/openwa/owner-group.js";
 import { isIdleTaskDrainActive, trackIdleWork } from "./services/task-admission.js";
 import { browserUseRoutes } from "./routes/browser-use.js";
 import { registerChatActionWork } from "./services/chat-action-work.js";
@@ -455,6 +456,7 @@ export async function createApp(
 ) {
   const app = express();
   app.use(idleAdmissionMiddleware);
+  app.use(openwaOwnerGroupRequestScope);
   const staticUi = express.Router();
   app.locals.wardmoteDb = db;
   const health = healthRoutes(db, {

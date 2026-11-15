@@ -8,13 +8,14 @@ import {
   type OpenwaChatSettings,
 } from "@tickernelz/wardmote-shared";
 import { HttpError } from "../../errors.js";
+import { openwaForgetOwnerGroup } from "./owner-group.js";
 import type { OpenwaAgentConfigOrigin } from "./owners.js";
 import { OpenwaToolError, chatRef, fitPage, openwaToolOwners, resolveTarget, resultBytes, type ToolContext } from "./tools.js";
 
 type Args = Record<string, unknown>;
 type SenderList = "allow" | "deny";
 
-const CHAT_SETTING_KEYS = ["activation", "triggers", "absenceSeconds", "replyPolicy", "note", "ownerReportChatKey"] as const;
+const CHAT_SETTING_KEYS = ["activation", "triggers", "absenceSeconds", "replyPolicy", "note", "ownerReportChatKey", "ownerGroupAccess"] as const;
 const ENDPOINT_SETTING_KEYS = ["approvals", "burstWindowSeconds", "customInstructions"] as const;
 
 function record(value: unknown): Record<string, unknown> {
@@ -151,6 +152,7 @@ export async function openwaEndpointConfigTool(ctx: ToolContext, args: Args): Pr
     }
     if (chatSettings) {
       await owners.putChat(ctx.endpoint.id, { chatId: target.chatId, settings: (current) => mergeChatSettings(current, chatSettings) }, null, origin);
+      openwaForgetOwnerGroup(ctx.endpoint.id, target.chatKey);
       changed.chat = chatRef(ctx, target.chatId);
     }
     if (add.length || remove.length) changed.senders = await owners.applySenderRuleChanges(ctx.endpoint.id, { add, remove }, origin);

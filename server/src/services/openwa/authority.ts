@@ -25,6 +25,7 @@ import { RUN_TOOL_PROFILE_CONTEXT_KEY } from "@tickernelz/wardmote-adapter-utils
 import { HttpError, forbidden } from "../../errors.js";
 import { openwaCurrentOwners, openwaPrincipalAuthorization } from "./owners.js";
 import { logOpenwaActivity } from "./audit.js";
+import { openwaOwnerOnlyGroup } from "./owner-group.js";
 import { isOpenwaCompletionTurn, openwaCompletionOwedToOwner } from "../chat-completion-delivery.js";
 
 export const OPENWA_RUN_CONTEXT_KEY = "wardmoteOpenwa";
@@ -48,11 +49,12 @@ export interface OpenwaRunContext {
   approvalRequestId: string | null;
   triggerPrincipalId: string | null;
   ownerOrigin?: OpenwaOwnerOrigin;
+  ownerGroup?: true;
 }
 
-/** Server record that makes a wake without a chat message act for an owner: the owner's own DM, or a task an owner run handed off. */
-export type OpenwaOwnerOrigin = "owner_chat" | "owner_task";
-const OWNER_ORIGINS: ReadonlySet<string> = new Set<OpenwaOwnerOrigin>(["owner_chat", "owner_task"]);
+/** Server record that makes a wake without a chat message act for an owner: the owner's own DM, a group holding only owners and this number, or a task an owner run handed off. */
+export type OpenwaOwnerOrigin = "owner_chat" | "owner_task" | "owner_group";
+const OWNER_ORIGINS: ReadonlySet<string> = new Set<OpenwaOwnerOrigin>(["owner_chat", "owner_task", "owner_group"]);
 
 export class OpenwaApprovalRequiredError extends HttpError {
   readonly category: OpenwaApprovalCategory;
@@ -216,6 +218,7 @@ export function readOpenwaRunContext(contextSnapshot: unknown): OpenwaRunContext
     approvalRequestId: text(raw.approvalRequestId),
     triggerPrincipalId: text(raw.triggerPrincipalId),
     ...(OWNER_ORIGINS.has(String(raw.ownerOrigin)) ? { ownerOrigin: raw.ownerOrigin as OpenwaOwnerOrigin } : {}),
+    ...(raw.ownerGroup === true ? { ownerGroup: true as const } : {}),
   };
 }
 
@@ -643,8 +646,10 @@ export async function resolveOpenwaRunContext(
   }
   const completionTurn = !wakeAction && cls === "other" && deliveries.length === 0 &&
     (await isOpenwaCompletionTurn(db, { companyId: input.companyId, runId: input.runId, issueId: input.issueId }));
+  const ownerGroup = cls === "other" && deliveryIds.length === 0 && !binding.isDirectMessage && binding.status !== "archived" &&
+    (await openwaBindingOwnerGroup(db, { companyId: input.companyId, endpointId: binding.endpointId, chatKey, runId: input.runId, conversationId: binding.conversationId }));
   const ownerOrigin = cls === "other" && deliveryIds.length === 0
-    ? await openwaOwnerOrigin(db, { binding, chatKey, companyId: input.companyId, runId: input.runId, issueId: input.issueId, completionTurn })
+    ? await openwaOwnerOrigin(db, { binding, chatKey, companyId: input.companyId, runId: input.runId, issueId: input.issueId, completionTurn, ownerGroup })
     : null;
   const profile: OpenwaRunProfile = cls === "owner" || ownerOrigin ? "full" : "read_only";
   const runAllowedCategories = openwaAllowedCategories(policy, profile, runGranted, policy.gatewayAdminTools).allowed;
@@ -667,7 +672,21 @@ export async function resolveOpenwaRunContext(
       ? (deliveries.find((delivery) => delivery.id === deliveryIds[deliveryIds.length - 1])?.principalId ?? null)
       : null,
     ...(ownerOrigin ? { ownerOrigin } : {}),
+    ...(ownerGroup ? { ownerGroup: true as const } : {}),
   };
+}
+
+async function openwaBindingOwnerGroup(
+  db: Db,
+  input: { companyId: string; endpointId: string; chatKey: string; runId: string; conversationId: string | null; source?: string },
+): Promise<boolean> {
+  const [endpoint] = await db
+    .select()
+    .from(chatEndpoints)
+    .where(and(eq(chatEndpoints.companyId, input.companyId), eq(chatEndpoints.id, input.endpointId)))
+    .limit(1);
+  if (!endpoint || endpoint.status === "archived" || endpoint.provider !== "openwa") return false;
+  return openwaOwnerOnlyGroup(db, endpoint, input.chatKey, { source: input.source ?? "run_start", runId: input.runId, conversationId: input.conversationId });
 }
 
 async function openwaOwnerOrigin(
@@ -679,6 +698,7 @@ async function openwaOwnerOrigin(
     runId: string;
     issueId: string;
     completionTurn: boolean;
+    ownerGroup: boolean;
   },
 ): Promise<OpenwaOwnerOrigin | null> {
   if (input.binding.status === "archived") return null;
@@ -686,6 +706,7 @@ async function openwaOwnerOrigin(
     const owners = await openwaCurrentOwners(db, { companyId: input.companyId, id: input.binding.endpointId });
     if (owners.some((owner) => owner.jids.some((jid) => normalizeChatKey(jid) === input.chatKey))) return "owner_chat";
   }
+  if (input.ownerGroup) return "owner_group";
   if (input.completionTurn && (await openwaCompletionOwedToOwner(db, { companyId: input.companyId, runId: input.runId, issueId: input.issueId })))
     return "owner_task";
   return null;
@@ -716,6 +737,10 @@ export function clearOpenwaRunContext(context: Record<string, unknown>) {
 export async function openwaRunProfile(db: Db, run: RunLike): Promise<OpenwaRunProfile> {
   const context = record(run.contextSnapshot);
   const openwa = readOpenwaRunContext(context);
+  if (openwa?.ownerOrigin === "owner_group")
+    return (await openwaBindingOwnerGroup(db, { companyId: run.companyId, endpointId: openwa.endpointId, chatKey: openwa.chatKey, runId: run.id, conversationId: null, source: "run_check" }))
+      ? "full"
+      : "read_only";
   if (openwa) return openwa.profile;
   if (context[OPENWA_RUN_CONTEXT_KEY] !== undefined && context[OPENWA_RUN_CONTEXT_KEY] !== null) return "read_only";
   const marker = context[RUN_TOOL_PROFILE_CONTEXT_KEY];
@@ -746,7 +771,8 @@ export async function assertOpenwaRunMay(
   category: OpenwaApprovalCategory,
   options: { consume?: boolean } = {},
 ): Promise<string | null> {
-  if ((await openwaRunProfile(db, run)) === "full") return null;
+  const profile = await openwaRunProfile(db, run);
+  if (profile === "full") return null;
   const openwa = readOpenwaRunContext(run.contextSnapshot);
   if (openwa?.runAllowedCategories.includes(category)) {
     const [endpoint] = await db
@@ -755,7 +781,7 @@ export async function assertOpenwaRunMay(
       .where(and(eq(chatEndpoints.companyId, run.companyId), eq(chatEndpoints.id, openwa.endpointId)))
       .limit(1);
     const policy = endpoint ? parsePolicy(endpoint.policy) : null;
-    const live = openwaAllowedCategories(policy, openwa.profile, openwa.grantedCategories, policy?.gatewayAdminTools ?? "off");
+    const live = openwaAllowedCategories(policy, profile, openwa.grantedCategories, policy?.gatewayAdminTools ?? "off");
     if (live.allowed.includes(category)) return null;
   }
   if (!openwa || openwa.grantIds.length === 0) throw new OpenwaApprovalRequiredError(category);

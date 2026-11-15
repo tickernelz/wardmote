@@ -34,7 +34,7 @@ import { logOpenwaActivity, recordOpenwaAudit } from "./audit.js";
 import { OPENWA_TEXT_LIMIT, formatOpenwaPublication } from "./format.js";
 import { OpenwaGatewayError } from "./gateway.js";
 import { maskOpenwaDigits } from "./guidance.js";
-import { openwaOwnerReportRoute } from "./owner-report.js";
+import { openwaOwnerFacingChat } from "./owner-group.js";
 import { openwaApprovalDiscussions, openwaOwnerDecisionText, openwaOwnerMessagesSince, openwaRequestMessages } from "./approval-discussions.js";
 import { openwaChatKey, type OpenwaOutboundRecord, type OpenwaOutboundRegistry } from "./outbound.js";
 import { openwaCurrentOwnerUserId, openwaCurrentOwners, type OpenwaCurrentOwner } from "./owners.js";
@@ -248,7 +248,7 @@ async function plannedBubbles(ctx: ToolContext, owners: OpenwaCurrentOwner[]): P
   }
   const direct = [...byChat.values()];
   if (!direct.length) return direct;
-  const route = await openwaOwnerReportRoute(ctx.db, ctx.endpoint, ctx.origin.chatKey, { source: "approval", runId: ctx.run.id, conversationId: ctx.conversation.id });
+  const route = await openwaOwnerFacingChat(ctx.db, ctx.endpoint, ctx.origin.chatKey, { source: "approval", runId: ctx.run.id, conversationId: ctx.conversation.id });
   if (!route) return direct;
   const owner = direct.find((bubble) => route.participants.includes(bubble.chatKey))?.owner ?? direct[0]!.owner;
   return [{ owner, chatId: route.chatId, chatKey: route.chatKey }];

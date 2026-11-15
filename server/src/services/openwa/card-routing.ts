@@ -5,7 +5,8 @@ import { parseOpenwaThreadId } from "./adapter.js";
 import { openwaChatKey } from "./outbound.js";
 import { openwaChatResource, openwaOwnerReportRoute } from "./owner-report.js";
 import { openwaCurrentOwners, type OpenwaCurrentOwner } from "./owners.js";
-import { openwaDigits, openwaResourceGroupActive } from "./policy.js";
+import { openwaOnlyOwnersAndBot, openwaOwnerIdOf, openwaOwnerKeys } from "./owner-group.js";
+import { openwaResourceGroupActive } from "./policy.js";
 import { openwaAgentConversation, openwaOwnerApprovalConversation } from "./session-health.js";
 
 type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -55,10 +56,6 @@ function readable(value: string | null | undefined, fallback: string): string {
 function groupLabel(resource: Pick<ChatResource, "label" | "metadata"> | null): string {
   const name = record(resource?.metadata).groupName;
   return readable(typeof name === "string" ? name : (resource?.label ?? null), GROUP_LABEL);
-}
-
-function ownerKeys(owner: OpenwaCurrentOwner): string[] {
-  return [...owner.jids.map(openwaChatKey), ...(owner.digits ? [owner.digits + "@c.us"] : [])];
 }
 
 function chatKeyOf(externalConversationId: string): string | null {
@@ -149,7 +146,7 @@ function presentOwners(owners: OpenwaCurrentOwner[], resource: ChatResource | nu
   const participants = record(resource?.metadata).participants;
   if (!Array.isArray(participants)) return [];
   const present = new Set(participants.filter((entry): entry is string => typeof entry === "string").map(openwaChatKey));
-  return owners.filter((owner) => ownerKeys(owner).some((key) => present.has(key)));
+  return owners.filter((owner) => openwaOwnerKeys(owner).some((key) => present.has(key)));
 }
 
 /** True when every participant of the group is a current owner or this endpoint's own number; an unknown or partial list is never private. */
@@ -157,19 +154,7 @@ function onlyOwnersAndBot(endpoint: EndpointRow, owners: OpenwaCurrentOwner[], r
   const metadata = record(resource.metadata);
   const participants = Array.isArray(metadata.participants) ? metadata.participants.filter((entry): entry is string => typeof entry === "string") : null;
   const count = typeof metadata.participantCount === "number" ? metadata.participantCount : null;
-  if (!participants || participants.length === 0 || count === null || count < 1) return false;
-  const bot = openwaDigits(endpoint.botExternalId ?? "");
-  const people = new Set<string>();
-  for (const jid of participants.map(openwaChatKey)) {
-    if (bot && openwaDigits(jid) === bot) {
-      people.add("bot");
-      continue;
-    }
-    const owner = owners.find((candidate) => ownerKeys(candidate).includes(jid));
-    if (!owner) return false;
-    people.add("owner:" + owner.ownerId);
-  }
-  return people.has("bot") && people.size > 1 && people.size === count;
+  return openwaOnlyOwnersAndBot(endpoint.botExternalId, openwaOwnerIdOf(owners), participants?.map((jid) => [jid]) ?? null, count);
 }
 
 /** Owners who read a chat a card goes to: the DM's own owner, every owner in owner_number mode, or the owners present in an active group. */
@@ -229,7 +214,7 @@ export async function openwaCardTarget(
       const privateGroup = await group(origin.chatKey, "origin_group");
       if (privateGroup) return privateGroup;
     } else if (policy.numberMode !== "owner_number") {
-      const owner = owners.find((candidate) => ownerKeys(candidate).includes(origin.chatKey));
+      const owner = owners.find((candidate) => openwaOwnerKeys(candidate).includes(origin.chatKey));
       const direct = owner
         ? await deliver(origin.chatKey, [owner.userId], { route: "origin_dm", viaOwnerReport: false, sentTo: { chat: OWNER_DM_LABEL, kind: "dm" } })
         : null;

@@ -233,6 +233,34 @@ its own group instead of the owner's direct chat.
   `{chat: "<project group>@g.us", chatSettings: {ownerReportChat: "<bot group>@g.us"}}`
   (`null` returns to the direct chat).
 
+### Owner-only groups
+
+A group whose live members are only current owners and the agent number, with
+at least one owner present, counts as the owner's own chat. Each chat has
+**Owner-only group access** (`settings.ownerGroupAccess`): **Automatic
+(default)** (unset or `auto`) or **Off**.
+
+- The server reads the members from the gateway (`getGroup`) when a run of
+  that group starts and again before every gated action of a run that relies
+  on it. Members that cannot be read, a read slower than 4 seconds, any other
+  member, or **Off** keep the normal group rules (fail closed). One request
+  reads the members once and reuses that answer only until its response
+  closes; later requests and work that outlives the response, such as a run
+  started from it, read them again.
+- Runs without an owner message (monitor, `task_completion`,
+  `approval_resolved`) get profile `full` with `ownerOrigin: owner_group`, so
+  no `reply` or `reply_outside_allowlist` approval is needed.
+- Approval bubbles, `openwa_send` to an owner's number, and Decisions cards
+  that start in the group stay in the group instead of the owner's direct chat.
+  **Report to owner via** still wins when it is set. Owners approve by quoting
+  the bubble or in the Approvals tab.
+- When anyone else joins, the next check returns `read_only` at once, in the
+  middle of a run too. Every change of the status is an `owner_group_changed`
+  audit entry (`ownerOnly`, `reason`: `owner_only`, `non_owner`, `unverified`
+  or `disabled`).
+- From WhatsApp, an owner run sets it with `openwa_endpoint_config`
+  `{chatSettings: {ownerGroupAccess: "off"}}` (`"auto"` turns it back on).
+
 ### Trigger rules
 
 A message that matches no rule is discarded in memory: nothing is written to
@@ -437,7 +465,8 @@ proposed action and an agent-written `messageToOwners`, sent as one WhatsApp bub
 The server records the request and sends one bubble per owner approval chat (the
 agent number's DM with each owner, or the owner's self-chat in `owner_number`
 mode), or a single bubble to the origin chat's owner report group when one is
-set (see [Report to owner via](#report-to-owner-via)). The agent never asks
+set (see [Report to owner via](#report-to-owner-via)), or to the origin group
+itself when it is an [owner-only group](#owner-only-groups). The agent never asks
 for approval by writing in a group. Silence never approves. When the run's triggers need
 `reply_outside_allowlist`, the server adds that category to the request and
 records it as auto-added (audit `approval_requested` metadata `autoAdded`); its
