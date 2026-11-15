@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   ISSUE_TREE_CONTROL_MODES,
   ISSUE_TREE_HOLD_RELEASE_POLICY_STRATEGIES,
+  ISSUE_TREE_HOLD_SCOPES,
 } from "../constants.js";
 
 export const issueTreeControlModeSchema = z.enum(ISSUE_TREE_CONTROL_MODES);
@@ -17,6 +18,7 @@ export const previewIssueTreeControlSchema = z
   .object({
     mode: issueTreeControlModeSchema,
     releasePolicy: issueTreeHoldReleasePolicySchema.optional().nullable(),
+    scope: z.enum(ISSUE_TREE_HOLD_SCOPES).optional(),
   })
   .strict();
 
@@ -28,6 +30,8 @@ export const createIssueTreeHoldSchema = z
     reason: z.string().trim().min(1).max(1000).optional().nullable(),
     releasePolicy: issueTreeHoldReleasePolicySchema.optional().nullable(),
     metadata: z.record(z.string(), z.unknown()).optional().nullable(),
+    scope: z.enum(ISSUE_TREE_HOLD_SCOPES).optional(),
+    stopAt: z.enum(["safe_point", "now"]).optional(),
   })
   .strict();
 

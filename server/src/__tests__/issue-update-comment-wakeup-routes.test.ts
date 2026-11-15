@@ -273,14 +273,32 @@ describe("issue update comment wakeups", () => {
     mockAgentService.getById.mockResolvedValue(null);
   });
 
-  it.each(["post", "patch"] as const)("rejects %s board messages under an inherited pause before any mutation", async (method) => {
+  it("accepts a board comment on a paused task so it waits for Resume", async () => {
     const existing = makeIssue();
     mockIssueService.getById.mockResolvedValue(existing);
     mockPauseGate.mockResolvedValue({ holdId: "hold-1", rootIssueId: "parent-1" });
+    mockIssueService.addComment.mockResolvedValue({
+      id: "comment-paused",
+      companyId: existing.companyId,
+      issueId: existing.id,
+      body: "go",
+      authorUserId: "local-board",
+      authorAgentId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
     const app = await createApp();
-    const res = method === "post"
-      ? await request(app).post(`/api/issues/${existing.id}/comments`).send({ body: "go", reopen: true, interrupt: true })
-      : await request(app).patch(`/api/issues/${existing.id}`).send({ comment: "go", assigneeAgentId: ASSIGNEE_AGENT_ID, status: "todo" });
+    const res = await request(app).post(`/api/issues/${existing.id}/comments`).send({ body: "go" });
+    expect(res.status).toBe(201);
+    expect(mockIssueService.addComment).toHaveBeenCalled();
+  });
+
+  it("rejects a board message on a paused persistent conversation before any mutation", async () => {
+    const existing = makeIssue({ conversationAgentId: ASSIGNEE_AGENT_ID });
+    mockIssueService.getById.mockResolvedValue(existing);
+    mockPauseGate.mockResolvedValue({ holdId: "hold-1", rootIssueId: "parent-1" });
+    const app = await createApp();
+    const res = await request(app).patch(`/api/issues/${existing.id}`).send({ comment: "go", assigneeAgentId: ASSIGNEE_AGENT_ID, status: "todo" });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe("Task is paused. Resume it before sending a message.");
     expect(res.body.details.rootIssueId).toBe("parent-1");

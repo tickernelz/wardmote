@@ -125,7 +125,6 @@ export type ReleaseIssueExecutionInput = {
   suppressImmediateRecovery?: boolean;
 };
 
-type PauseHoldFacts = Awaited<ReturnType<WakeQueueTransaction["getPauseHoldFacts"]>>;
 
 /**
  * Drains the deferred-wake queue for the issue a run just released, in
@@ -242,10 +241,6 @@ async function runReleaseDrain(
     const pauseHold = await ports.transaction.getPauseHoldFacts({
       companyId: run.companyId,
       issueId: issue.id,
-      wakeAgentId: candidate.agentId,
-      deferredContextSeed: candidate.deferredContextSeed,
-      requestedByActorType: candidate.requestedByActorType,
-      requestedByActorId: candidate.requestedByActorId,
     });
 
     const commentAction = decideQueuedCommentAction({
@@ -286,7 +281,7 @@ async function runReleaseDrain(
     // A comment-id rewrite cannot change the agent or pause-hold facts already fetched above, so one decision covers both the rewritten and un-rewritten cases.
     const wakeOutcome = decideWakeOutcome({
       agent: { agentFound: deferredAgent !== null, invokable: deferredAgent?.invokable ?? false },
-      pauseHold: { activePauseHold: pauseHold.activePauseHold, treeHoldInteractionWake: pauseHold.treeHoldInteractionWake },
+      pauseHold: { activePauseHold: pauseHold.activePauseHold },
     });
 
     if (wakeOutcome.kind === "fail_not_invokable") {
@@ -307,7 +302,7 @@ async function runReleaseDrain(
     // Unreachable: decideWakeOutcome only returns "promote" when agentFound and invokable are both true.
     if (!deferredAgent) throw new Error("wake-queue: promoted a deferred wake with no invokable agent");
 
-    const promoted = await promoteDeferredWake(ports, run, issue, workingCandidate, deferredAgent, pauseHold, postCommitEffects, input);
+    const promoted = await promoteDeferredWake(ports, run, issue, workingCandidate, deferredAgent, postCommitEffects, input);
     if (!promoted) continue;
     return promoted;
   }
@@ -326,7 +321,6 @@ async function promoteDeferredWake(
   issue: IssueSnapshot,
   workingCandidate: DeferredWakeCandidate,
   invokableAgent: InvokableAgentSnapshot,
-  pauseHold: PauseHoldFacts,
   postCommitEffects: PostCommitEffect[],
   input: ReleaseIssueExecutionInput,
 ): Promise<ReleaseTransactionResult | null> {
@@ -418,17 +412,6 @@ async function promoteDeferredWake(
   delete promotedPayload["queuedCommentInterrupt"];
 
   const promotedContextSeed: Record<string, unknown> = { ...workingCandidate.deferredContextSeed };
-  if (pauseHold.activePauseHold) {
-    promotedContextSeed.treeHoldInteraction = true;
-    promotedContextSeed.activeTreeHold = {
-      holdId: pauseHold.holdId,
-      rootIssueId: pauseHold.rootIssueId,
-      mode: pauseHold.mode,
-      reason: pauseHold.reason,
-      releasePolicy: pauseHold.releasePolicy,
-      interaction: true,
-    };
-  }
 
   const { contextSnapshot: promotedContextSnapshot, taskKey: promotedTaskKey } = enrichPromotedWakeContext({
     contextSnapshot: promotedContextSeed,

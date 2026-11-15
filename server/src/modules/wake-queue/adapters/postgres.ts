@@ -28,7 +28,7 @@ import {
 import { isRetiredExternalChatQuestionSource } from "../../../services/question-response-delivery.js";
 import { HttpError } from "../../../errors.js";
 import { evaluateAgentInvokabilityFromDb } from "../../../services/agent-invokability.js";
-import { issueTreeControlService, isVerifiedIssueTreeControlInteractionWake } from "../../../services/issue-tree-control.js";
+import { issueTreeControlService } from "../../../services/issue-tree-control.js";
 import { isAutomaticRecoverySuppressedByPauseHold } from "../../../services/recovery/pause-hold-guard.js";
 import { classifyContinuationFailure } from "../../../services/recovery/service.js";
 import { issueService } from "../../../services/issues.js";
@@ -337,36 +337,8 @@ function buildTransaction(tx: Db, deps: WakeQueuePostgresAdapterDeps, db: Db, ru
       return rows.length > 0;
     },
 
-    async getPauseHoldFacts({ companyId, issueId, wakeAgentId, deferredContextSeed, requestedByActorType, requestedByActorId }) {
-      const activePauseHold = await treeControlSvc.getActivePauseHoldGate(companyId, issueId);
-      if (!activePauseHold) {
-        return {
-          activePauseHold: false,
-          treeHoldInteractionWake: false,
-          holdId: null,
-          rootIssueId: null,
-          mode: null,
-          reason: null,
-          releasePolicy: null,
-        };
-      }
-      const treeHoldInteractionWake = await isVerifiedIssueTreeControlInteractionWake(tx, {
-        companyId,
-        issueId,
-        agentId: wakeAgentId,
-        contextSnapshot: deferredContextSeed,
-        requestedByActorType,
-        requestedByActorId,
-      });
-      return {
-        activePauseHold: true,
-        treeHoldInteractionWake,
-        holdId: activePauseHold.holdId,
-        rootIssueId: activePauseHold.rootIssueId,
-        mode: activePauseHold.mode,
-        reason: activePauseHold.reason,
-        releasePolicy: activePauseHold.releasePolicy,
-      };
+    async getPauseHoldFacts({ companyId, issueId }) {
+      return { activePauseHold: (await treeControlSvc.getActivePauseHoldGate(companyId, issueId)) !== null };
     },
 
     async getCommentSelfAuthorship({ companyId, issueId, finishingRunId, assigneeAgentId, commentIds, pendingCommentIds }) {

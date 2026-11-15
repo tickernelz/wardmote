@@ -130,7 +130,6 @@ import { logActivity } from "../activity-log.js";
 import { ISSUE_BLOCKERS_RESOLVED_WAKE_REASON } from "../issue-dependency-wakeups.js";
 import {
   ISSUE_TREE_CONTROL_INTERACTION_WAKE_REASONS,
-  isVerifiedIssueTreeControlInteractionWake,
 } from "../issue-tree-control.js";
 import {
   buildExecutionWorkspaceAdapterConfig,
@@ -1078,17 +1077,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
         run.companyId,
         issueId,
       );
-      const treeHoldInteractionWake =
-        activePauseHold &&
-        (await isVerifiedIssueTreeControlInteractionWake(db, {
-          companyId: run.companyId,
-          issueId,
-          agentId: run.agentId,
-          runId: run.id,
-          wakeupRequestId: run.wakeupRequestId,
-          contextSnapshot: context,
-        }));
-      if (activePauseHold && !treeHoldInteractionWake) {
+      if (activePauseHold) {
         await cancelRunInternal(
           run.id,
           "Cancelled because issue is held by an active subtree pause hold",
@@ -2710,54 +2699,32 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
         issueId,
       );
       if (activePauseHold) {
-        const treeHoldInteractionWake =
-          await isVerifiedIssueTreeControlInteractionWake(db, {
-            companyId: agent.companyId,
-            issueId,
-            agentId,
-            contextSnapshot: enrichedContextSnapshot,
-            requestedByActorType: opts.requestedByActorType,
-            requestedByActorId: opts.requestedByActorId,
-          });
-
-        if (!treeHoldInteractionWake) {
-          const wait = await writeSkippedRequest("issue_tree_hold_active", {}, {
-            holdId: activePauseHold.holdId,
-          });
-          if (wait.created) await logActivity(db, {
-            companyId: agent.companyId,
-            actorType: "system",
-            actorId: "system",
-            agentId,
-            runId: null,
-            action: "issue.tree_hold_wakeup_deferred",
-            entityType: "issue",
-            entityId: issueId,
-            details: {
-              holdId: activePauseHold.holdId,
-              rootIssueId: activePauseHold.rootIssueId,
-              requestedReason: reason,
-              source,
-              triggerDetail,
-              securityPrinciples: [
-                "Complete Mediation",
-                "Fail Securely",
-                "Secure Defaults",
-              ],
-            },
-          });
-          return null;
-        }
-
-        enrichedContextSnapshot.treeHoldInteraction = true;
-        enrichedContextSnapshot.activeTreeHold = {
+        const wait = await writeSkippedRequest("issue_tree_hold_active", {}, {
           holdId: activePauseHold.holdId,
-          rootIssueId: activePauseHold.rootIssueId,
-          mode: activePauseHold.mode,
-          reason: activePauseHold.reason,
-          releasePolicy: activePauseHold.releasePolicy,
-          interaction: true,
-        };
+        });
+        if (wait.created) await logActivity(db, {
+          companyId: agent.companyId,
+          actorType: "system",
+          actorId: "system",
+          agentId,
+          runId: null,
+          action: "issue.tree_hold_wakeup_deferred",
+          entityType: "issue",
+          entityId: issueId,
+          details: {
+            holdId: activePauseHold.holdId,
+            rootIssueId: activePauseHold.rootIssueId,
+            requestedReason: reason,
+            source,
+            triggerDetail,
+            securityPrinciples: [
+              "Complete Mediation",
+              "Fail Securely",
+              "Secure Defaults",
+            ],
+          },
+        });
+        return null;
       }
     }
 

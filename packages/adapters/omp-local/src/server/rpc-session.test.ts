@@ -128,6 +128,7 @@ function run(
   session = createOmpRpcSteerSession(),
   prompt = "Do the work",
   continuationIdleMs?: number,
+  safePointHoldMs?: number,
 ) {
   return runOmpRpcSession({
     runId: "run-rpc",
@@ -145,6 +146,7 @@ function run(
     },
     session,
     continuationIdleMs,
+    safePointHoldMs,
   });
 }
 
@@ -734,6 +736,71 @@ describe("OMP RPC session protocol", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("OMP RPC pause at a safe point", () => {
+  const aborts = () => state.stdinFrames.filter((frame) => frame.type === "abort");
+
+  async function startPrompted(session: ReturnType<typeof createOmpRpcSteerSession>, safePointHoldMs?: number) {
+    const running = run(session, "Do the work", undefined, safePointHoldMs);
+    await state.feed({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] });
+    await state.feed({ id: "state-1", type: "response", command: "get_state", success: true, data: { sessionId: "session-pause" } });
+    await state.feed({ id: "prompt-1", type: "response", command: "prompt", success: true });
+    return { running };
+  }
+
+  it("lets the running tool and its turn finish before aborting, then holds the process for the Stop", async () => {
+    const session = createOmpRpcSteerSession();
+    const { running } = await startPrompted(session, 60);
+    await state.feed({ type: "turn_start" });
+    await state.feed({ type: "tool_execution_start", toolCallId: "t1" });
+    const outcome = session.stopAtSafePoint({ timeoutMs: 5_000 });
+
+    await state.feed({ type: "tool_execution_end", toolCallId: "t1" });
+    expect(aborts()).toHaveLength(0);
+
+    await state.feed({ type: "turn_end", toolResults: [] });
+    expect(await outcome).toBe("reached");
+    expect(aborts()).toHaveLength(1);
+
+    await state.feed({ type: "agent_end", isTerminal: true, messages: [] });
+    await state.answerIdleCheck({ queuedMessageCount: 0, isStreaming: false });
+    expect(state.ends()).toBe(0);
+    await vi.waitFor(() => expect(state.ends()).toBe(1));
+    state.finish();
+    expect((await running).promptError).toBeNull();
+  });
+
+  it("reports a timeout and sends no abort while a tool is still running", async () => {
+    const session = createOmpRpcSteerSession();
+    const { running } = await startPrompted(session);
+    await state.feed({ type: "turn_start" });
+    await state.feed({ type: "tool_execution_start", toolCallId: "slow" });
+
+    expect(await session.stopAtSafePoint({ timeoutMs: 20 })).toBe("timeout");
+    expect(aborts()).toHaveLength(0);
+    expect(session.safePointReached).toBe(false);
+
+    await state.endTurn();
+    state.finish();
+    await running;
+  });
+
+  it("never dispatches the prompt once the run was paused before it started", async () => {
+    const session = createOmpRpcSteerSession();
+    const running = run(session);
+    const outcome = session.stopAtSafePoint({ timeoutMs: 5_000 });
+    await state.feed({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] });
+    await state.feed({ id: "state-1", type: "response", command: "get_state", success: true, data: { sessionId: "session-early" } });
+
+    expect(await outcome).toBe("reached");
+    expect(state.stdinFrames.some((frame) => frame.type === "prompt")).toBe(false);
+    expect(state.ends()).toBe(1);
+    state.finish();
+    const result = await running;
+    expect(result.promptError).toBeNull();
+    expect(result.sessionId).toBe("session-early");
   });
 });
 

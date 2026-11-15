@@ -180,11 +180,7 @@ import {
   summarizeIssueWatchdog,
   upsertIssueWatchdogForIssue,
 } from "./task-watchdogs.js";
-import {
-  isVerifiedIssueTreeControlInteractionWake,
-  issueTreeControlService,
-  type ActiveIssueTreePauseHoldGate,
-} from "./issue-tree-control.js";
+import { issueTreeControlService } from "./issue-tree-control.js";
 import {
   parseIssueGraphLivenessIncidentKey,
   RECOVERY_ORIGIN_KINDS,
@@ -7269,40 +7265,6 @@ export function issueService(db: Db) {
     });
   }
 
-  async function isTreeHoldInteractionCheckoutAllowed(
-    companyId: string,
-    checkoutRunId: string | null,
-    _gate: ActiveIssueTreePauseHoldGate,
-  ) {
-    if (!checkoutRunId) return false;
-    const run = await db
-      .select({
-        id: heartbeatRuns.id,
-        agentId: heartbeatRuns.agentId,
-        wakeupRequestId: heartbeatRuns.wakeupRequestId,
-        contextSnapshot: heartbeatRuns.contextSnapshot,
-      })
-      .from(heartbeatRuns)
-      .where(
-        and(
-          eq(heartbeatRuns.id, checkoutRunId),
-          eq(heartbeatRuns.companyId, companyId),
-        ),
-      )
-      .then((rows) => rows[0] ?? null);
-    const issueId = readStringFromRecord(run?.contextSnapshot, "issueId");
-    if (!run || !issueId) return false;
-    return isVerifiedIssueTreeControlInteractionWake(db, {
-      companyId,
-      issueId,
-      agentId: run.agentId,
-      runId: run.id,
-      wakeupRequestId: run.wakeupRequestId,
-      contextSnapshot: run.contextSnapshot as
-        Record<string, unknown> | null | undefined,
-    });
-  }
-
   async function assertAssignableUser(companyId: string, userId: string) {
     const membership = await db
       .select({ id: companyMemberships.id })
@@ -11873,14 +11835,7 @@ export function issueService(db: Db) {
         issueCompany.companyId,
         id,
       );
-      if (
-        activePauseHold &&
-        !(await isTreeHoldInteractionCheckoutAllowed(
-          issueCompany.companyId,
-          checkoutRunId,
-          activePauseHold,
-        ))
-      ) {
+      if (activePauseHold) {
         throw conflict("Issue checkout blocked by active subtree pause hold", {
           issueId: id,
           holdId: activePauseHold.holdId,

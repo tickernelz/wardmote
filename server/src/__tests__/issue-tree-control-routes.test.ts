@@ -26,6 +26,7 @@ vi.mock("../services/execution-blocker.js", () => ({ getExecutionBlocker: mockEx
 const mockLogActivity = vi.hoisted(() => vi.fn());
 const mockHeartbeatService = vi.hoisted(() => ({
   cancelRun: vi.fn(),
+  pauseRunAtSafePoint: vi.fn(),
   wakeup: vi.fn(),
 }));
 const mockAccessService = vi.hoisted(() => ({ decide: vi.fn() }));
@@ -418,6 +419,66 @@ describe("issue tree control routes", () => {
         entityId: "44444444-4444-4444-8444-444444444444",
       }),
     );
+  });
+
+  it("lets a safe-point pause finish the running step instead of cancelling the run at once", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      companyIds: ["company-2"],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+    mockTreeControlService.createHold.mockResolvedValue({
+      hold: { id: "33333333-3333-4333-8333-333333333333", mode: "pause", scope: "task", reason: null },
+      preview: {
+        mode: "pause",
+        totals: { affectedIssues: 1 },
+        warnings: [],
+        activeRuns: [{ id: "44444444-4444-4444-8444-444444444444", issueId: "11111111-1111-4111-8111-111111111111" }],
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/tree-holds")
+      .send({ mode: "pause", scope: "task", stopAt: "safe_point" });
+
+    expect(res.status).toBe(201);
+    expect(mockTreeControlService.createHold).toHaveBeenCalledWith(
+      "company-2",
+      "11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({ mode: "pause", scope: "task" }),
+    );
+    expect(mockTreeControlService.createHold.mock.calls[0]?.[2]).not.toHaveProperty("stopAt");
+    expect(mockHeartbeatService.pauseRunAtSafePoint).toHaveBeenCalledWith(
+      "44444444-4444-4444-8444-444444444444",
+      "Paused by a board operator",
+      { resultJson: { cancelledByActorType: "user", cancelledByUserId: "user-1" } },
+    );
+    expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+  });
+
+  it("refuses a safe-point pause for a persistent conversation, which can only be stopped", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      companyIds: ["company-2"],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+    mockIssueService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-2",
+      conversationAgentId: "agent-chat",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/tree-holds")
+      .send({ mode: "pause", stopAt: "safe_point" });
+
+    expect(res.status).toBe(422);
+    expect(mockTreeControlService.createHold).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.pauseRunAtSafePoint).not.toHaveBeenCalled();
   });
 
   it("marks affected issues cancelled when creating a cancel hold", async () => {

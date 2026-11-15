@@ -49,7 +49,7 @@ export function buildNativeContinuationPrompt(input: {
       !(externalChat && wake.reason === "External chat message received")) ||
     wake.fallbackFetchNeeded || wake.truncated || wake.recovery || continuation?.interruptedRunId ||
     (wake.externalChatExecutionBound && !externalChat) || wake.externalChatQuestionResponse ||
-    wake.taskWatchdog || wake.livenessContinuation || wake.activeTreeHold ||
+    wake.taskWatchdog || wake.livenessContinuation ||
     wake.skillTest || wake.executionStage || wake.agentMessage ||
     wake.documentReviewContext || wake.planReviewContext || wake.annotationDeltas.length > 0
   ) return null;

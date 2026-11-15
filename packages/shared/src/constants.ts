@@ -463,6 +463,8 @@ export const ISSUE_TREE_HOLD_STATUSES = ["active", "released"] as const;
 export type IssueTreeHoldStatus = (typeof ISSUE_TREE_HOLD_STATUSES)[number];
 
 export const ISSUE_TREE_HOLD_RELEASE_POLICY_STRATEGIES = ["manual", "after_active_runs_finish"] as const;
+export const ISSUE_TREE_HOLD_SCOPES = ["task", "subtree"] as const;
+export type IssueTreeHoldScope = (typeof ISSUE_TREE_HOLD_SCOPES)[number];
 export type IssueTreeHoldReleasePolicyStrategy = (typeof ISSUE_TREE_HOLD_RELEASE_POLICY_STRATEGIES)[number];
 
 export const ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY = "continuation-summary" as const;

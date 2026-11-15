@@ -1146,7 +1146,6 @@ describe("renderWardmoteWakePrompt", () => {
         recovery: { cause: "process_lost" },
       },
       { ...ordinaryExternalChatWake, dependencyBlockedInteraction: true },
-      { ...ordinaryExternalChatWake, treeHoldInteraction: true },
       {
         ...ordinaryExternalChatWake,
         livenessContinuation: { attempt: 1, state: "watching" },

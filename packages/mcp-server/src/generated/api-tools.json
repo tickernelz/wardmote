@@ -1579,7 +1579,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:19839",
+    "boardGuard": "assertBoard@issues.ts:19837",
     "authorityCapability": null,
     "parameters": [
       {
@@ -6296,7 +6296,8 @@
                     "review",
                     "failed_run",
                     "budget_alert",
-                    "agent_error_alert"
+                    "agent_error_alert",
+                    "paused_task"
                   ]
                 }
               },
@@ -6871,7 +6872,8 @@
               "review",
               "failed_run",
               "budget_alert",
-              "agent_error_alert"
+              "agent_error_alert",
+              "paused_task"
             ]
           }
         },
@@ -8546,7 +8548,7 @@
     "operationId": "POST /api/issues/{id}/tree-holds",
     "method": "POST",
     "path": "/issues/{issueId}/tree-holds",
-    "description": "Create an issue tree hold",
+    "description": "Create an issue tree hold. A pause with scope task holds only this task; subtree (the default) holds its descendants too. stopAt safe_point lets a running omp_local step finish (up to 120 s) before the run stops; now (the default) stops it at once. Persistent conversations cannot pause at a safe point.",
     "toolset": "extended",
     "authority": "agent",
     "authoritySource": "default",
@@ -8612,6 +8614,20 @@
                 ]
               }
             }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "task",
+              "subtree"
+            ]
+          },
+          "stopAt": {
+            "type": "string",
+            "enum": [
+              "safe_point",
+              "now"
+            ]
           }
         },
         "required": [
@@ -14426,7 +14442,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:18562",
+    "boardGuard": "assertBoard@issues.ts:18560",
     "authorityCapability": null,
     "parameters": [
       {
@@ -26643,7 +26659,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:17422",
+    "boardGuard": "assertBoard@issues.ts:17420",
     "authorityCapability": null,
     "parameters": [
       {
@@ -31651,6 +31667,40 @@
     ]
   },
   {
+    "name": "wardmoteListPausedTasks",
+    "operationId": "GET /api/companies/{companyId}/paused-tasks",
+    "method": "GET",
+    "path": "/companies/{companyId}/paused-tasks",
+    "description": "List paused tasks for a company. Returns every active pause hold whose task the caller can read, with its state (pausing, paused, pause_failed), live run, and last run, so LIVE NOW keeps showing paused work.",
+    "toolset": "extended",
+    "authority": "agent",
+    "authoritySource": "default",
+    "tags": [
+      "runs"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "guards": [
+      "assertCompanyAccess"
+    ],
+    "permissions": [],
+    "boardGuard": null,
+    "authorityCapability": null,
+    "parameters": [
+      {
+        "name": "companyId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ]
+  },
+  {
     "name": "wardmoteListPendingDecisions",
     "operationId": "GET /api/companies/{companyId}/pending-decisions",
     "method": "GET",
@@ -35207,6 +35257,13 @@
                 ]
               }
             }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "task",
+              "subtree"
+            ]
           }
         },
         "required": [
@@ -38850,7 +38907,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:10197",
+    "boardGuard": "assertBoard@issues.ts:10195",
     "authorityCapability": null,
     "parameters": [
       {
@@ -41475,7 +41532,7 @@
       "assertIssueWriteInfluenceAllowed"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:9524",
+    "boardGuard": "assertBoard@issues.ts:9522",
     "authorityCapability": null,
     "parameters": [
       {
@@ -41536,7 +41593,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:17392",
+    "boardGuard": "assertBoard@issues.ts:17390",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43674,7 +43731,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:19779",
+    "boardGuard": "assertBoard@issues.ts:19777",
     "authorityCapability": null,
     "parameters": [
       {
@@ -44140,7 +44197,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:18514",
+    "boardGuard": "assertBoard@issues.ts:18512",
     "authorityCapability": null,
     "parameters": [
       {
@@ -48309,7 +48366,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:10961",
+    "boardGuard": "assertBoard@issues.ts:10959",
     "authorityCapability": null,
     "parameters": [
       {
@@ -48435,7 +48492,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:17360",
+    "boardGuard": "assertBoard@issues.ts:17358",
     "authorityCapability": null,
     "parameters": [
       {

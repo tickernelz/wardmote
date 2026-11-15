@@ -23,6 +23,7 @@ import { evaluateAgentInvokabilityFromDb } from "./agent-invokability.js";
 import { issueService } from "./issues.js";
 import { visibleIssueCondition } from "./issue-visibility.js";
 import { TASK_WATCHDOG_ORIGIN_KIND } from "./task-watchdog-scope.js";
+import { isAutomaticRecoverySuppressedByPauseHold } from "./recovery/pause-hold-guard.js";
 
 const TASK_WATCHDOG_STOP_FINGERPRINT_PREFIX = "task_watchdog_stop:";
 const TASK_WATCHDOG_SUBTREE_MAX_DEPTH = 100;
@@ -1444,6 +1445,9 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
       .then((rows) => rows[0] ?? null);
     if (!sourceIssue || sourceIssue.originKind === TASK_WATCHDOG_ORIGIN_KIND) {
       return { state: "skipped" as const, reason: "watched_issue_not_applicable" };
+    }
+    if (await isAutomaticRecoverySuppressedByPauseHold(db, watchdog.companyId, sourceIssue.id)) {
+      return { state: "skipped" as const, reason: "watched_issue_paused" };
     }
 
     const input = await collectClassifierInput(watchdog.companyId, watchdog);

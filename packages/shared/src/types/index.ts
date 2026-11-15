@@ -891,6 +891,8 @@ export type {
   IssueTreeControlPreview,
   IssueTreeHold,
   ReleaseIssueTreeHoldResponse,
+  PausedTask,
+  PausedTaskState,
   IssueTreeHoldMember,
   IssueTreeHoldReleasePolicy,
   IssueTreePreviewAgent,

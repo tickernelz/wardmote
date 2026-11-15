@@ -7286,11 +7286,9 @@ export function issueRoutes(
   async function assertBoardCommentNotPaused(
     req: Request,
     res: Response,
-    issue: { id: string; companyId: string },
+    issue: { id: string; companyId: string; conversationAgentId?: string | null },
   ) {
-    // Agents may still finish reporting an interrupted run. New operator
-    // messages must not enter the paused-conversation triage wake path.
-    if (req.actor.type !== "board") return true;
+    if (req.actor.type !== "board" || !issue.conversationAgentId) return true;
     const hold = await treeControlSvc.getActivePauseHoldGate(issue.companyId, issue.id);
     if (!hold) return true;
     res.status(409).json({
