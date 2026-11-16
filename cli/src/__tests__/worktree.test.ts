@@ -339,7 +339,7 @@ describe("worktree helpers", () => {
     expect(resolveWorktreeMakeTargetPath("wardmote-pr-432")).toBe(path.resolve(os.homedir(), "wardmote-pr-432"));
   });
 
-  it("keeps addressing worktrees created under the retired name prefix", () => {
+  it("keeps a name that already carries the worktree prefix", () => {
     expect(resolveWorktreeMakeTargetPath("wardmote-pr-432")).toBe(path.resolve(os.homedir(), "wardmote-pr-432"));
   });
 

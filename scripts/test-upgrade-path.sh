@@ -21,7 +21,7 @@ REPO="${UPGRADE_REPO:?UPGRADE_REPO is required}"
 SHA="${UPGRADE_SHA:?UPGRADE_SHA is required}"
 PORT="${UPGRADE_PORT:-3197}"
 OMP_STUB_VERSION="${UPGRADE_OMP_VERSION:-18.18.0}"
-mkdir -p "$HOME/.paperclip-pro" "$HOME/.local/bin"
+mkdir -p "$HOME/.local/bin"
 printf '#!/bin/sh\necho "omp/%s"\n' "$OMP_STUB_VERSION" > "$HOME/.local/bin/omp"
 chmod +x "$HOME/.local/bin/omp"
 server_pid=""
@@ -33,7 +33,7 @@ stop_server() {
   wait "$server_pid" 2>/dev/null || true
   server_pid=""
   local pid_file postgres_pid
-  for pid_file in "$HOME/.$LEGACY_COMMAND"/instances/*/db/postmaster.pid "$HOME"/.wardmote/instances/*/db/postmaster.pid; do
+  for pid_file in "$HOME"/.wardmote/instances/*/db/postmaster.pid; do
     [ -f "$pid_file" ] || continue
     postgres_pid="$(head -n 1 "$pid_file")"
     for _ in $(seq 1 60); do
@@ -75,9 +75,8 @@ start_server() {
   return 1
 }
 
-LEGACY_PACKAGE="@tickernelz/paperclip-pro"
-LEGACY_COMMAND="paperclip-pro"
-OLD_VERSION="$(npm view "$LEGACY_PACKAGE" version)"
+PUBLISHED_PACKAGE="@tickernelz/wardmote"
+OLD_VERSION="$(npm view "$PUBLISHED_PACKAGE" version)"
 phase "start"
 PREBUILD_HOME="$ROOT/prebuild-home"
 mkdir -p "$PREBUILD_HOME"
@@ -85,12 +84,12 @@ echo "==> Building $REPO@$SHA with this commit's CLI in a separate home while th
 HOME="$PREBUILD_HOME" npm_config_userconfig="$PREBUILD_HOME/.npmrc" setsid bash -c 'cd "$1" && shift && exec "$@"' prebuild "$REPO_ROOT" \
   node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts install --repo "$REPO" --ref "$SHA" --yes >"$ROOT/prebuild.log" 2>&1 &
 prebuild_pid=$!
-echo "==> Installing the published release $LEGACY_PACKAGE@$OLD_VERSION the way an existing user has it"
-npm install --prefix "$ROOT/bootstrap" "$LEGACY_PACKAGE@$OLD_VERSION" --no-audit --no-fund >/dev/null
-"$ROOT/bootstrap/node_modules/.bin/paperclip-pro" install --version "$OLD_VERSION" --yes
-paperclip-pro --version
-start_server before paperclip-pro onboard --yes
-test -d "$HOME/.paperclip-pro/instances/default"
+echo "==> Installing the published release $PUBLISHED_PACKAGE@$OLD_VERSION the way an existing user has it"
+npm install --prefix "$ROOT/bootstrap" "$PUBLISHED_PACKAGE@$OLD_VERSION" --no-audit --no-fund >/dev/null
+"$ROOT/bootstrap/node_modules/.bin/wardmote" install --version "$OLD_VERSION" --yes
+wardmote --version
+start_server before wardmote onboard --yes
+test -d "$HOME/.wardmote/instances/default"
 curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"Upgrade path marker"}' "http://127.0.0.1:$PORT/api/companies" >/dev/null
 stop_server
 
@@ -103,26 +102,23 @@ fi
 prebuild_pid=""
 payload="$(find "$PREBUILD_HOME" -type d -path "*/cli/installs/git/${SHA:0:12}" -print -quit)"
 [ -n "$payload" ] || { tail -n 80 "$ROOT/prebuild.log"; exit 1; }
-mkdir -p "$HOME/.$LEGACY_COMMAND/cli/installs/git"
-mv "$payload" "$HOME/.$LEGACY_COMMAND/cli/installs/git/"
+mkdir -p "$HOME/.wardmote/cli/installs/git"
+mv "$payload" "$HOME/.wardmote/cli/installs/git/"
 phase "source build of this commit waited for and staged into the existing install"
 echo "==> Upgrading to $REPO@$SHA with this commit's @tickernelz/wardmote CLI, as npx @tickernelz/wardmote install does"
 (cd "$REPO_ROOT" && node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts install --repo "$REPO" --ref "$SHA" --yes) | tee "$ROOT/upgrade.log"
 grep -q "Activated cached wardmote git payload ${SHA:0:12}" "$ROOT/upgrade.log"
 wardmote --version
 test -d "$HOME/.wardmote/instances/default"
-test -L "$HOME/.paperclip-pro"
-test ! -e "$HOME/.local/bin/$LEGACY_COMMAND"
 grep -q '^# wardmote managed install shim v1$' "$HOME/.local/bin/wardmote"
 
 start_server after wardmote run
 curl -fsS "http://127.0.0.1:$PORT/api/companies" | grep -q '"Upgrade path marker"'
-echo "after upgrade: home moved to ~/.wardmote, marker company still listed"
+echo "after upgrade: marker company still listed"
 stop_server
 
 phase "source install to this commit done and served"
-echo "==> Re-running install through the migrated wardmote shim"
+echo "==> Re-running install through the wardmote shim"
 wardmote install --repo "$REPO" --ref "$SHA" --yes
 wardmote --version
-test -L "$HOME/.paperclip-pro"
 echo "upgrade path ok: $OLD_VERSION -> $SHA"

@@ -13,7 +13,6 @@ import { idleAccountingSpoolPath, registerIdleSpoolDirectory } from "./idle-loca
 import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { receiptFingerprint } from "./receipt-fingerprint.js";
-import { RETIRED_ACCOUNTING_RECEIPT_SCHEMA } from "./retired-accounting-receipt-schema.js";
 import { withAccountingTransaction } from "./accounting-transaction.js";
 import { ensureDurableDirectory, syncDirectory } from "../lib/durable-directory.js";
 
@@ -35,7 +34,7 @@ const checkpointSchema = z.object({
 });
 const ACCOUNTING_RECEIPT_SCHEMA = "wardmote/accounting-receipt/v1";
 const envelopeSchema = z.object({
-  schema: z.enum([ACCOUNTING_RECEIPT_SCHEMA, RETIRED_ACCOUNTING_RECEIPT_SCHEMA]), id: z.string().uuid(), companyId: z.string().uuid(),
+  schema: z.literal(ACCOUNTING_RECEIPT_SCHEMA), id: z.string().uuid(), companyId: z.string().uuid(),
   runId: z.string().uuid(), sourceId: z.string().uuid(), sequence: z.number().int().positive(), receivedAt: z.iso.datetime(),
   adapterType: z.string().max(100), receipt: checkpointSchema,
 });

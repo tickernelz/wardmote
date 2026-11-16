@@ -5,7 +5,6 @@ vi.mock("@cloudflare/sandbox", () => ({
 }));
 
 import { handleBridgeRequest } from "./routes.js";
-import { RETIRED_LEASE_SENTINEL_FILE } from "./retired-names.js";
 import { resolveSandbox } from "./sandboxes.js";
 
 vi.mock("./sandboxes.js", async () => {
@@ -105,7 +104,6 @@ describe("bridge routes", () => {
     expect(commandArg).toMatch(/^sh -lc /);
     expect(commandArg).toContain("test -s");
     expect(commandArg).toContain("/workspace/wardmote/.wardmote-lease.json");
-    expect(commandArg).toContain(`/workspace/wardmote/${RETIRED_LEASE_SENTINEL_FILE}`);
     expect(optionsArg).toEqual({ cwd: "/", timeout: expect.any(Number) });
     expect(optionsArg).not.toHaveProperty("args");
   });

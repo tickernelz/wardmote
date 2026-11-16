@@ -21,16 +21,6 @@ export async function updateAgentConfiguration(tx: Db, effects: LifecycleEffects
   return agentRecordQueries(tx).getById(id);
 }
 
-/** Rewrites a locked agent's stored adapterConfig without recording a configuration revision. */
-export async function rewriteStoredAdapterConfig(tx: Parameters<Parameters<Db["transaction"]>[0]>[0], id: string, rewrite: (adapterConfig: Agent["adapterConfig"]) => Agent["adapterConfig"]) {
-  const [current] = await tx.select().from(agents).where(eq(agents.id, id)).for("update");
-  if (!current) return null;
-  const adapterConfig = rewrite(current.adapterConfig);
-  if (jsonEqual(adapterConfig, current.adapterConfig)) return null;
-  await tx.update(agents).set({ adapterConfig, updatedAt: new Date(), ...invalidatedOperation(current, true) }).where(eq(agents.id, id));
-  return { before: current.adapterConfig, after: adapterConfig };
-}
-
 type Agent = typeof agents.$inferSelect;
 
 function invalidatedOperation(current: Agent, changed: boolean) {

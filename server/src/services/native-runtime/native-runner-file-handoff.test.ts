@@ -1,10 +1,9 @@
 import type { PrpStructuredRunResult } from "../../vendor/wardmote-runner/index.js";
-import { RETIRED_STAGING_ROOT } from "./retired-staging-root.js";
 import { nativeCompletionFeedback } from "./native-completion-feedback.js";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { rename,
+import {
   mkdtemp,
   link,
   mkdir,
@@ -246,23 +245,6 @@ describe("native runner file handoff", () => {
       await wake.cleanup();
       await expect(readFile(slot)).resolves.toEqual(Buffer.alloc(0));
       await expect(readdir(path.join(root, ".wardmote-inbound"))).resolves.toEqual(directories);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("scrubs bytes left under the staging root used before the rename", async () => {
-    const root = await mkdtemp(path.join(temporaryRoot, "empty-wake-retired-"));
-    try {
-      const previous = await stageNativeRunnerAttachmentBytes({ workspaceRoot: root, body: Buffer.from("previous attachment") });
-      await previous.cleanup();
-      await writeFile(path.join(root, previous.workspaceRelativePath), "stale bytes before the upgrade");
-      await rename(path.join(root, ".wardmote-inbound"), path.join(root, RETIRED_STAGING_ROOT));
-      const retiredSlot = path.join(root, RETIRED_STAGING_ROOT, path.relative(".wardmote-inbound", previous.workspaceRelativePath));
-
-      const wake = await stageEmptyWake(root);
-      await wake.cleanup();
-      await expect(readFile(retiredSlot)).resolves.toEqual(Buffer.alloc(0));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

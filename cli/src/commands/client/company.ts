@@ -25,7 +25,6 @@ import {
 import {
   findCompanyPackageExtensionPath,
   isCompanyPackageExtensionFile,
-  isRetiredCompanyPackageExtensionFile,
 } from "@tickernelz/wardmote-shared/company-package-extension";
 import { getTelemetryClient, trackCompanyImported } from "../../telemetry.js";
 import { ApiRequestError, type WardmoteApiClient } from "../../client/http.js";
@@ -221,7 +220,7 @@ function normalizePortablePath(filePath: string): string {
 function shouldIncludePortableFile(filePath: string): boolean {
   const baseName = path.basename(filePath);
   const isMarkdown = baseName.endsWith(".md");
-  const isWardmoteYaml = isCompanyPackageExtensionFile(baseName) || isRetiredCompanyPackageExtensionFile(baseName);
+  const isWardmoteYaml = isCompanyPackageExtensionFile(baseName);
   const contentType = binaryContentTypeByExtension[path.extname(baseName).toLowerCase()];
   return isMarkdown || isWardmoteYaml || Boolean(contentType) || isBlobStorePath(filePath);
 }

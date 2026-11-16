@@ -15,7 +15,6 @@ import {
   stageCodexHomeForSync,
   writeManagedCodexMcpConfig,
 } from "./codex-home.js";
-import { RETIRED_CODEX_MANAGED_MCP_BLOCK } from "../../retired-marker-names.js";
 
 describe("mergeManagedCodexMcpGateways", () => {
   it("keeps runtime gateways and appends non-overlapping context gateways", () => {
@@ -1019,38 +1018,6 @@ describe("evaluateCodexCredentialReadiness", () => {
       expect(zero).not.toContain("mcp_servers.");
       expect(zero).not.toContain("stale-token");
       expect(alphaHome).not.toBe(zeroHome);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("replaces a managed MCP block written before the rename instead of keeping both", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wardmote-codex-mcp-config-"));
-    try {
-      const configPath = path.join(root, "config.toml");
-      await fs.writeFile(configPath, [
-        'model = "gpt-5"',
-        "",
-        RETIRED_CODEX_MANAGED_MCP_BLOCK.start,
-        '[mcp_servers."alpha"]',
-        'url = "https://wardmote.example/old"',
-        'http_headers = { Authorization = "Bearer old-token" }',
-        RETIRED_CODEX_MANAGED_MCP_BLOCK.end,
-        "",
-      ].join("\n"));
-
-      await writeManagedCodexMcpConfig({
-        codexHome: root,
-        apiBaseUrl: "https://wardmote.example",
-        gateways: [{ name: "alpha", endpointPath: "/api/tool-gateway/gateways/alpha/mcp", bearerToken: "new-token" }],
-      });
-
-      const config = await fs.readFile(configPath, "utf8");
-      expect(config).not.toContain(RETIRED_CODEX_MANAGED_MCP_BLOCK.start);
-      expect(config).not.toContain("old-token");
-      expect(config.match(/\[mcp_servers\."alpha"\]/g)).toHaveLength(1);
-      expect(config).toContain('model = "gpt-5"');
-      expect(config).toContain("new-token");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

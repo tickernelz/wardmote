@@ -1,7 +1,5 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { migrateRetiredEnvFile } from "./retired-env-file.js";
 
 export const DEFAULT_WARDMOTE_INSTANCE_ID = "default";
 export const WARDMOTE_CONFIG_BASENAME = "config.json";
@@ -16,39 +14,8 @@ export function expandHomePrefix(value: string): string {
 }
 
 export const WARDMOTE_HOME_DIRNAME = ".wardmote";
-export const LEGACY_HOME_DIRNAME = ".paperclip-pro";
-
-const defaultHomeByUserHome = new Map<string, string>();
-
-function isLinkTo(link: string, target: string): boolean {
-  return Boolean(fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink())
-    && fs.existsSync(target)
-    && fs.realpathSync(link) === fs.realpathSync(target);
-}
-
-/** Maps a path recorded under the legacy home to the Wardmote home once `wardmote migrate-home` has linked the two. */
-export function rehomeLegacyPath(
-  value: string,
-  wardmoteHome: string = path.resolve(os.homedir(), WARDMOTE_HOME_DIRNAME),
-): string {
-  const resolved = path.resolve(expandHomePrefix(value));
-  const home = path.resolve(wardmoteHome);
-  const legacy = path.join(path.dirname(home), LEGACY_HOME_DIRNAME);
-  const relative = path.relative(legacy, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative) || !isLinkTo(legacy, home)) return resolved;
-  return path.join(home, relative);
-}
-
 export function resolveDefaultWardmoteHomeDir(userHome: string = os.homedir()): string {
-  const cached = defaultHomeByUserHome.get(userHome);
-  if (cached) return cached;
-  const legacy = path.resolve(userHome, LEGACY_HOME_DIRNAME);
-  const wardmote = path.resolve(userHome, WARDMOTE_HOME_DIRNAME);
-  if (fs.existsSync(legacy) && !isLinkTo(legacy, wardmote)) {
-    throw new Error(`${legacy} has not been migrated. Stop the service and run \`wardmote migrate-home\`.`);
-  }
-  defaultHomeByUserHome.set(userHome, wardmote);
-  return wardmote;
+  return path.resolve(userHome, WARDMOTE_HOME_DIRNAME);
 }
 
 export function resolveWardmoteHomeDir(homeOverride?: string): string {
@@ -87,9 +54,7 @@ export function resolveWardmoteConfigPathForInstance(input: {
 }
 
 export function resolveWardmoteEnvPathForConfig(configPath: string): string {
-  const envPath = path.resolve(path.dirname(configPath), WARDMOTE_ENV_FILENAME);
-  migrateRetiredEnvFile(envPath);
-  return envPath;
+  return path.resolve(path.dirname(configPath), WARDMOTE_ENV_FILENAME);
 }
 
 export function resolveDefaultEmbeddedPostgresDir(input: {
@@ -128,5 +93,5 @@ export function resolveDefaultBackupDir(input: {
 }
 
 export function resolveHomeAwarePath(value: string): string {
-  return rehomeLegacyPath(value);
+  return path.resolve(expandHomePrefix(value));
 }

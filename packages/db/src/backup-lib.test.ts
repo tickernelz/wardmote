@@ -6,7 +6,6 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import {
-  adoptRetiredBackupFilenames,
   createBufferedTextFileWriter,
   DATABASE_BACKUP_SKIPPED_MARKER,
   DatabaseBackupSkippedError,
@@ -15,12 +14,13 @@ import {
   runDatabaseRestore,
 } from "./backup-lib.js";
 import { ensurePostgresDatabase } from "./client.js";
-import { RETIRED_STATEMENT_BREAKPOINT } from "./retired-backup-names.js";
 import {
   EMBEDDED_POSTGRES_TEST_TIMEOUT_MS,
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./test-embedded-postgres.js";
+
+const STATEMENT_BREAKPOINT = "-- wardmote statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -82,22 +82,6 @@ describe("createBufferedTextFileWriter", () => {
     await writer.close();
 
     expect(fs.readFileSync(outputPath, "utf8")).toBe(lines.join("\n"));
-  });
-});
-
-describe("adoptRetiredBackupFilenames", () => {
-  it("renames retired-prefix backups once and leaves everything else", () => {
-    const dir = createTempDir("wardmote-backup-adopt-");
-    const retired = ["paperclip", ""].join("-");
-    fs.writeFileSync(path.join(dir, `${retired}20261101-010000.sql.gz`), "old");
-    fs.writeFileSync(path.join(dir, `${retired}20261102-010000.sql.gz`), "taken");
-    fs.writeFileSync(path.join(dir, "wardmote-20261102-010000.sql.gz"), "new");
-    fs.writeFileSync(path.join(dir, `${retired}notes.txt`), "keep");
-    expect(adoptRetiredBackupFilenames(dir)).toBe(1);
-    expect(fs.readFileSync(path.join(dir, "wardmote-20261101-010000.sql.gz"), "utf8")).toBe("old");
-    expect(fs.readFileSync(path.join(dir, "wardmote-20261102-010000.sql.gz"), "utf8")).toBe("new");
-    expect(fs.readdirSync(dir).filter((name) => name.startsWith(retired)).sort()).toEqual([`${retired}20261102-010000.sql.gz`, `${retired}notes.txt`]);
-    expect(adoptRetiredBackupFilenames(dir)).toBe(0);
   });
 });
 
@@ -754,14 +738,14 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
             "-- Created: 2026-04-06T00:00:00.000Z",
             "",
             "BEGIN;",
-            RETIRED_STATEMENT_BREAKPOINT,
+            STATEMENT_BREAKPOINT,
             "CREATE TABLE public.restore_stream_test (id integer primary key, payload text not null);",
-            RETIRED_STATEMENT_BREAKPOINT,
+            STATEMENT_BREAKPOINT,
             "INSERT INTO public.restore_stream_test (id, payload)",
             "VALUES (1, 'hello');",
-            RETIRED_STATEMENT_BREAKPOINT,
+            STATEMENT_BREAKPOINT,
             "COMMIT;",
-            RETIRED_STATEMENT_BREAKPOINT,
+            STATEMENT_BREAKPOINT,
           ].join("\n"),
           "utf8",
         );

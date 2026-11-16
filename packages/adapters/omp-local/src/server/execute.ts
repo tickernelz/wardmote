@@ -3,7 +3,6 @@ import { createProviderStoppedBoundary } from "@tickernelz/wardmote-adapter-util
 import os from "node:os";
 import path from "node:path";
 import { createUsageCheckpointLog } from "@tickernelz/wardmote-adapter-utils/usage-checkpoint";
-import { rehomeLegacyPath } from "@tickernelz/wardmote-shared/home-paths";
 import {
   inferOpenAiCompatibleBiller,
   type AdapterExecutionContext,
@@ -248,7 +247,7 @@ function safePathSegment(value: string): string {
 function executionCwdsMatch(saved: string, current: string, remote: boolean): boolean {
   return remote
     ? path.posix.normalize(saved) === path.posix.normalize(current)
-    : rehomeLegacyPath(saved) === rehomeLegacyPath(current);
+    : path.resolve(saved) === path.resolve(current);
 }
 
 function stringsOnly(env: NodeJS.ProcessEnv | Record<string, unknown>): Record<string, string> {

@@ -4,7 +4,6 @@ import { parseConfig } from "./config.js";
 import manifest from "./manifest.js";
 import { execute } from "./execute.js";
 import { CreateosClient } from "./client.js";
-import { RETIRED_LEASE_MARKER_FILE } from "./retired-names.js";
 vi.mock("./request-pacer.js", () => ({ waitForRequest: vi.fn().mockResolvedValue(undefined) }));
 
 const config = { apiUrl: "https://createos.example.test", apiKey: "test-secret", shape: "test-shape", timeoutMs: 5000 };
@@ -56,8 +55,7 @@ function provider() {
     throw new Error(`Unhandled fixture request ${method} ${path}`);
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { calls, fetchMock, setState: (value: string) => { state = value; }, setMarker: (value: string) => { for (const key of files.keys()) if (key.endsWith("-lease")) files.set(key, value); },
-    renameMarker: (from: string, to: string) => { for (const [key, value] of [...files]) if (key.endsWith(from)) { files.delete(key); files.set(key.slice(0, -from.length) + to, value); } } };
+  return { calls, fetchMock, setState: (value: string) => { state = value; }, setMarker: (value: string) => { for (const key of files.keys()) if (key.endsWith("-lease")) files.set(key, value); } };
 }
 
 function executionParams(overrides = {}) {
@@ -110,15 +108,6 @@ describe("CreateOS lifecycle", () => {
     await expect(hooks.onEnvironmentResumeLease!({ ...other, providerLeaseId: "sb_test", leaseMetadata: lease.metadata })).rejects.toThrow("this environment");
     await expect(hooks.onEnvironmentDestroyLease!({ ...other, providerLeaseId: "sb_test", leaseMetadata: lease.metadata })).rejects.toThrow("this environment");
     expect(fake.fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("resumes a lease whose marker an earlier release wrote under the retired name", async () => {
-    const fake = provider();
-    const hooks = createPlugin().definition;
-    const lease = await hooks.onEnvironmentAcquireLease!({ ...base, runId: "run" });
-    fake.renameMarker(".wardmote-createos-lease", RETIRED_LEASE_MARKER_FILE);
-    expect(await hooks.onEnvironmentResumeLease!({ ...base, providerLeaseId: "sb_test", leaseMetadata: lease.metadata }))
-      .toMatchObject({ providerLeaseId: "sb_test" });
   });
 
   it("expires a missing or mismatched workspace but preserves transient resume failures", async () => {

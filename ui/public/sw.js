@@ -1,7 +1,6 @@
 const BUILD_ID = "__WARDMOTE_BUILD_ID__";
 const SHELL_CACHE = `wardmote-shell-${BUILD_ID}`;
 const DATA_CACHE_PREFIX = "wardmote-data-";
-const LEGACY_CACHE_PREFIX = "paperclip-public-assets-";
 const SHELL_KEY = "/__wardmote_shell__";
 const CACHED_AT_HEADER = "x-wardmote-cached-at";
 const MAX_DATA_ENTRIES = 400;
@@ -254,15 +253,6 @@ self.addEventListener("message", (event) => {
   } else if (type === BUILD_ID_MESSAGE) {
     event.ports?.[0]?.postMessage({ type: BUILD_ID_MESSAGE, buildId: BUILD_ID });
   }
-});
-
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => {
-      if (keys.some((key) => key.startsWith(LEGACY_CACHE_PREFIX))) return self.skipWaiting();
-      return undefined;
-    }).catch(() => {}),
-  );
 });
 
 self.addEventListener("activate", (event) => {

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { RETIRED_LINKED_KEY_PREFIX } from "./retired-linked-key-name.js";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { chatEndpoints, chatOpenwaLinkedSessions, type Db } from "@tickernelz/wardmote-db";
 import {
@@ -403,7 +402,7 @@ export function openwaLinkedService(db: Db, deps: OpenwaLinkedServiceDeps) {
     if (revoked) return { revoked: true };
     return {
       revoked: false,
-      warning: "Unlinked, but OpenWA did not revoke the viewer key. Revoke the API key \"" + linkedKeyName(row.id) + "\" (named \"" + RETIRED_LINKED_KEY_PREFIX + row.id.slice(0, 8) + "\" if the number was linked before the rename) in the OpenWA dashboard.",
+      warning: "Unlinked, but OpenWA did not revoke the viewer key. Revoke the API key \"" + linkedKeyName(row.id) + "\" in the OpenWA dashboard.",
     };
   }
 

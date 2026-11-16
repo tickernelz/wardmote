@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { adoptRetiredRepoConfigDir } from "@tickernelz/wardmote-shared/repo-config-dir";
 import { resolveDefaultContextPath } from "../config/home.js";
 
 const DEFAULT_CONTEXT_BASENAME = "context.json";
@@ -29,7 +28,6 @@ function findContextFileFromAncestors(startDir: string): string | null {
   let currentDir = absoluteStartDir;
 
   while (true) {
-    adoptRetiredRepoConfigDir(currentDir);
     const candidate = path.resolve(currentDir, ".wardmote", DEFAULT_CONTEXT_BASENAME);
     if (fs.existsSync(candidate)) {
       return candidate;

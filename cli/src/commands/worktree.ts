@@ -16,7 +16,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { REPO_CONFIG_DIR_NAMES } from "@tickernelz/wardmote-shared/repo-config-dir";
+import { REPO_CONFIG_DIR } from "@tickernelz/wardmote-shared/repo-config-dir";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import { Readable } from "node:stream";
@@ -71,7 +71,6 @@ import {
   EMBEDDED_POSTGRES_DATABASE,
   embeddedPostgresUrl,
   embeddedPostgresAdminUrl,
-  migrateEmbeddedPostgresIdentity,
 } from "@tickernelz/wardmote-db";
 import type { Command } from "commander";
 import { ensureAgentJwtSecret, ensureToolActionSigningSecret, loadWardmoteEnvFile, mergeWardmoteEnvEntries, readWardmoteEnvEntries, resolveWardmoteEnvFile } from "../config/env.js";
@@ -302,7 +301,6 @@ function formatSeededWorktreeExecutionQuarantineSummary(
 }
 
 const WORKTREE_NAME_PREFIX = "wardmote-";
-const RETIRED_WORKTREE_NAME_PREFIX = "paperclip-";
 
 function resolveWorktreeMakeName(name: string): string {
   const value = nonEmpty(name);
@@ -314,7 +312,7 @@ function resolveWorktreeMakeName(name: string): string {
       "Worktree name must contain only letters, numbers, dots, underscores, or dashes.",
     );
   }
-  if (value.startsWith(WORKTREE_NAME_PREFIX) || value.startsWith(RETIRED_WORKTREE_NAME_PREFIX)) return value;
+  if (value.startsWith(WORKTREE_NAME_PREFIX)) return value;
   return `${WORKTREE_NAME_PREFIX}${value}`;
 }
 
@@ -599,11 +597,8 @@ async function findAvailablePort(preferredPort: number, reserved = new Set<numbe
 
 function resolveRepoManagedWorktreesRoot(cwd: string): string | null {
   const normalized = path.resolve(cwd);
-  for (const name of REPO_CONFIG_DIR_NAMES) {
-    const index = normalized.indexOf(`${path.sep}${name}${path.sep}worktrees${path.sep}`);
-    if (index !== -1) return path.resolve(normalized.slice(0, index), name, "worktrees");
-  }
-  return null;
+  const index = normalized.indexOf(`${path.sep}${REPO_CONFIG_DIR}${path.sep}worktrees${path.sep}`);
+  return index === -1 ? null : path.resolve(normalized.slice(0, index), REPO_CONFIG_DIR, "worktrees");
 }
 
 function collectClaimedWorktreePorts(
@@ -640,10 +635,8 @@ function collectClaimedWorktreePorts(
   if (repoManagedWorktreesRoot && existsSync(repoManagedWorktreesRoot)) {
     for (const entry of readdirSync(repoManagedWorktreesRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      for (const name of REPO_CONFIG_DIR_NAMES) {
-        const configPath = path.resolve(repoManagedWorktreesRoot, entry.name, name, "config.json");
-        if (existsSync(configPath)) configPaths.add(configPath);
-      }
+      const configPath = path.resolve(repoManagedWorktreesRoot, entry.name, REPO_CONFIG_DIR, "config.json");
+      if (existsSync(configPath)) configPaths.add(configPath);
     }
   }
 
@@ -1138,7 +1131,6 @@ export async function ensureEmbeddedPostgres(
       );
     }
     const runningPort = readPidFilePort(postmasterPidFile) ?? preferredPort;
-    await migrateEmbeddedPostgresIdentity({ port: runningPort, dataDir });
     return {
       port: runningPort,
       startedByThisProcess: false,
@@ -1179,13 +1171,6 @@ export async function ensureEmbeddedPostgres(
       fallbackMessage: `Failed to start embedded PostgreSQL on port ${port}`,
       recentLogs: logBuffer.getRecentLogs(),
     });
-  }
-
-  try {
-    await migrateEmbeddedPostgresIdentity({ port, dataDir });
-  } catch (error) {
-    await instance.stop();
-    throw error;
   }
 
   return {

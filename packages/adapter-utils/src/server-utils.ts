@@ -4384,16 +4384,11 @@ async function placeWardmoteSkillLink(
   }
 }
 
-const BUNDLED_SKILL_ROOTS = ["wardmote-server", "paperclip-pro-server"].map(
-  (serverPackage) => `${path.sep}node_modules${path.sep}@tickernelz${path.sep}${serverPackage}${path.sep}skills${path.sep}`,
-);
+const BUNDLED_SKILL_ROOT = `${path.sep}node_modules${path.sep}@tickernelz${path.sep}wardmote-server${path.sep}skills${path.sep}`;
 
 function bundledSkillRelativePath(skillPath: string): string | null {
-  for (const root of BUNDLED_SKILL_ROOTS) {
-    const at = skillPath.lastIndexOf(root);
-    if (at >= 0) return skillPath.slice(at + root.length);
-  }
-  return null;
+  const at = skillPath.lastIndexOf(BUNDLED_SKILL_ROOT);
+  return at >= 0 ? skillPath.slice(at + BUNDLED_SKILL_ROOT.length) : null;
 }
 
 function isSameBundledSkillFromAnotherInstall(linkedPath: string, source: string): boolean {

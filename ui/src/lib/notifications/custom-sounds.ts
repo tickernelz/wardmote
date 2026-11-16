@@ -1,5 +1,4 @@
 import type { NotificationKind } from "@tickernelz/wardmote-shared";
-import { moveRetiredCustomSounds } from "./retired-custom-sounds";
 
 export const CUSTOM_SOUND_MAX_BYTES = 512 * 1024;
 
@@ -40,10 +39,7 @@ function openDb(): Promise<IDBDatabase> {
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE, { keyPath: "kind" });
     };
-    dbPromise = requestResult(request).then(async (db) => {
-      await moveRetiredCustomSounds(db, STORE).catch(() => 0);
-      return db;
-    }).catch((error: unknown) => {
+    dbPromise = requestResult(request).catch((error: unknown) => {
       dbPromise = null;
       throw error;
     });

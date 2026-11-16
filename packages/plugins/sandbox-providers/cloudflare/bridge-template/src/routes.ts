@@ -4,7 +4,6 @@ import { executeInSandbox } from "./exec.js";
 import { shellQuote } from "./helpers.js";
 import {
   buildLeaseSandboxId,
-  buildRetiredSentinelPath,
   buildSentinelPath,
   DEFAULT_REMOTE_CWD,
   DEFAULT_SESSION_ID,
@@ -191,7 +190,7 @@ async function verifySentinel(
     sandbox,
     input,
     "sh",
-    ["-c", `test -s ${shellQuote(buildSentinelPath(input.remoteCwd))} || test -s ${shellQuote(buildRetiredSentinelPath(input.remoteCwd))}`],
+    ["-c", `test -s ${shellQuote(buildSentinelPath(input.remoteCwd))}`],
     "/",
   );
   return !result.timedOut && (result.exitCode ?? 0) === 0;

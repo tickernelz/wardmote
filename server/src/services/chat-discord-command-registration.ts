@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { DiscordBotIdentity } from "./chat-discord.js";
-import { RETIRED_DISCORD_COMMAND_NAME } from "./retired-discord-command-name.js";
 
 // https://docs.discord.com/developers/interactions/application-commands
 // Global commands are required for BOT_DM. Never bulk overwrite an app's
@@ -133,25 +132,12 @@ export function discordWardmoteCommandDefinition(publicOwnerId: string) {
 
 type CommandDefinition = ReturnType<typeof discordWardmoteCommandDefinition>;
 
-function priorDefinitions(id: string): CommandDefinition[] {
-  const renamed = discordWardmoteCommandDefinition(id);
-  renamed.name = RETIRED_DISCORD_COMMAND_NAME;
-  const closeCopy = discordWardmoteCommandDefinition(id);
-  closeCopy.name = RETIRED_DISCORD_COMMAND_NAME;
-  closeCopy.options[2]!.description = "Close the current Wardmote task";
-  return [renamed, closeCopy];
-}
-
 function digestOf(definition: CommandDefinition): string {
   return createHash("sha256").update(JSON.stringify(definition)).digest("hex");
 }
 
 function definitionDigest(id: string): string {
   return digestOf(discordWardmoteCommandDefinition(id));
-}
-
-function isOwnedCommandName(name: string): boolean {
-  return name === DISCORD_COMMAND_NAME || name === RETIRED_DISCORD_COMMAND_NAME;
 }
 
 /** Persist this prepared descriptor before calling reconcile; its CAS must
@@ -173,8 +159,6 @@ export function createDiscordCommandRegistration(
 export function parseDiscordCommandRegistration(
   input: unknown,
   scope: DiscordCommandRegistrationScope,
-  /** Maintenance only; prior attempted writes and arbitrary digests stay closed. */
-  allowKnownPriorDefinition = false,
 ): DiscordCommandRegistration | null {
   const expected = scopeSchema.safeParse(scope);
   const parsed = stateSchema.safeParse(input);
@@ -191,11 +175,7 @@ export function parseDiscordCommandRegistration(
       : state.phase === "registered"
         ? state.receipt.definitionDigest
         : null;
-  return storedDigest === null ||
-    storedDigest === definitionDigest(state.ownerId) ||
-    (allowKnownPriorDefinition &&
-      state.phase === "registered" &&
-      priorDefinitions(state.ownerId).some((definition) => digestOf(definition) === storedDigest))
+  return storedDigest === null || storedDigest === definitionDigest(state.ownerId)
     ? freezeState(state)
     : null;
 }
@@ -252,10 +232,6 @@ function exactDefinition(command: RemoteCommand, id: string): boolean {
   return matchesDefinition(command, discordWardmoteCommandDefinition(id));
 }
 
-function matchesPriorDefinition(command: RemoteCommand, id: string): boolean {
-  return priorDefinitions(id).some((definition) => matchesDefinition(command, definition));
-}
-
 function matchesDefinition(
   command: RemoteCommand,
   expected: CommandDefinition,
@@ -291,7 +267,7 @@ function markedOwner(
 ): boolean {
   return (
     command.type === 1 &&
-    isOwnedCommandName(command.name) &&
+    command.name === DISCORD_COMMAND_NAME &&
     command.application_id === state.scope.applicationId &&
     command.guild_id === undefined &&
     command.description.endsWith(`[pc:${state.ownerId}]`)
@@ -418,7 +394,7 @@ async function request(
 export async function reconcileDiscordCommandRegistration(
   input: ReconcileDiscordCommandRegistrationOptions,
 ): Promise<DiscordCommandRegistrationResult> {
-  let state = parseDiscordCommandRegistration(input.state, input.scope, true);
+  let state = parseDiscordCommandRegistration(input.state, input.scope);
   const runtimeFence = fenceSchema.safeParse(input.runtimeFence);
   if (
     !state ||
@@ -531,7 +507,7 @@ export async function reconcileDiscordCommandRegistration(
       ? undefined
       : commands.find(
           (command) =>
-            command.type === 1 && command.id === ownedId && isOwnedCommandName(command.name),
+            command.type === 1 && command.id === ownedId && command.name === DISCORD_COMMAND_NAME,
         );
   if (owned && namespace[0] && namespace[0].id !== owned.id)
     return { kind: "conflict", reason: "owned_command_changed" };
@@ -560,15 +536,6 @@ export async function reconcileDiscordCommandRegistration(
       return { kind: "conflict", reason: "owned_command_changed" };
     }
     if (exactDefinition(existing, state.ownerId)) return settle(existing);
-    if (
-      state.receipt.definitionDigest !== definitionDigest(state.ownerId) &&
-      (existing.version !== state.receipt.version ||
-        !matchesPriorDefinition(existing, state.ownerId))
-    ) {
-      // A software copy migration must not overwrite an operator's intervening
-      // remote edit. Require the exact prior receipt and complete prior shape.
-      return { kind: "conflict", reason: "owned_command_changed" };
-    }
   } else if (commands.filter((command) => command.type === 1).length >= 100) {
     return { kind: "conflict", reason: "command_limit" };
   }
