@@ -1353,7 +1353,7 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
       categories: ["external_tools"],
       scope: "one_action",
       summary: "Delete the stale release branch",
-      proposedAction: "git push origin --delete release/old",
+      proposedAction: "Delete the remote branch release/old",
       messageToOwners: "Member asks to delete a branch",
       destructive: true,
       idempotencyKey: key(),
@@ -1391,6 +1391,9 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     const [, next] = await digests();
     expect(next).toMatchObject({ status: "received" });
     expect(Date.parse(String((next!.result as { retryAt: string }).retryAt))).toBeGreaterThanOrEqual(before + 30 * 60_000 - 1_000);
+
+    await t.service.openwa.updatePolicy(t.endpointId, { approvals: { autonomous: false } }, t.userId);
+    expect(await grantsOf(String(approved.requestId))).toEqual([expect.objectContaining({ approvedVia: "autonomous", status: "revoked" })]);
   }, 120_000);
 
   it("autonomous mode accepts confirmation cards in the conversation tree, destructive ones included, and leaves other trees alone", async () => {
@@ -1417,5 +1420,17 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     const audit = await db.select().from(chatAuditEntries).where(and(eq(chatAuditEntries.endpointId, t.endpointId), eq(chatAuditEntries.kind, "autonomous_action")));
     expect(audit.map((row) => (row.metadata as { interactionId?: string }).interactionId).sort()).toEqual([waiting.id, fresh.id].sort());
     expect(audit.find((row) => (row.metadata as { interactionId?: string }).interactionId === waiting.id)!.metadata).toMatchObject({ destructive: true, source: "card" });
+  }, 120_000);
+  it("autonomous mode starts a new digest when an action lands after the open digest was claimed", async () => {
+    const t = await setup({ policy: { approvals: { autonomous: true } } });
+    const run = await runStart(t, await admitted(t, { chatId: jid(MEMBER_A), body: "buat task" }));
+    const digests = () => db.select().from(chatActions).where(and(eq(chatActions.endpointId, t.endpointId), eq(chatActions.kind, OPENWA_AUTONOMOUS_DIGEST_ACTION_KIND))).orderBy(asc(chatActions.createdAt));
+    await requestApproval(run.binding, { message: "First" });
+    const [first] = await digests();
+    await db.update(chatActions).set({ status: "processing" }).where(eq(chatActions.id, first!.id));
+    await requestApproval(run.binding, { message: "Second" });
+    const [claimed, fresh] = await digests();
+    expect((claimed!.payload as { events: unknown[] }).events).toHaveLength(1);
+    expect(fresh).toMatchObject({ status: "received", payload: expect.objectContaining({ events: [expect.objectContaining({ summary: "Create a follow-up task for the invoice bug" })] }) });
   }, 120_000);
 });

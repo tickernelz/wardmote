@@ -281,6 +281,7 @@ export async function revokeOpenwaGrantsOfFormerOwners(
         eq(chatOwnerGrants.companyId, endpoint.companyId),
         eq(chatOwnerGrants.endpointId, endpoint.id),
         inArray(chatOwnerGrants.status, ["live", "consumed"]),
+        ne(chatOwnerGrants.approvedVia, "autonomous"),
         current.length
           ? or(sql`${chatOwnerGrants.approvedByUserId} is null`, notInArray(chatOwnerGrants.approvedByUserId, current))
           : undefined,
@@ -945,6 +946,22 @@ export function openwaOwnerService(db: Db, deps: OpenwaOwnerServiceDeps) {
         publications,
         origin,
       );
+      if (autonomousChanged && !autonomous.after) {
+        const revoked = await tx
+          .update(chatOwnerGrants)
+          .set({ status: "revoked", updatedAt: new Date() })
+          .where(
+            and(
+              eq(chatOwnerGrants.companyId, endpoint.companyId),
+              eq(chatOwnerGrants.endpointId, endpoint.id),
+              eq(chatOwnerGrants.approvedVia, "autonomous"),
+              eq(chatOwnerGrants.status, "live"),
+            ),
+          )
+          .returning({ id: chatOwnerGrants.id });
+        if (revoked.length)
+          await audit(tx, endpoint, actorUserId, "openwa.grant_revoked", { grantIds: revoked.map((grant) => grant.id), reason: "autonomous_mode_off" }, publications, origin);
+      }
       if (autonomousChanged && !origin)
         await recordOpenwaAudit(tx, {
           companyId: endpoint.companyId,

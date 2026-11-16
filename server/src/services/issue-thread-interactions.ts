@@ -553,18 +553,7 @@ async function assertRequestConfirmationResolutionAllowedUnderLock(
 }
 
 export function isAutonomyWindowEligibleInteraction(interaction: IssueThreadInteraction) {
-  if (interaction.kind !== "request_confirmation" || interaction.status !== "pending") return false;
-  const payload = interaction.payload;
-  return !(
-    payload.toolAction !== undefined ||
-    payload.secretProposal !== undefined ||
-    payload.connectionAuthorization !== undefined ||
-    payload.openwaApprovalRequestId !== undefined ||
-    payload.destructive !== false ||
-    interaction.addresseeAgentId ||
-    !interaction.createdByAgentId ||
-    isNativeCompletionReview({ kind: interaction.kind, payload: payload as unknown as IssueThreadInteractionRow["payload"] })
-  );
+  return isOpenwaAutonomousEligibleInteraction(interaction) && interaction.kind === "request_confirmation" && interaction.payload.destructive === false;
 }
 
 export function isOpenwaAutonomousEligibleInteraction(interaction: IssueThreadInteraction) {
@@ -2357,6 +2346,8 @@ export function issueThreadInteractionService(
   ): Promise<IssueThreadInteraction> {
     if (!isOpenwaAutonomousEligibleInteraction(interaction)) return interaction;
     try {
+      const coverage = await openwaAutonomousCoverage(db, issue.companyId, issue.id);
+      if (!coverage) return interaction;
       const [issueRow] = await db
         .select({
           id: issues.id,
@@ -2368,8 +2359,6 @@ export function issueThreadInteractionService(
         .from(issues)
         .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
       if (!issueRow || issueRow.status === "in_review" || isTerminalIssueStatus(issueRow.status)) return interaction;
-      const coverage = await openwaAutonomousCoverage(db, issue.companyId, issue.id);
-      if (!coverage) return interaction;
       const [current] = await db
         .select()
         .from(issueThreadInteractions)

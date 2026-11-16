@@ -159,20 +159,17 @@ export async function recordOpenwaAutonomousAction(tx: DbTransaction, action: Op
         eq(chatActions.status, "received"),
       ),
     )
-    .limit(1);
+    .limit(1)
+    .for("update");
   const soon = now.getTime() + OPENWA_AUTONOMOUS_DESTRUCTIVE_DELAY_MS;
-  if (open) {
-    const payload = record(open.payload);
-    const events = Array.isArray(payload.events) ? (payload.events as DigestEvent[]) : [];
-    const kept = events.length < DIGEST_MAX_EVENTS ? [...events, event] : events;
-    const omitted = Number(payload.omitted ?? 0) + (kept === events ? 1 : 0);
-    const due = Date.parse(String(record(open.result).retryAt));
-    const nextDue = action.destructive && !(due <= soon) ? new Date(soon).toISOString() : String(record(open.result).retryAt);
-    await tx
-      .update(chatActions)
-      .set({ payload: { ...payload, events: kept, omitted }, result: { ...record(open.result), retryAt: nextDue }, updatedAt: now })
-      .where(eq(chatActions.id, open.id));
-  } else {
+  const merged = open
+    ? await tx
+        .update(chatActions)
+        .set({ ...mergeDigestEvent(open, event, soon), updatedAt: now })
+        .where(and(eq(chatActions.id, open.id), eq(chatActions.status, "received")))
+        .returning({ id: chatActions.id })
+    : [];
+  if (!merged.length) {
     const dueAt = action.destructive ? soon : now.getTime() + OPENWA_AUTONOMOUS_DIGEST_INTERVAL_MS;
     await tx.insert(chatActions).values({
       companyId: action.companyId,
@@ -180,11 +177,32 @@ export async function recordOpenwaAutonomousAction(tx: DbTransaction, action: Op
       kind: OPENWA_AUTONOMOUS_DIGEST_ACTION_KIND,
       providerActionId: "openwa-autonomous-digest:" + now.toISOString() + ":" + randomUUID(),
       status: "received",
-      payload: { version: 1, since: now.toISOString(), events: [event], omitted: 0 },
+      payload: { version: 1, since: now.toISOString(), events: [event], omitted: 0, omittedDestructive: 0 },
       result: { retryAt: new Date(dueAt).toISOString() },
     });
   }
   await notifyChatActionWork(tx, OPENWA_AUTONOMOUS_DIGEST_ACTION_KIND);
+}
+
+function mergeDigestEvent(open: typeof chatActions.$inferSelect, event: DigestEvent, soon: number) {
+  const payload = record(open.payload);
+  const events = Array.isArray(payload.events) ? (payload.events as DigestEvent[]) : [];
+  let omitted = Number(payload.omitted ?? 0);
+  let omittedDestructive = Number(payload.omittedDestructive ?? 0);
+  let kept = [...events, event];
+  if (kept.length > DIGEST_MAX_EVENTS) {
+    const dropAt = kept.findIndex((entry) => !entry.destructive);
+    const dropped = kept[dropAt === -1 ? kept.length - 1 : dropAt]!;
+    kept = kept.filter((entry) => entry !== dropped);
+    omitted++;
+    if (dropped.destructive) omittedDestructive++;
+  }
+  const retryAt = String(record(open.result).retryAt);
+  const due = Date.parse(retryAt);
+  return {
+    payload: { ...payload, events: kept, omitted, omittedDestructive },
+    result: { ...record(open.result), retryAt: event.destructive && !(due <= soon) ? new Date(soon).toISOString() : retryAt },
+  };
 }
 
 function digestLine(event: DigestEvent, index: number, agentNames: Map<string, string>, issueRefs: Map<string, string>): string {
@@ -201,10 +219,11 @@ export function renderOpenwaAutonomousDigest(input: {
   since: string;
   events: DigestEvent[];
   omitted: number;
+  omittedDestructive: number;
   agentNames: Map<string, string>;
   issueRefs: Map<string, string>;
 }): string {
-  const destructive = input.events.filter((event) => event.destructive).length;
+  const destructive = input.events.filter((event) => event.destructive).length + input.omittedDestructive;
   const total = input.events.length + input.omitted;
   return [
     "*Autonomous mode digest*" + (input.endpointName ? " (" + input.endpointName + ")" : ""),
@@ -238,10 +257,12 @@ export async function dispatchOpenwaAutonomousDigest(db: Db, actionId: string): 
     .returning();
   if (!claimed) return false;
   const attemptCount = Number(record(claimed.result).attemptCount ?? 0) + 1;
+  const previous = record(claimed.result).sent;
+  const sent: Array<{ chatKey: string; messageIds: string[] }> = Array.isArray(previous) ? (previous as Array<{ chatKey: string; messageIds: string[] }>) : [];
   const settle = (status: "processed" | "failed", result: Record<string, unknown>) =>
     db
       .update(chatActions)
-      .set({ status, result: { ...result, attemptCount }, updatedAt: new Date() })
+      .set({ status, result: { ...result, sent, attemptCount }, updatedAt: new Date() })
       .where(and(eq(chatActions.id, claimed.id), eq(chatActions.status, "processing")));
   try {
     const payload = record(claimed.payload);
@@ -265,13 +286,14 @@ export async function dispatchOpenwaAutonomousDigest(db: Db, actionId: string): 
     const issueRefs = new Map(issueRows.map((row) => [row.id, row.identifier ?? row.id]));
     const policy = openwaEndpointPolicySchema.parse(endpoint.policy ?? {});
     const prefix = policy.numberMode === "owner_number" && policy.ownerNumberPrefix.enabled ? policy.ownerNumberPrefix.text : null;
-    const sent: Array<{ chatKey: string; messageIds: string[] }> = [];
     for (const [chatId, list] of await destinations(db, endpoint, events)) {
+      if (sent.some((entry) => entry.chatKey === openwaChatKey(chatId))) continue;
       const markdown = renderOpenwaAutonomousDigest({
         endpointName: endpoint.providerAccountLabel ?? endpoint.botDisplayName ?? null,
         since: String(payload.since ?? claimed.createdAt.toISOString()),
         events: list,
         omitted: Number(payload.omitted ?? 0),
+        omittedDestructive: Number(payload.omittedDestructive ?? 0),
         agentNames,
         issueRefs,
       });
@@ -301,11 +323,11 @@ export async function dispatchOpenwaAutonomousDigest(db: Db, actionId: string): 
       metadata: {
         actionId: claimed.id,
         events: events.length + Number(payload.omitted ?? 0),
-        destructive: events.filter((event) => event.destructive).length,
+        destructive: events.filter((event) => event.destructive).length + Number(payload.omittedDestructive ?? 0),
         destinations: sent.map((entry) => entry.chatKey),
       },
     });
-    await settle("processed", { code: "openwa_autonomous_digest_sent", sentAt: new Date().toISOString(), sent });
+    await settle("processed", { code: "openwa_autonomous_digest_sent", sentAt: new Date().toISOString() });
     return true;
   } catch (error) {
     logger.warn({ err: error, actionId: claimed.id }, "failed to send OpenWA autonomous digest");

@@ -19,6 +19,7 @@ const sharedDefaults = {
     crossChatSend: true,
     waAdmin: true,
     gatewayAdmin: true,
+    autonomous: false,
     reminderMinutes: 30,
     maxReminders: 3,
     grantTtlHours: 24,

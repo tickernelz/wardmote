@@ -615,7 +615,9 @@ change is audited (`config_changed` with before/after, and
   other card kinds still wait for a person. Company approvals (hire agent,
   CEO strategy, budget override, board approval) are not affected.
 - Turning it on settles, once, every pending approval request of the endpoint
-  and every eligible pending card in its conversation trees.
+  and every eligible pending card in its conversation trees. Turning it off
+  revokes the live grants it created (`openwa.grant_revoked`, reason
+  `autonomous_mode_off`); owner changes never revoke them.
 - Owners get one digest per endpoint in the origin chat's report group (or the
   owner-only group, else each owner's direct chat): what was done, by which
   agent, for which sender role, on which task (with link), with destructive
