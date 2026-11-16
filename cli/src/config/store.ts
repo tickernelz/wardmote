@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { adoptRetiredRepoConfigDir } from "@tickernelz/wardmote-shared/repo-config-dir";
 import {
   mergeWardmoteConfig,
   wardmoteConfigSchema,
@@ -19,7 +18,6 @@ function findConfigFileFromAncestors(startDir: string): string | null {
   let currentDir = absoluteStartDir;
 
   while (true) {
-    adoptRetiredRepoConfigDir(currentDir);
     const candidate = path.resolve(currentDir, ".wardmote", DEFAULT_CONFIG_BASENAME);
     if (fs.existsSync(candidate)) {
       return candidate;

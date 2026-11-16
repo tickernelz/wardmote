@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { REPO_CONFIG_DIR_NAMES } from "@tickernelz/wardmote-shared/repo-config-dir";
+import { REPO_CONFIG_DIR } from "@tickernelz/wardmote-shared/repo-config-dir";
 import {
   mergeWardmoteConfig,
   wardmoteConfigSchema,
@@ -217,11 +217,8 @@ function writeConfigFile(configPath: string, config: WardmoteConfig): boolean {
 
 function resolveRepoManagedWorktreesRoot(worktreeRoot: string): string | null {
   const normalized = path.resolve(worktreeRoot);
-  for (const name of REPO_CONFIG_DIR_NAMES) {
-    const index = normalized.indexOf(`${path.sep}${name}${path.sep}worktrees${path.sep}`);
-    if (index !== -1) return path.resolve(normalized.slice(0, index), name, "worktrees");
-  }
-  return null;
+  const index = normalized.indexOf(`${path.sep}${REPO_CONFIG_DIR}${path.sep}worktrees${path.sep}`);
+  return index === -1 ? null : path.resolve(normalized.slice(0, index), REPO_CONFIG_DIR, "worktrees");
 }
 
 function collectSiblingWorktreePorts(
@@ -258,10 +255,9 @@ function collectSiblingWorktreePorts(
     for (const entry of fs.readdirSync(repoManagedWorktreesRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
 
-      for (const name of REPO_CONFIG_DIR_NAMES) {
-        const siblingConfigPath = path.resolve(repoManagedWorktreesRoot, entry.name, name, "config.json");
-        if (path.resolve(siblingConfigPath) === path.resolve(context.configPath)) continue;
-        if (fs.existsSync(siblingConfigPath)) siblingConfigPaths.add(siblingConfigPath);
+      const siblingConfigPath = path.resolve(repoManagedWorktreesRoot, entry.name, REPO_CONFIG_DIR, "config.json");
+      if (path.resolve(siblingConfigPath) !== path.resolve(context.configPath) && fs.existsSync(siblingConfigPath)) {
+        siblingConfigPaths.add(siblingConfigPath);
       }
     }
   }

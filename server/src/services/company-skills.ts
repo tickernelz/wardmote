@@ -1,5 +1,5 @@
 import { updateAgentConfigurationInTransaction } from "./agent-configuration-transaction.js";
-import { readPackageMetadataBlock } from "./retired-package-metadata-key.js";
+import { readPackageMetadataBlock } from "./package-metadata.js";
 import { logger } from "../middleware/logger.js";
 import { removeRuntimeSkillCache, resolveRuntimeSkillCache, runtimeSkillCacheSpec } from "./runtime-skill-cache.js";
 import { createHash, randomUUID } from "node:crypto";

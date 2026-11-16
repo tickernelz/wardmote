@@ -1,6 +1,4 @@
 import { registerChatActionWork, dueChatAction } from "../services/chat-action-work.js";
-import { RETIRED_GITHUB_MARKER_PREFIX } from "../services/retired-github-marker.js";
-import { RETIRED_DISCORD_COMMAND_NAME } from "../services/retired-discord-command-name.js";
 import { createDeliveryWorkCoordinator } from "../services/delivery-work-coordinator.js";
 import { registerChatDeliveryWork } from "../services/chat-delivery-work.js";
 import { notifyChatPublicationWork, notifyChatActionWork, CHAT_ACTION_QUEUES } from "../services/chat-work-notifications.js";
@@ -2581,24 +2579,6 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       expect(f.responseComments.size).toBe(2);
       expect([...f.responseComments.values()].every(comment => comment.body.includes("wardmote-response-state:final"))).toBe(true);
       expect([...f.responseComments.values()].some(comment => comment.body.includes("response to this request"))).toBe(true);
-    });
-    it("finalizes working comments written under the retired marker in place", async () => {
-      const f = await toolReplyFixture();
-      const thread = makeThread({ channelId: "acmeai/wardmote", id: f.conversation.externalThreadId }).thread;
-      await deliverMessage({ callbacks: f.callbacks, endpointId: f.endpoint.id, provider: "github", thread,
-        trigger: "mention", message: makeMessage({ id: "41802", text: "And this too", userId: "42", userName: "octocat", mentioned: true }) });
-      await expect.poll(async () => {
-        await githubResponseCommentService(db, f.providerFetch).processPending();
-        return f.responseComments.size;
-      }, { timeout: 10_000 }).toBe(2);
-      for (const comment of f.responseComments.values()) comment.body = comment.body.replaceAll("<!-- wardmote-", RETIRED_GITHUB_MARKER_PREFIX);
-      const links = await db.select().from(chatMessageLinks).where(and(eq(chatMessageLinks.endpointId, f.endpoint.id), eq(chatMessageLinks.direction, "inbound")));
-      const latest = await chatWakeContext({ endpointId: f.endpoint.id, issueId: f.conversation.issueId, provider: "github", providerMessageId: "41802" });
-      await db.update(heartbeatRuns).set({ contextSnapshot: { ...latest, wakeCommentIds: links.map(link => link.commentId) } }).where(eq(heartbeatRuns.id, f.run.id));
-      await githubChatReviewService(db, f.providerFetch).execute(f.session, "comment", { body: "Both requests answered", idempotencyKey: "final-coalesced" });
-      expect(f.responseComments.size).toBe(2);
-      expect([...f.responseComments.values()].every(comment => comment.body.includes("wardmote-response-state:final"))).toBe(true);
-      expect([...f.responseComments.values()].some(comment => comment.body.includes(RETIRED_GITHUB_MARKER_PREFIX))).toBe(false);
     });
     it("settles a deleted coalesced working comment without blocking the current GitHub response", async () => {
       const f = await toolReplyFixture();
@@ -49142,7 +49122,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
         publications,
         queued,
         registrationCalls,
-        async coldUnavailableParser(legacyCopy = false) {
+        async coldUnavailableParser() {
           await context.service.shutdown();
           await db
             .update(chatEndpoints)
@@ -49160,42 +49140,14 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
               ),
             )
             .then((rows) => rows[0]!);
-          let priorRegistration = registration.payload.registration;
-          if (legacyCopy) {
-            const prior = structuredClone(remoteCommands[0]!);
-            prior.name = RETIRED_DISCORD_COMMAND_NAME;
-            (prior.options as Array<{ description: string }>)[2]!.description =
-              "Close the current Wardmote task";
-            remoteCommands[0] = prior;
-            const {
-              id: _id,
-              application_id: _application,
-              version: _version,
-              ...definition
-            } = prior;
-            const stored = priorRegistration as {
-              receipt: Record<string, unknown>;
-            };
-            priorRegistration = {
-              ...stored,
-              receipt: {
-                ...stored.receipt,
-                definitionDigest: createHash("sha256")
-                  .update(JSON.stringify(definition))
-                  .digest("hex"),
-              },
-            };
-          }
           await db
             .update(chatActions)
             .set({
-              payload: { registration: priorRegistration },
+              payload: { registration: registration.payload.registration },
               result: {
                 schema: "wardmote.discord.command-registration-result.v1",
-                outcome: legacyCopy ? "registered" : "unavailable",
-                retryAt: legacyCopy
-                  ? new Date(0).toISOString()
-                  : new Date(Date.now() + 60_000).toISOString(),
+                outcome: "unavailable",
+                retryAt: new Date(Date.now() + 60_000).toISOString(),
               },
             })
             .where(
@@ -49446,40 +49398,6 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
               .where(eq(chatConversations.id, f.conversation.id))
           )[0]?.state,
         ).toBe("active");
-      } finally {
-        await f.close();
-      }
-    });
-
-    it("upgrades a retained prior-copy registration after service restart before admitting close", async () => {
-      const f = await commandFixture();
-      try {
-        const cold = await f.coldUnavailableParser(true);
-        expect(
-          f.registrationCalls.filter((method) => method === "POST"),
-        ).toHaveLength(1);
-        expect(
-          f.registrationCalls.filter((method) => method === "PATCH"),
-        ).toHaveLength(1);
-        const command = f.interaction("close");
-        await cold.adapter.handleGatewayInteraction(command);
-        expect(command.editReply).toHaveBeenCalledExactlyOnceWith({
-          content: expect.stringContaining("request recorded"),
-          allowedMentions: { parse: [] },
-        });
-        expect(await f.actions()).toHaveLength(1);
-        expect(await f.publications()).toHaveLength(1);
-        expect(cold.wakeup).not.toHaveBeenCalled();
-        await cold.service.processPendingPublications(100);
-        expect((await f.publications())[0]?.state).toBe("published");
-        expect(
-          (
-            await db
-              .select()
-              .from(chatConversations)
-              .where(eq(chatConversations.id, f.conversation.id))
-          )[0]?.state,
-        ).toBe("completed");
       } finally {
         await f.close();
       }

@@ -50,9 +50,6 @@ import { registerSkillCommands } from "./commands/client/skill.js";
 import { cliVersion } from "./version.js";
 import { installCommand } from "./commands/install.js";
 import { uninstallCommand } from "./commands/uninstall.js";
-import { hasLegacyInstall, migrateHomeCommand, rewriteLegacyStoreMarker } from "./commands/migrate-home.js";
-import { resolveInstallStorePaths } from "./install-store.js";
-import { migrateNamesCommand } from "./commands/migrate-names.js";
 import { updateCommand } from "./commands/update.js";
 import { registerServiceCommands } from "./commands/service.js";
 import { registerConnectionIntentCommands } from "./commands/client/connections.js";
@@ -90,20 +87,6 @@ program
   .action(uninstallCommand);
 
 program
-  .command("migrate-home")
-  .description("Move a retired home, service definition and shim to the Wardmote names; stop the service first")
-  .option("--dry-run", "Print what would move without changing anything")
-  .action((options: { dryRun?: boolean }) => migrateHomeCommand(options));
-
-program
-  .command("migrate-names")
-  .description("Rewrite retired product names in agent instructions and stored agent text")
-  .option("-c, --config <path>", "Path to config file")
-  .option("--dry-run", "List what would change without writing")
-  .option("--json", "Print the report as JSON")
-  .action((options: { config?: string; dryRun?: boolean; json?: boolean }) => migrateNamesCommand(options));
-
-program
   .command("update")
   .alias("upgrade")
   .description("Check, update, or roll back the Wardmote CLI")
@@ -121,10 +104,6 @@ program
 
 program.hook("preAction", async (_thisCommand, actionCommand) => {
   if (actionCommand.parent?.name() === "runtime") return; // Public runtime setup never reads instance config or credentials.
-  if (actionCommand.name() === "migrate-home") return;
-  if (["install", "update"].includes(actionCommand.name()) && !process.env.WARDMOTE_HOME?.trim() && hasLegacyInstall()) {
-    await migrateHomeCommand({});
-  }
   const options = actionCommand.optsWithGlobals() as DataDirOptionLike & TestDriveOptions;
   let dataDirOptions: DataDirOptionLike = options;
   if (actionCommand.name() === "test-drive") {
@@ -143,9 +122,6 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
     assertTestDriveDatabaseIsolation(options.config);
   }
   initTelemetryFromConfigFile(options.config);
-  if (["install", "update", "uninstall"].includes(actionCommand.name())) {
-    rewriteLegacyStoreMarker(resolveInstallStorePaths().markerPath);
-  }
 });
 
 registerTestDriveCommand(program);

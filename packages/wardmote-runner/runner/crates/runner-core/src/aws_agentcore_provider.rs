@@ -35,39 +35,18 @@ use crate::managed_provider::{
     AwsAgentCoreProviderConfig, Provider, ProviderEvent, ProviderKind, ProviderRuntimeIdentity,
 };
 use crate::provider_bridge::{AuthorizedTool, ToolResult};
-use crate::retired_agentcore_names::{
-    RETIRED_AGENTCORE_ACTOR_PREFIX, RETIRED_AGENTCORE_COST_SOURCE,
-    RETIRED_AGENTCORE_DIGEST_METADATA,
-};
 
 pub(crate) const AGENTCORE_COST_SOURCE: &str = "wardmote_estimate";
 const AGENTCORE_DIGEST_METADATA: &str = "wardmote-sha256";
 const MAX_AGENTCORE_TOOLS: usize = 64;
 
-fn memory_actor_ids(session_id: &str) -> [String; 2] {
-    let digest = sha_hex(session_id, 32);
-    [
-        format!("wardmote-{digest}"),
-        format!("{RETIRED_AGENTCORE_ACTOR_PREFIX}{digest}"),
-    ]
-}
-
-fn resumed_actor_id(session_id: &str, retired_actor_has_events: bool) -> String {
-    let [current, retired] = memory_actor_ids(session_id);
-    if retired_actor_has_events {
-        retired
-    } else {
-        current
-    }
+fn memory_actor_id(session_id: &str) -> String {
+    format!("wardmote-{}", sha_hex(session_id, 32))
 }
 
 fn asset_digest_metadata(metadata: Option<&HashMap<String, String>>) -> Option<&str> {
     metadata
-        .and_then(|metadata| {
-            metadata
-                .get(AGENTCORE_DIGEST_METADATA)
-                .or_else(|| metadata.get(RETIRED_AGENTCORE_DIGEST_METADATA))
-        })
+        .and_then(|metadata| metadata.get(AGENTCORE_DIGEST_METADATA))
         .map(String::as_str)
 }
 // Harness invocations can spend substantial time starting a new runtime before
@@ -145,7 +124,7 @@ fn restored_usage_snapshot(snapshot: Option<&Value>) -> Result<Value, LocalRunne
         })?;
     if !matches!(
         object.get("costSource").and_then(Value::as_str),
-        Some(AGENTCORE_COST_SOURCE | RETIRED_AGENTCORE_COST_SOURCE)
+        Some(AGENTCORE_COST_SOURCE)
     ) {
         return Err(LocalRunnerError::invalid(
             "AgentCore durable usage snapshot has invalid costSource",
@@ -283,16 +262,13 @@ impl NetworkWorker {
     fn start(
         config: AwsAgentCoreProviderConfig,
         session_id: String,
-        resumed: bool,
     ) -> Result<(Self, String), LocalRunnerError> {
         let (command_tx, command_rx) = mpsc::sync_channel(32);
         let (event_tx, event_rx) = mpsc::sync_channel(256);
         let (ready_tx, ready_rx) = mpsc::channel();
         let join = thread::Builder::new()
             .name("wardmote-aws-agentcore-network".to_owned())
-            .spawn(move || {
-                network_loop(config, session_id, resumed, command_rx, event_tx, ready_tx)
-            })
+            .spawn(move || network_loop(config, session_id, command_rx, event_tx, ready_tx))
             .map_err(|error| {
                 LocalRunnerError::invalid(format!(
                     "failed to start AgentCore network worker: {error}"
@@ -654,7 +630,6 @@ fn agentcore_system_instructions(config: &AwsAgentCoreProviderConfig) -> Result<
 fn network_loop(
     config: AwsAgentCoreProviderConfig,
     session_id: String,
-    resumed: bool,
     commands: Receiver<NetworkCommand>,
     events: SyncSender<NetworkEvent>,
     ready: mpsc::Sender<Result<String, String>>,
@@ -707,23 +682,7 @@ fn network_loop(
             return;
         }
     };
-    let actor_id = if resumed {
-        let retired = memory_actor_ids(&session_id)[1].clone();
-        match runtime.block_on(memory_actor_has_events(
-            &client,
-            &config,
-            &session_id,
-            &retired,
-        )) {
-            Ok(found) => resumed_actor_id(&session_id, found),
-            Err(error) => {
-                let _ = ready.send(Err(error));
-                return;
-            }
-        }
-    } else {
-        memory_actor_ids(&session_id)[0].clone()
-    };
+    let actor_id = memory_actor_id(&session_id);
     let _ = ready.send(Ok(actor_id.clone()));
     while let Ok(command) = commands.recv() {
         match command {
@@ -853,10 +812,13 @@ fn network_loop(
             }
             NetworkCommand::DeleteMemory { reply } => {
                 let result = runtime.block_on(async {
-                    for actor in memory_actor_ids(&session_id) {
-                        delete_all_memory_events(&client, &config, &session_id, &actor).await?;
-                    }
-                    Ok(())
+                    delete_all_memory_events(
+                        &client,
+                        &config,
+                        &session_id,
+                        &memory_actor_id(&session_id),
+                    )
+                    .await
                 });
                 let _ = reply.send(result);
             }
@@ -1115,25 +1077,6 @@ async fn delete_all_memory_events(
     .await
 }
 
-async fn memory_actor_has_events(
-    client: &aws_sdk_bedrockagentcore::Client,
-    config: &AwsAgentCoreProviderConfig,
-    session_id: &str,
-    actor_id: &str,
-) -> Result<bool, String> {
-    client
-        .list_events()
-        .memory_id(config.memory_id.clone())
-        .session_id(session_id)
-        .actor_id(actor_id)
-        .include_payloads(false)
-        .max_results(1)
-        .send()
-        .await
-        .map(|page| !page.events().is_empty())
-        .map_err(|error| redact_aws_error(&error.to_string()))
-}
-
 async fn latest_memory_event_id(
     client: &aws_sdk_bedrockagentcore::Client,
     config: &AwsAgentCoreProviderConfig,
@@ -1213,11 +1156,7 @@ impl AwsAgentCoreHarnessProvider {
         let session_id = resume_session_id
             .map(str::to_owned)
             .unwrap_or_else(new_runtime_session_id);
-        let (worker, actor_id) = NetworkWorker::start(
-            config.clone(),
-            session_id.clone(),
-            resume_session_id.is_some(),
-        )?;
+        let (worker, actor_id) = NetworkWorker::start(config.clone(), session_id.clone())?;
         let (encoded, allowed, reverse, schemas) = encode_tools(&tools)?;
         Ok(Self {
             config: config.clone(),
@@ -2533,53 +2472,6 @@ mod tests {
             restored_usage_snapshot(Some(&conservative)).unwrap(),
             conservative
         );
-    }
-
-    #[test]
-    fn resumed_sessions_keep_the_memory_actor_their_history_was_written_under() {
-        let [current, retired] = memory_actor_ids("session-1");
-        assert!(current.starts_with("wardmote-"));
-        assert!(retired.starts_with(RETIRED_AGENTCORE_ACTOR_PREFIX));
-        assert_eq!(
-            current["wardmote-".len()..],
-            retired[RETIRED_AGENTCORE_ACTOR_PREFIX.len()..]
-        );
-        assert_eq!(resumed_actor_id("session-1", true), retired);
-        assert_eq!(resumed_actor_id("session-1", false), current);
-    }
-
-    #[test]
-    fn context_asset_verification_reads_the_digest_written_before_the_rename() {
-        let digest = "a".repeat(64);
-        let retired =
-            HashMap::from([(RETIRED_AGENTCORE_DIGEST_METADATA.to_owned(), digest.clone())]);
-        assert_eq!(asset_digest_metadata(Some(&retired)), Some(digest.as_str()));
-        let both = HashMap::from([
-            (AGENTCORE_DIGEST_METADATA.to_owned(), "b".repeat(64)),
-            (RETIRED_AGENTCORE_DIGEST_METADATA.to_owned(), digest.clone()),
-        ]);
-        assert_eq!(
-            asset_digest_metadata(Some(&both)),
-            Some("b".repeat(64).as_str())
-        );
-        assert_eq!(asset_digest_metadata(None), None);
-    }
-
-    #[test]
-    fn durable_usage_restore_accepts_the_cost_source_written_before_the_rename() {
-        let usage = json!({
-            "inputTokens": 1,
-            "outputTokens": 2,
-            "cacheReadInputTokens": 0,
-            "cacheWriteInputTokens": 0,
-            "requestCount": 1,
-            "estimatedCostUsd": 0.01,
-            "costSource": RETIRED_AGENTCORE_COST_SOURCE
-        });
-        assert_eq!(restored_usage_snapshot(Some(&usage)).unwrap(), usage);
-        let mut foreign = usage.clone();
-        foreign["costSource"] = json!("provider_reported");
-        assert!(restored_usage_snapshot(Some(&foreign)).is_err());
     }
 
     #[test]

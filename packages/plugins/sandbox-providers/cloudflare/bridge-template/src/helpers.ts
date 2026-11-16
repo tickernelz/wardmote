@@ -1,5 +1,3 @@
-import { RETIRED_LEASE_SENTINEL_FILE } from "./retired-names.js";
-
 export function normalizeLeaseIdPart(input: string): string {
   return input
     .trim()
@@ -24,10 +22,6 @@ export function buildLeaseSandboxId(input: {
 
 export function buildSentinelPath(remoteCwd: string): string {
   return `${remoteCwd.replace(/\/+$/, "")}/.wardmote-lease.json`;
-}
-
-export function buildRetiredSentinelPath(remoteCwd: string): string {
-  return `${remoteCwd.replace(/\/+$/, "")}/${RETIRED_LEASE_SENTINEL_FILE}`;
 }
 
 export function isTimeoutError(error: unknown): boolean {

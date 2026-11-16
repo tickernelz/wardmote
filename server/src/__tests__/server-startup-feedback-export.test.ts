@@ -380,9 +380,6 @@ vi.mock("../services/wardmote-update-runtime.js", () => ({
   startInstanceAutoUpdater: vi.fn(() => () => undefined),
 }));
 
-vi.mock("../services/retired-name-migration.js", () => ({
-  migrateRetiredNames: vi.fn(async () => ({ dryRun: false, files: [], rows: [], externalBundles: [], failedBundles: [], quarantinedRunnerStates: [], backupDir: null })),
-}));
 vi.mock("../services/chat-completion-delivery.js", () => ({ chatCompletionDeliveryService: () => ({ hasPending: vi.fn(async () => false), sweepPending: completionSweepMock }) }));
 
 vi.mock("../services/notifications/dispatcher.js", () => ({

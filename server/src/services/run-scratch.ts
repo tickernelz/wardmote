@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { RETIRED_HEARTBEAT_RUN_SCRATCH_MARKER } from "./retired-marker-names.js";
 
 export const HEARTBEAT_RUN_SCRATCH_MARKER = ".wardmote-run-scratch.json";
 
@@ -33,7 +32,6 @@ export type HeartbeatRunScratchCleanupResult =
 
 const TEMP_ENV_KEYS = ["TMPDIR", "TEMP", "TMP"] as const;
 const SCRATCH_DIR_PREFIX = "pcr-";
-const LEGACY_SCRATCH_DIR_PREFIX = "paperclip-run-";
 const RUNTIME_TEMP_DIR_PREFIX = "pctmp-";
 const RUN_SEGMENT_CHARS = 8;
 
@@ -145,9 +143,7 @@ async function removeOwnedScratchDir(input: {
     return "missing";
   }
 
-  const marker =
-    (await readMarker(path.join(dir, HEARTBEAT_RUN_SCRATCH_MARKER))) ??
-    (await readMarker(path.join(dir, RETIRED_HEARTBEAT_RUN_SCRATCH_MARKER)));
+  const marker = await readMarker(path.join(dir, HEARTBEAT_RUN_SCRATCH_MARKER));
   if (!marker) return "unmarked";
   if (
     marker.companyId !== input.ownedBy.companyId ||
@@ -174,7 +170,7 @@ export async function cleanupHeartbeatRunScratch(input: {
   const outcome = await removeOwnedScratchDir({
     dir,
     ownedBy: input.scratch.metadata,
-    prefixes: [SCRATCH_DIR_PREFIX, LEGACY_SCRATCH_DIR_PREFIX],
+    prefixes: [SCRATCH_DIR_PREFIX],
   });
   await removeOwnedScratchDir({
     dir: input.scratch.tempDir,

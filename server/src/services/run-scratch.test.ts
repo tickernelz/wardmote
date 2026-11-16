@@ -9,7 +9,6 @@ import {
   prepareHeartbeatRunScratch,
   type HeartbeatRunScratch,
 } from "./run-scratch.js";
-import { RETIRED_HEARTBEAT_RUN_SCRATCH_MARKER } from "./retired-marker-names.js";
 
 const cleanupDirs = new Set<string>();
 
@@ -91,55 +90,6 @@ describe("heartbeat run scratch cleanup", () => {
       if (previousTmpdir === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = previousTmpdir;
     }
-  });
-
-  it("removes marked scratch directories created with the legacy prefix", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-run-zha-720-5059b89f-ecc-"));
-    cleanupDirs.add(dir);
-    const scratch: HeartbeatRunScratch = {
-      dir,
-      tempDir: path.join(dir, "runtime-temp"),
-      markerPath: path.join(dir, RETIRED_HEARTBEAT_RUN_SCRATCH_MARKER),
-      metadata: {
-        version: 1,
-        companyId: "company-1",
-        agentId: "agent-1",
-        runId: "run-1",
-        issueId: "issue-1",
-        issueIdentifier: "ZHA-720",
-        createdAt: new Date("2026-07-08T00:00:00.000Z").toISOString(),
-      },
-    };
-    await fs.writeFile(scratch.markerPath, JSON.stringify(scratch.metadata));
-
-    const result = await cleanupHeartbeatRunScratch({ scratch });
-
-    expect(result).toEqual({ removed: true, dir });
-    await expect(fs.stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("preserves paperclip-named directories without the ownership marker", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-run-unmarked-"));
-    cleanupDirs.add(dir);
-    const scratch: HeartbeatRunScratch = {
-      dir,
-      tempDir: path.join(dir, "runtime-temp"),
-      markerPath: path.join(dir, HEARTBEAT_RUN_SCRATCH_MARKER),
-      metadata: {
-        version: 1,
-        companyId: "company-1",
-        agentId: "agent-1",
-        runId: "run-1",
-        issueId: null,
-        issueIdentifier: null,
-        createdAt: new Date("2026-07-08T00:00:00.000Z").toISOString(),
-      },
-    };
-
-    const result = await cleanupHeartbeatRunScratch({ scratch });
-
-    expect(result).toEqual({ removed: false, dir, reason: "unmarked" });
-    await expect(fs.stat(dir)).resolves.toMatchObject({ isDirectory: expect.any(Function) });
   });
 
   it("preserves marked scratch when the marker owner does not match the run", async () => {

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { withRetiredGitHubMarker } from "./retired-github-marker.js";
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import {
   chatActions, chatConversations, chatDeliveries, chatEndpoints,
@@ -31,7 +30,7 @@ type Comment = { id: number; body?: string; html_url: string; user?: { login?: s
 const generation = (endpoint: Source["endpoint"]) => (endpoint.setup as { runtimeGeneration?: number }).runtimeGeneration ?? 0;
 const FINAL_MARKER = "<!-- wardmote-response-state:final -->";
 const hasMarker = (body: string | undefined, marker: string) =>
-  withRetiredGitHubMarker(marker).some((variant) => body?.includes(variant) === true);
+  body?.includes(marker) === true;
 const actionKey = (deliveryId: string) => `github_response:${deliveryId}`;
 const responseMarker = (source: Source) => `<!-- wardmote-response:${createHash("sha256")
   .update(`${source.endpoint.companyId}:${source.endpoint.id}:${source.delivery.id}`).digest("hex")} -->`;

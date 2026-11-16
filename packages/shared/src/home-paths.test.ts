@@ -37,27 +37,6 @@ describe("default home", () => {
     expect(resolveWardmoteHomeDir()).toBe(path.join(userHome, ".wardmote"));
   });
 
-  it("refuses an unmigrated ~/.paperclip-pro instead of starting an empty home", async () => {
-    fs.mkdirSync(path.join(userHome, ".paperclip-pro"));
-    const { resolveWardmoteHomeDir } = await homePaths();
-    expect(() => resolveWardmoteHomeDir()).toThrow("wardmote migrate-home");
-  });
-
-  it("uses ~/.wardmote once ~/.paperclip-pro is the migration link to it", async () => {
-    fs.mkdirSync(path.join(userHome, ".wardmote"));
-    fs.symlinkSync(path.join(userHome, ".wardmote"), path.join(userHome, ".paperclip-pro"));
-    const { resolveWardmoteHomeDir } = await homePaths();
-    expect(resolveWardmoteHomeDir()).toBe(path.join(userHome, ".wardmote"));
-  });
-
-  it("refuses a ~/.paperclip-pro link that points somewhere else", async () => {
-    const elsewhere = path.join(userHome, "data");
-    fs.mkdirSync(elsewhere);
-    fs.symlinkSync(elsewhere, path.join(userHome, ".paperclip-pro"));
-    const { resolveWardmoteHomeDir } = await homePaths();
-    expect(() => resolveWardmoteHomeDir()).toThrow("has not been migrated");
-  });
-
   it("lets an explicit home win", async () => {
     vi.stubEnv("WARDMOTE_HOME", "/srv/wardmote");
     const { resolveWardmoteHomeDir } = await homePaths();
@@ -65,30 +44,11 @@ describe("default home", () => {
   });
 
   it("expands a config path without remapping it to another home", async () => {
-    fs.mkdirSync(path.join(userHome, ".paperclip-pro"));
     const { resolveHomeAwarePath } = await homePaths();
     expect(resolveHomeAwarePath("~/.wardmote/instances/default/db")).toBe(path.join(userHome, ".wardmote/instances/default/db"));
     expect(resolveHomeAwarePath("/srv/db")).toBe("/srv/db");
   });
 
-  it("maps a path recorded under the migration link to ~/.wardmote", async () => {
-    const { LEGACY_HOME_DIRNAME, resolveHomeAwarePath } = await homePaths();
-    const legacyHome = path.join(userHome, LEGACY_HOME_DIRNAME);
-    fs.mkdirSync(path.join(userHome, ".wardmote"));
-    fs.symlinkSync(path.join(userHome, ".wardmote"), legacyHome);
-    expect(resolveHomeAwarePath(path.join(legacyHome, "instances/default/db"))).toBe(path.join(userHome, ".wardmote/instances/default/db"));
-    expect(resolveHomeAwarePath(`~/${LEGACY_HOME_DIRNAME}`)).toBe(path.join(userHome, ".wardmote"));
-    expect(resolveHomeAwarePath(`${legacyHome}-old/db`)).toBe(`${legacyHome}-old/db`);
-  });
-
-  it("keeps legacy home paths while it is not the migration link", async () => {
-    const { LEGACY_HOME_DIRNAME, resolveHomeAwarePath } = await homePaths();
-    const elsewhere = path.join(userHome, "data");
-    fs.mkdirSync(elsewhere);
-    fs.mkdirSync(path.join(userHome, ".wardmote"));
-    fs.symlinkSync(elsewhere, path.join(userHome, LEGACY_HOME_DIRNAME));
-    expect(resolveHomeAwarePath(`~/${LEGACY_HOME_DIRNAME}/db`)).toBe(path.join(userHome, LEGACY_HOME_DIRNAME, "db"));
-  });
 });
 
 const ORIGINAL_ENV = { ...process.env };

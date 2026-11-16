@@ -16,7 +16,6 @@ import {
   EMBEDDED_POSTGRES_DATABASE,
   embeddedPostgresUrl,
   embeddedPostgresAdminUrl,
-  migrateEmbeddedPostgresIdentity,
 } from "@tickernelz/wardmote-db";
 import { eq, inArray } from "drizzle-orm";
 import { loadWardmoteEnvFile } from "../config/env.js";
@@ -129,7 +128,6 @@ async function ensureEmbeddedPostgres(dataDir: string, preferredPort: number): P
   const runningPid = readRunningPostmasterPid(postmasterPidFile);
   if (runningPid) {
     const runningPort = readPidFilePort(postmasterPidFile) ?? preferredPort;
-    await migrateEmbeddedPostgresIdentity({ port: runningPort, dataDir });
     return {
       port: runningPort,
       startedByThisProcess: false,
@@ -172,13 +170,6 @@ async function ensureEmbeddedPostgres(dataDir: string, preferredPort: number): P
       fallbackMessage: `Failed to start embedded PostgreSQL on port ${port}`,
       recentLogs: logBuffer.getRecentLogs(),
     });
-  }
-
-  try {
-    await migrateEmbeddedPostgresIdentity({ port, dataDir });
-  } catch (error) {
-    await instance.stop();
-    throw error;
   }
 
   return {

@@ -5,7 +5,7 @@ import { ensurePostgresDatabase, getPostgresDataDirectory } from "./client.js";
 import { createEmbeddedPostgresLogBuffer, formatEmbeddedPostgresError } from "./embedded-postgres-error.js";
 import { prepareEmbeddedPostgresNativeRuntime } from "./embedded-postgres-native.js";
 import { resolveDatabaseTarget } from "./runtime-config.js";
-import { EMBEDDED_POSTGRES_USER, EMBEDDED_POSTGRES_PASSWORD, EMBEDDED_POSTGRES_DATABASE, embeddedPostgresUrl, embeddedPostgresAdminUrl, migrateEmbeddedPostgresIdentity } from "./embedded-identity.js";
+import { EMBEDDED_POSTGRES_USER, EMBEDDED_POSTGRES_PASSWORD, EMBEDDED_POSTGRES_DATABASE, embeddedPostgresUrl, embeddedPostgresAdminUrl } from "./embedded-identity.js";
 
 type EmbeddedPostgresInstance = {
   initialise(): Promise<void>;
@@ -105,7 +105,6 @@ async function ensureEmbeddedPostgresConnection(
 
   if (!runningPid && existsSync(pgVersionFile)) {
     try {
-      await migrateEmbeddedPostgresIdentity({ port: preferredPort, dataDir });
       const actualDataDir = await getPostgresDataDirectory(preferredAdminConnectionString);
       const matchesDataDir =
         typeof actualDataDir === "string" &&
@@ -129,7 +128,6 @@ async function ensureEmbeddedPostgresConnection(
 
   if (runningPid) {
     const port = runningPort ?? preferredPort;
-    await migrateEmbeddedPostgresIdentity({ port, dataDir });
     const adminConnectionString = embeddedPostgresAdminUrl(port);
     await ensurePostgresDatabase(adminConnectionString, EMBEDDED_POSTGRES_DATABASE);
     return {
@@ -171,12 +169,6 @@ async function ensureEmbeddedPostgresConnection(
       fallbackMessage: `Failed to start embedded PostgreSQL on port ${selectedPort}`,
       recentLogs: logBuffer.getRecentLogs(),
     });
-  }
-  try {
-    await migrateEmbeddedPostgresIdentity({ port: selectedPort, dataDir });
-  } catch (error) {
-    await instance.stop();
-    throw error;
   }
 
   const adminConnectionString = embeddedPostgresAdminUrl(selectedPort);
