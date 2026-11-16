@@ -777,7 +777,7 @@ export type ChatScheduledWakeState = (typeof CHAT_SCHEDULED_WAKE_STATES)[number]
 export const CHAT_OWNER_APPROVAL_STATUSES = ["pending", "approved", "rejected", "cancelled", "expired", "withdrawn"] as const;
 export type ChatOwnerApprovalStatus = (typeof CHAT_OWNER_APPROVAL_STATUSES)[number];
 
-export const CHAT_OWNER_APPROVAL_CHANNELS = ["whatsapp", "wardmote"] as const;
+export const CHAT_OWNER_APPROVAL_CHANNELS = ["whatsapp", "wardmote", "autonomous"] as const;
 export type ChatOwnerApprovalChannel = (typeof CHAT_OWNER_APPROVAL_CHANNELS)[number];
 
 export const CHAT_OWNER_GRANT_SCOPES = ["one_action", "requester"] as const;
@@ -812,6 +812,8 @@ export const CHAT_AUDIT_ENTRY_KINDS = [
   "run_failed",
   "owner_report_fallback",
   "owner_group_changed",
+  "autonomous_action",
+  "autonomous_digest",
 ] as const;
 export type ChatAuditEntryKind = (typeof CHAT_AUDIT_ENTRY_KINDS)[number];
 
@@ -843,6 +845,7 @@ export interface OpenwaEndpointPolicy {
     crossChatSend: boolean;
     waAdmin: boolean;
     gatewayAdmin: boolean;
+    autonomous: boolean;
     reminderMinutes: number;
     maxReminders: number;
     grantTtlHours: number;

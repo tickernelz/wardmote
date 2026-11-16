@@ -16,6 +16,7 @@ import {
   type Db,
 } from "@tickernelz/wardmote-db";
 import {
+  OPENWA_AUTONOMOUS_SYSTEM_ACTOR_ID,
   OPENWA_GRANT_CATEGORIES,
   openwaEndpointPolicySchema,
   type ChatOwnerApprovalChannel,
@@ -31,6 +32,7 @@ import type { IssueAssignmentWakeupDeps } from "../issue-assignment-wakeup.js";
 import { issueService } from "../issues.js";
 import { openwaThreadId } from "./adapter.js";
 import { logOpenwaActivity, recordOpenwaAudit } from "./audit.js";
+import { OPENWA_AUTONOMOUS_APPROVAL_NOTE, recordOpenwaAutonomousAction } from "./autonomous.js";
 import { OPENWA_TEXT_LIMIT, formatOpenwaPublication } from "./format.js";
 import { OpenwaGatewayError } from "./gateway.js";
 import { maskOpenwaDigits } from "./guidance.js";
@@ -404,6 +406,7 @@ export async function openwaRequestApprovalTool(ctx: ToolContext, args: Args): P
     await registry.reconcileUncertain(ctx.endpoint.companyId, ctx.endpoint.id, gateway).catch(() => 0);
     return { requestId: priorRequestId, actionId: action.id, state: "uncertain", bubbles: await bubbleStates(ctx, priorRequestId) };
   }
+  if (ctx.policy.approvals.autonomous && !remindRequestId) return approveAutonomously(ctx, args, action);
   const owners = await openwaCurrentOwners(ctx.db, ctx.endpoint);
   const planned = await plannedBubbles(ctx, owners);
   if (!planned.length) throw new OpenwaToolError(409, "no_owner_chat", "No current owner has a WhatsApp number to receive the request");
@@ -589,6 +592,82 @@ export async function openwaRequestApprovalTool(ctx: ToolContext, args: Args): P
   if (bubbles.every((bubble) => bubble.state !== "uncertain")) await finishOpenwaWrite(ctx.db, action, receipt);
   if (bubbles.every((bubble) => bubble.state === "failed"))
     throw new OpenwaToolError(502, "gateway_error", "No approval bubble could be delivered; the request stays pending in the OpenWA Approvals tab", { requestId });
+  return { actionId: action.id, ...receipt };
+}
+
+async function approveAutonomously(ctx: ToolContext, args: Args, action: typeof chatActions.$inferSelect): Promise<Record<string, unknown>> {
+  const grantScope = (args.scope as ChatOwnerGrantScope | undefined) ?? "one_action";
+  const asked = args.categories as OpenwaGrantCategory[];
+  const replyGaps = (await replyRequirementGaps(ctx, false)).map((gap) => gap.category);
+  const autoAdded: OpenwaGrantCategory[] = replyGaps.includes("reply_outside_allowlist") && !asked.includes("reply_outside_allowlist") ? ["reply_outside_allowlist"] : [];
+  const categories = [...new Set([...asked, ...autoAdded])].filter((category) => OPENWA_GRANT_CATEGORIES.includes(category));
+  const requesterPrincipalId = await requesterOf(ctx);
+  if (grantScope === "requester" && !requesterPrincipalId)
+    throw new OpenwaToolError(422, "requester_unknown", "A requester-scoped approval needs a single identifiable requester for this run");
+  const [requester] = requesterPrincipalId
+    ? await ctx.db.select({ displayName: chatExternalPrincipals.displayName }).from(chatExternalPrincipals).where(eq(chatExternalPrincipals.id, requesterPrincipalId)).limit(1)
+    : [];
+  const summary = String(args.summary);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + ctx.policy.approvals.grantTtlHours * 3_600_000);
+  const receipt = await ctx.db.transaction(async (tx) => {
+    const [request] = await tx
+      .insert(chatOwnerApprovalRequests)
+      .values({
+        companyId: ctx.endpoint.companyId,
+        endpointId: ctx.endpoint.id,
+        originChatKey: ctx.origin.chatKey,
+        originConversationId: ctx.conversation.id,
+        requestedByPrincipalId: requesterPrincipalId,
+        requestedInRunId: ctx.run.id,
+        categories,
+        scope: grantScope,
+        summary,
+        proposedAction: String(args.proposedAction),
+        status: "approved",
+        resolvedVia: "autonomous",
+        resolvedAt: now,
+      })
+      .returning();
+    const grants = await tx
+      .insert(chatOwnerGrants)
+      .values(
+        categories.map((category) => ({
+          companyId: ctx.endpoint.companyId,
+          endpointId: ctx.endpoint.id,
+          requestId: request!.id,
+          originChatKey: ctx.origin.chatKey,
+          requesterPrincipalId,
+          category,
+          scope: autoAdded.includes(category) ? ("one_action" as const) : grantScope,
+          approvedVia: "autonomous" as const,
+          expiresAt,
+        })),
+      )
+      .returning({ id: chatOwnerGrants.id });
+    await recordOpenwaAutonomousAction(
+      tx,
+      {
+        companyId: ctx.endpoint.companyId,
+        endpointId: ctx.endpoint.id,
+        chatKey: ctx.origin.chatKey,
+        conversationId: ctx.conversation.id,
+        runId: ctx.run.id,
+        agentId: ctx.binding.agentId,
+        source: "approval_request",
+        destructive: args.destructive === true,
+        summary,
+        requesterRole: ctx.senderClass,
+        requesterName: requester?.displayName ?? null,
+        issueId: ctx.binding.issueId,
+        refs: { requestId: request!.id },
+      },
+      now,
+    );
+    await tx.update(chatActions).set({ result: { ...record(action.result), requestId: request!.id }, updatedAt: now }).where(eq(chatActions.id, action.id));
+    return { requestId: request!.id, status: "approved", autonomous: true, categories, grantIds: grants.map((grant) => grant.id), note: OPENWA_AUTONOMOUS_APPROVAL_NOTE };
+  });
+  await finishOpenwaWrite(ctx.db, action, receipt);
   return { actionId: action.id, ...receipt };
 }
 
@@ -892,7 +971,7 @@ export async function resolveOpenwaApproval(
     requestId: string;
     decision: OpenwaApprovalDecision;
     via: ChatOwnerApprovalChannel;
-    owner: { principalId: string } | { userId: string };
+    owner: { principalId: string } | { userId: string } | { autonomous: true };
     ownerText: string | null;
     conditions?: string | null;
     runId?: string | null;
@@ -915,14 +994,15 @@ export async function resolveOpenwaApproval(
       .for("update");
     if (!request) throw notFound("Approval request not found");
     if (request.status !== "pending") throw new OpenwaApprovalAlreadyResolvedError(request.status);
-    let ownerUserId: string | null;
+    const autonomous = "autonomous" in input.owner;
+    let ownerUserId: string | null = null;
     if ("principalId" in input.owner) {
       ownerUserId = (await openwaCurrentOwnerUserId(tx, endpoint, input.owner.principalId, true)).userId;
-    } else {
+    } else if ("userId" in input.owner) {
       const userId = input.owner.userId;
       ownerUserId = (await openwaCurrentOwners(tx, endpoint)).some((owner) => owner.userId === userId) ? userId : null;
     }
-    if (!ownerUserId) throw forbidden("Only a current owner of the chat endpoint can resolve this approval");
+    if (!ownerUserId && !autonomous) throw forbidden("Only a current owner of the chat endpoint can resolve this approval");
     const now = new Date();
     await tx
       .update(chatOwnerApprovalRequests)
@@ -982,8 +1062,8 @@ export async function resolveOpenwaApproval(
       companyId: input.companyId,
       endpointId: input.endpointId,
       kind: "approval_resolved",
-      actorKind: input.via === "wardmote" ? "user" : "chat_principal",
-      actorRef: "principalId" in input.owner ? input.owner.principalId : ownerUserId,
+      actorKind: autonomous ? "system" : input.via === "wardmote" ? "user" : "chat_principal",
+      actorRef: "principalId" in input.owner ? input.owner.principalId : (ownerUserId ?? OPENWA_AUTONOMOUS_SYSTEM_ACTOR_ID),
       chatKey: request.originChatKey,
       conversationId: request.originConversationId,
       runId: input.runId ?? null,
@@ -1001,6 +1081,22 @@ export async function resolveOpenwaApproval(
       runId: input.runId ?? null,
       details: { requestId: request.id, decision: approved ? "approved" : "rejected", via: input.via },
     });
+    if (autonomous)
+      await recordOpenwaAutonomousAction(tx, {
+        companyId: input.companyId,
+        endpointId: input.endpointId,
+        chatKey: request.originChatKey,
+        conversationId: request.originConversationId,
+        runId: null,
+        agentId: null,
+        source: "approval_request",
+        destructive: false,
+        summary: request.summary,
+        requesterRole: null,
+        requesterName: null,
+        issueId: null,
+        refs: { requestId: request.id },
+      });
     if (grants.length)
       await logOpenwaActivity(tx, {
         companyId: input.companyId,

@@ -27,7 +27,7 @@ export function chatActionDeadline(kind: ScheduledChatAction) {
     when ${chatEndpoints.status} in ('paused', 'attention') then null
     when ${chatActions.status} = 'received' then ${retry}
     when ${chatActions.status} = 'processing' then ${updated} + ${PROVIDER_EFFECT_STALE_MS} end`;
-  if (kind === "openwa_pending_card") return sql<number>`case
+  if (kind === "openwa_pending_card" || kind === "openwa_autonomous_digest") return sql<number>`case
     when ${chatActions.status} = 'received' then ${retry}
     when ${chatActions.status} = 'processing' then ${updated} + ${PROVIDER_EFFECT_STALE_MS}
     when ${chatActions.status} = 'failed' and ${chatActions.result}->>'retryable' = 'true' then ${retry} end`;
@@ -73,6 +73,7 @@ type ChatActionService = {
   processPendingSlackSessionStops(): Promise<unknown>;
   processPendingVerificationMessages(): Promise<unknown>;
   processPendingOpenwaPendingCards(): Promise<unknown>;
+  processPendingOpenwaAutonomousDigests(): Promise<unknown>;
   nextChatActionAt(kind: ScheduledChatAction): Promise<number | null>;
   nextVerificationMessageAt(): Promise<number | null>;
 };
@@ -91,6 +92,7 @@ export function registerChatActionWork(
     { kind: "receipt_reaction", run: service.processPendingReceiptReactions },
     { kind: "slack_session_stop", run: service.processPendingSlackSessionStops },
     { kind: "openwa_pending_card", run: service.processPendingOpenwaPendingCards },
+    { kind: "openwa_autonomous_digest", run: service.processPendingOpenwaAutonomousDigests },
   ] as const;
   const workers = actions.map(({ kind, run }) => registerChatQueueWork(coordinator, {
     queue: CHAT_ACTION_QUEUES[kind], run, next: () => service.nextChatActionAt(kind),

@@ -44,6 +44,8 @@ export const AUDIT_KIND_LABELS: Record<ChatAuditEntryKind, string> = {
   run_failed: "Run failed",
   owner_report_fallback: "Owner report sent to direct chat",
   owner_group_changed: "Owner-only group status changed",
+  autonomous_action: "Done in autonomous mode",
+  autonomous_digest: "Autonomous digest sent",
 };
 
 export function mergeOpenwaPolicy(policy: OpenwaEndpointPolicy, patch: OpenwaEndpointPolicyInput): Record<string, unknown> {

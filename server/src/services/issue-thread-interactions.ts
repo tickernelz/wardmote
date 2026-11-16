@@ -79,9 +79,12 @@ import type {
 import {
   AUTONOMY_WINDOW_RESOLUTION_SOURCE,
   AUTONOMY_WINDOW_SYSTEM_ACTOR_ID,
+  OPENWA_AUTONOMOUS_RESOLUTION_LABEL,
+  OPENWA_AUTONOMOUS_RESOLUTION_SOURCE,
+  OPENWA_AUTONOMOUS_SYSTEM_ACTOR_ID,
   acceptIssueThreadInteractionSchema,
   askUserQuestionsPayloadSchema,
-  autonomyWindowResolutionDetailsSchema,
+  autoAcceptResolutionDetailsSchema,
   askUserQuestionsResultSchema,
   cancelIssueThreadInteractionSchema,
   connectionIntentPayloadSchema,
@@ -133,6 +136,7 @@ import {
   enqueueTerminalIssueInteractionChatPublications,
 } from "./chat-interaction-publications.js";
 import { openwaOwnerCard, stageOpenwaPendingCardWakes } from "./openwa/pending-cards.js";
+import { openwaAutonomousCoverage, openwaAutonomousTreeIssueIds, recordOpenwaAutonomousAction } from "./openwa/autonomous.js";
 import {
   assertIssueThreadInteractionResolverAudience,
   canonicalizeStoredResolverPolicy,
@@ -549,6 +553,10 @@ async function assertRequestConfirmationResolutionAllowedUnderLock(
 }
 
 export function isAutonomyWindowEligibleInteraction(interaction: IssueThreadInteraction) {
+  return isOpenwaAutonomousEligibleInteraction(interaction) && interaction.kind === "request_confirmation" && interaction.payload.destructive === false;
+}
+
+export function isOpenwaAutonomousEligibleInteraction(interaction: IssueThreadInteraction) {
   if (interaction.kind !== "request_confirmation" || interaction.status !== "pending") return false;
   const payload = interaction.payload;
   return !(
@@ -556,7 +564,6 @@ export function isAutonomyWindowEligibleInteraction(interaction: IssueThreadInte
     payload.secretProposal !== undefined ||
     payload.connectionAuthorization !== undefined ||
     payload.openwaApprovalRequestId !== undefined ||
-    payload.destructive !== false ||
     interaction.addresseeAgentId ||
     !interaction.createdByAgentId ||
     isNativeCompletionReview({ kind: interaction.kind, payload: payload as unknown as IssueThreadInteractionRow["payload"] })
@@ -569,11 +576,16 @@ async function stageOwnerCardWakes(
   issueStatus: string,
 ) {
   if (!openwaOwnerCard(row)) return;
+  const open = issueStatus !== "in_review" && !isTerminalIssueStatus(issueStatus);
   if (
-    issueStatus !== "in_review" &&
-    !isTerminalIssueStatus(issueStatus) &&
+    open &&
     isAutonomyWindowEligibleInteraction(hydrateInteraction(row)) &&
     (await autonomyWindowService(tx as unknown as Db).findCovering(row.companyId, row.issueId))
+  ) return;
+  if (
+    open &&
+    isOpenwaAutonomousEligibleInteraction(hydrateInteraction(row)) &&
+    (await openwaAutonomousCoverage(tx as unknown as Db, row.companyId, row.issueId))
   ) return;
   await stageOpenwaPendingCardWakes(tx, row);
 }
@@ -2328,6 +2340,78 @@ export function issueThreadInteractionService(
     }
   }
 
+  async function autoAcceptInOpenwaAutonomousMode(
+    issue: { id: string; companyId: string },
+    interaction: IssueThreadInteraction,
+  ): Promise<IssueThreadInteraction> {
+    if (!isOpenwaAutonomousEligibleInteraction(interaction)) return interaction;
+    try {
+      const coverage = await openwaAutonomousCoverage(db, issue.companyId, issue.id);
+      if (!coverage) return interaction;
+      const [issueRow] = await db
+        .select({
+          id: issues.id,
+          companyId: issues.companyId,
+          status: issues.status,
+          assigneeAgentId: issues.assigneeAgentId,
+          assigneeUserId: issues.assigneeUserId,
+        })
+        .from(issues)
+        .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId)));
+      if (!issueRow || issueRow.status === "in_review" || isTerminalIssueStatus(issueRow.status)) return interaction;
+      const [current] = await db
+        .select()
+        .from(issueThreadInteractions)
+        .where(eq(issueThreadInteractions.id, interaction.id));
+      if (!current || current.status !== "pending") return interaction;
+      const payload = interaction.payload as { prompt?: unknown; destructive?: unknown };
+      const resolved = await acceptRequestConfirmation({
+        issue,
+        current,
+        input: {},
+        actor: {
+          systemId: OPENWA_AUTONOMOUS_SYSTEM_ACTOR_ID,
+          resolutionDetails: {
+            source: OPENWA_AUTONOMOUS_RESOLUTION_SOURCE,
+            label: OPENWA_AUTONOMOUS_RESOLUTION_LABEL,
+            endpointId: coverage.endpointId,
+            endpointName: coverage.endpointName,
+          },
+        },
+        mutationOptions: {
+          beforeResolveInTransaction: (tx) =>
+            recordOpenwaAutonomousAction(tx, {
+              companyId: issue.companyId,
+              endpointId: coverage.endpointId,
+              chatKey: coverage.chatKey,
+              conversationId: coverage.conversationId,
+              runId: null,
+              agentId: interaction.createdByAgentId ?? null,
+              source: "card",
+              destructive: payload.destructive === true,
+              summary: interaction.title?.trim() || (typeof payload.prompt === "string" ? payload.prompt : "Confirmation card"),
+              requesterRole: null,
+              requesterName: null,
+              issueId: issue.id,
+              refs: { interactionId: interaction.id },
+            }),
+        },
+      });
+      await wakeAfterSystemAccept({
+        resolved,
+        fallbackIssue: issueRow,
+        systemId: OPENWA_AUTONOMOUS_SYSTEM_ACTOR_ID,
+        resolutionSource: OPENWA_AUTONOMOUS_RESOLUTION_SOURCE,
+      }).catch((err) => {
+        logger.warn({ err, issueId: issue.id, interactionId: interaction.id }, "failed to wake assignee after autonomous mode accept");
+      });
+      return resolved.interaction;
+    } catch (err) {
+      logger.warn({ err, issueId: issue.id, interactionId: interaction.id }, "autonomous mode auto-accept skipped");
+      return interaction;
+    }
+  }
+
   async function acceptRequestConfirmation(args: {
     issue: { id: string; companyId: string };
     current: IssueThreadInteractionRow;
@@ -2418,7 +2502,7 @@ export function issueThreadInteractionService(
               selectedOptionIds: args.input.selectedOptionIds,
             })
           : undefined;
-      const autonomyWindowResolution = autonomyWindowResolutionDetailsSchema.safeParse(
+      const autonomyWindowResolution = autoAcceptResolutionDetailsSchema.safeParse(
         args.actor.resolutionDetails,
       );
 
@@ -3999,7 +4083,31 @@ export function issueThreadInteractionService(
         interactionKind: interaction.kind,
         usedDeprecatedResolverPolicyAlias,
       });
-      return autoAcceptWithinAutonomyWindow(issue, interaction);
+      return autoAcceptInOpenwaAutonomousMode(issue, await autoAcceptWithinAutonomyWindow(issue, interaction));
+    },
+
+    acceptPendingInOpenwaAutonomousMode: async (companyId: string, endpointId: string) => {
+      const issueIds = await openwaAutonomousTreeIssueIds(db, companyId, endpointId);
+      if (!issueIds.length) return 0;
+      const pending = await db
+        .select()
+        .from(issueThreadInteractions)
+        .where(
+          and(
+            eq(issueThreadInteractions.companyId, companyId),
+            inArray(issueThreadInteractions.issueId, issueIds),
+            eq(issueThreadInteractions.kind, "request_confirmation"),
+            eq(issueThreadInteractions.status, "pending"),
+          ),
+        )
+        .orderBy(asc(issueThreadInteractions.createdAt))
+        .limit(200);
+      let accepted = 0;
+      for (const row of pending) {
+        const result = await autoAcceptInOpenwaAutonomousMode({ id: row.issueId, companyId }, hydrateInteraction(row));
+        if (result.status === "accepted") accepted++;
+      }
+      return accepted;
     },
 
     acceptInteraction: async (

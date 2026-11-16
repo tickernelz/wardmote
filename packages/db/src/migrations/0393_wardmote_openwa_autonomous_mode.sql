@@ -1,0 +1,6 @@
+ALTER TABLE "chat_audit_entries" DROP CONSTRAINT "chat_audit_entries_kind_check";--> statement-breakpoint
+ALTER TABLE "chat_owner_approval_requests" DROP CONSTRAINT "chat_owner_approval_requests_resolved_via_check";--> statement-breakpoint
+ALTER TABLE "chat_owner_grants" DROP CONSTRAINT "chat_owner_grants_approved_via_check";--> statement-breakpoint
+ALTER TABLE "chat_audit_entries" ADD CONSTRAINT "chat_audit_entries_kind_check" CHECK ("chat_audit_entries"."kind" in ('trigger_admitted', 'trigger_filtered', 'message_sent', 'publication_suppressed', 'tool_called', 'approval_requested', 'approval_reminded', 'approval_resolved', 'approval_cancelled', 'approval_expired', 'approval_withdrawn', 'config_changed', 'group_added', 'group_left', 'session_health', 'linked_read', 'run_failed', 'owner_report_fallback', 'owner_group_changed', 'autonomous_action', 'autonomous_digest'));--> statement-breakpoint
+ALTER TABLE "chat_owner_approval_requests" ADD CONSTRAINT "chat_owner_approval_requests_resolved_via_check" CHECK ("chat_owner_approval_requests"."resolved_via" is null or "chat_owner_approval_requests"."resolved_via" in ('whatsapp', 'wardmote', 'autonomous'));--> statement-breakpoint
+ALTER TABLE "chat_owner_grants" ADD CONSTRAINT "chat_owner_grants_approved_via_check" CHECK ("chat_owner_grants"."approved_via" in ('whatsapp', 'wardmote', 'autonomous'));

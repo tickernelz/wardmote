@@ -218,10 +218,11 @@ describe("OpenWA settings", () => {
     setValue(field<HTMLInputElement>("#openwa-reminder-minutes"), "45");
     setValue(field<HTMLInputElement>("#openwa-grant-ttl"), "48");
     expect(approvals.textContent).not.toContain("Creating or delegating tasks");
+    click(button(approvals, "Autonomous mode"));
     click(button(approvals, "Save approvals"));
     await vi.waitFor(() =>
       expect(mocks.api.updateOpenwaPolicy).toHaveBeenCalledWith("endpoint-1", {
-        approvals: { createTask: true, externalTools: true, crossChatSend: true, waAdmin: true, gatewayAdmin: true, reminderMinutes: 45, maxReminders: 5, grantTtlHours: 48, pendingTtlHours: 72 },
+        approvals: { createTask: true, externalTools: true, crossChatSend: true, waAdmin: true, gatewayAdmin: true, autonomous: true, reminderMinutes: 45, maxReminders: 5, grantTtlHours: 48, pendingTtlHours: 72 },
       }),
     );
   });

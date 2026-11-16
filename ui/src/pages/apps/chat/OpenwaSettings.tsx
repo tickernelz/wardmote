@@ -544,11 +544,13 @@ function ApprovalsSection({ endpoint }: { endpoint: OpenwaEndpoint }) {
   const [maxReminders, setMaxReminders] = useState(String(approvals.maxReminders));
   const [grantTtlHours, setGrantTtlHours] = useState(String(approvals.grantTtlHours));
   const [pendingTtlHours, setPendingTtlHours] = useState(String(approvals.pendingTtlHours));
+  const [autonomous, setAutonomous] = useState(approvals.autonomous);
   const state = usePolicySave(endpoint);
   const submit = () =>
     state.save({
       approvals: {
         ...approvals,
+        autonomous,
         reminderMinutes: wholeNumber(reminderMinutes),
         maxReminders: wholeNumber(maxReminders),
         grantTtlHours: wholeNumber(grantTtlHours),
@@ -561,6 +563,12 @@ function ApprovalsSection({ endpoint }: { endpoint: OpenwaEndpoint }) {
       description="Owner and non-owner runs use the same tools; the agent decides when to ask an owner first. These settings control the approval requests it sends."
       footer={<SaveRow label="Save approvals" state={{ ...state, submit }} />}
     >
+      <ToggleRow
+        label="Autonomous mode"
+        detail="The agent stops asking owners first: approval requests are approved at once and confirmation cards in this channel's task trees are accepted, destructive ones included. Owners get one digest afterwards, at most every 30 minutes (5 minutes for destructive actions). Only the agent's own instructions limit it."
+        checked={autonomous}
+        onChange={setAutonomous}
+      />
       <div className="grid gap-3 sm:grid-cols-2">
         <NumberField id="openwa-reminder-minutes" label="Reminder interval (minutes)" value={reminderMinutes} error={fieldError(state.errors, "approvals.reminderMinutes")} onChange={setReminderMinutes} />
         <NumberField id="openwa-max-reminders" label="Maximum reminders" value={maxReminders} error={fieldError(state.errors, "approvals.maxReminders")} onChange={setMaxReminders} />

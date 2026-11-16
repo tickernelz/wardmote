@@ -1096,7 +1096,7 @@ export const chatOwnerApprovalRequests = pgTable(
     ),
     check(
       "chat_owner_approval_requests_resolved_via_check",
-      sql`${table.resolvedVia} is null or ${table.resolvedVia} in ('whatsapp', 'wardmote')`,
+      sql`${table.resolvedVia} is null or ${table.resolvedVia} in ('whatsapp', 'wardmote', 'autonomous')`,
     ),
     check(
       "chat_owner_approval_requests_reminder_count_check",
@@ -1283,7 +1283,7 @@ export const chatOwnerGrants = pgTable(
     ),
     check(
       "chat_owner_grants_approved_via_check",
-      sql`${table.approvedVia} in ('whatsapp', 'wardmote')`,
+      sql`${table.approvedVia} in ('whatsapp', 'wardmote', 'autonomous')`,
     ),
     index("chat_owner_grants_lookup_idx").on(
       table.endpointId,
@@ -1348,7 +1348,7 @@ export const chatAuditEntries = pgTable(
   (table) => [
     check(
       "chat_audit_entries_kind_check",
-      sql`${table.kind} in ('trigger_admitted', 'trigger_filtered', 'message_sent', 'publication_suppressed', 'tool_called', 'approval_requested', 'approval_reminded', 'approval_resolved', 'approval_cancelled', 'approval_expired', 'approval_withdrawn', 'config_changed', 'group_added', 'group_left', 'session_health', 'linked_read', 'run_failed', 'owner_report_fallback', 'owner_group_changed')`,
+      sql`${table.kind} in ('trigger_admitted', 'trigger_filtered', 'message_sent', 'publication_suppressed', 'tool_called', 'approval_requested', 'approval_reminded', 'approval_resolved', 'approval_cancelled', 'approval_expired', 'approval_withdrawn', 'config_changed', 'group_added', 'group_left', 'session_health', 'linked_read', 'run_failed', 'owner_report_fallback', 'owner_group_changed', 'autonomous_action', 'autonomous_digest')`,
     ),
     check(
       "chat_audit_entries_actor_kind_check",

@@ -375,6 +375,14 @@ Approval is your decision, not a server gate: after asking, wait for the
 `approval_resolved` wake before acting. Live grants are listed in the wake
 `policy.grants`.
 
+When the run section says `Autonomous mode: on`, owners are not asked first:
+decide yourself within your own instructions and never wait for an owner.
+After an action that would have needed an owner, record it once with
+`openwa_request_approval` (`destructive: true` when it is destructive or hard to
+undo); it returns `status: "approved"` at once, sends no bubble, and the owners
+read it in their digest. Your confirmation cards in this chat's task tree are
+accepted automatically.
+
 ## Reporting to the owner
 
 A chat may have an owner report group (Settings, Chats, **Report to owner

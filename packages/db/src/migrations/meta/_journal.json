@@ -2738,6 +2738,13 @@
       "when": 1794730155226,
       "tag": "0392_wardmote_openwa_owner_group_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 393,
+      "version": "7",
+      "when": 1794808988056,
+      "tag": "0393_wardmote_openwa_autonomous_mode",
+      "breakpoints": true
     }
   ]
 }
