@@ -20,7 +20,6 @@ import { testEnvironment } from "./test.js";
 
 export { isOmpStartupComplete } from "./parse.js";
 export { defaultOmpSessionRoot } from "./execute.js";
-export { moveRetiredOmpSessionRoot } from "./retired-session-root.js";
 export { listOmpSettingsCatalog, OmpSettingsUnavailableError, type OmpSettingsCatalogEntry, type OmpSettingType } from "./settings-catalog.js";
 
 function nonEmptyString(value: unknown): string | null {

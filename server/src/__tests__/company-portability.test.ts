@@ -6,7 +6,6 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompanyPortabilityFileEntry } from "@tickernelz/wardmote-shared";
-import { RETIRED_PACKAGE_METADATA_KEY } from "../services/retired-package-metadata-key.js";
 
 const companySvc = {
   getById: vi.fn(),
@@ -960,7 +959,7 @@ describe("company portability", () => {
       path: relativePath,
       kind: relativePath === "SKILL.md" ? "skill" : "reference",
       content: relativePath === "SKILL.md"
-        ? `---\nname: review\ndescription: Catalog review skill\nmetadata:\n  ${RETIRED_PACKAGE_METADATA_KEY}:\n    reviewNote: kept\n---\n\n# Review\n`
+        ? `---\nname: review\ndescription: Catalog review skill\nmetadata:\n  wardmote:\n    reviewNote: kept\n---\n\n# Review\n`
         : "# Checklist\n",
       language: "markdown",
       markdown: true,
@@ -980,7 +979,6 @@ describe("company portability", () => {
 
     const skillMarkdown = asTextFile(exported.files["skills/tickernelz/bundled/software-development/review/SKILL.md"]);
     expect(skillMarkdown).toContain("wardmote:");
-    expect(skillMarkdown).not.toContain(`${RETIRED_PACKAGE_METADATA_KEY}:`);
     expect(skillMarkdown).toContain('reviewNote: "kept"');
     expect(skillMarkdown).toContain("catalog:");
     expect(skillMarkdown).toContain(`sourceRef: "${originHash}"`);
@@ -5286,20 +5284,6 @@ describe("company portability", () => {
       source: { type: "inline", rootPath: "future-package", files: legacyPackageFiles(["schemaVersion: 8"]) },
       include: { company: true, agents: false, projects: false, issues: true },
       target: { mode: "new_company", newCompanyName: "Future Import" },
-      agents: "all",
-      collisionStrategy: "rename",
-    }, "user-1")).rejects.toThrow(/newer Wardmote/);
-    expect(issueSvc.importIssues).not.toHaveBeenCalled();
-  });
-
-  it("reads the extension of packages exported under the retired file name", async () => {
-    const portability = companyPortabilityService({} as any);
-    const { [".wardmote.yaml"]: extension, ...rest } = legacyPackageFiles(["schemaVersion: 8"]);
-
-    await expect(portability.importBundle({
-      source: { type: "inline", rootPath: "retired-package", files: { ...rest, [".paperclip.yaml"]: extension } },
-      include: { company: true, agents: false, projects: false, issues: true },
-      target: { mode: "new_company", newCompanyName: "Retired Import" },
       agents: "all",
       collisionStrategy: "rename",
     }, "user-1")).rejects.toThrow(/newer Wardmote/);

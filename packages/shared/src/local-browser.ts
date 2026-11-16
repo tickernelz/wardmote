@@ -101,14 +101,6 @@ export const localBrowserGuardsSchema = z.object({
 });
 export type LocalBrowserGuards = z.infer<typeof localBrowserGuardsSchema>;
 
-const LEGACY_TAB_GUARD_KEY = "protectPaperclipTab";
-
-const reportedGuardsSchema = z.preprocess((raw) => {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const { [LEGACY_TAB_GUARD_KEY]: legacy, ...guards } = raw as Record<string, unknown>;
-  return typeof legacy === "boolean" && !("protectWardmoteTab" in guards) ? { ...guards, protectWardmoteTab: legacy } : guards;
-}, localBrowserGuardsSchema);
-
 export const localBrowserDocumentStateSchema = z.object({
   documentId: z.string(),
   url: z.string(),
@@ -912,7 +904,7 @@ export const localBrowserGuardsEventSchema = z
   .object({
     type: z.literal("event"),
     event: z.literal("guards"),
-    data: reportedGuardsSchema,
+    data: localBrowserGuardsSchema,
   })
   .strict();
 
@@ -955,7 +947,7 @@ export const localBrowserBridgeFrameSchema = z.discriminatedUnion("type", [
       tabs: z.array(localBrowserTabSchema),
       capabilities: z.array(z.string().min(1).max(40)).max(40).optional(),
       access: localBrowserAccessSchema.optional().catch(undefined),
-      guards: reportedGuardsSchema.optional().catch(undefined),
+      guards: localBrowserGuardsSchema.optional().catch(undefined),
     })
     .strict(),
   z

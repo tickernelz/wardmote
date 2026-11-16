@@ -82,27 +82,4 @@ describe("ensureOmpSkills", () => {
     expect(await fs.readlink(path.join(skillsHome, "wardmote"))).toBe(bundled(root, "new", "wardmote"));
   });
 
-  it("moves bundled skill links off an install published under the legacy package name", async () => {
-    for (const skill of SKILLS) {
-      const legacy = path.join(root, "installs", "legacy", "node_modules", "@tickernelz", "paperclip-pro-server", "skills", skill);
-      await fs.mkdir(legacy, { recursive: true });
-      await fs.symlink(legacy, path.join(skillsHome, skill));
-    }
-
-    await ensureOmpSkills(
-      {
-        wardmoteRuntimeSkills: SKILLS.map((skill) => ({
-          key: `tickernelz/wardmote/${skill}`,
-          runtimeName: skill,
-          source: bundled(root, "new", skill),
-        })),
-        wardmoteSkillSync: { desiredSkills: ["tickernelz/wardmote/wardmote"] },
-      },
-      agentDir,
-    );
-
-    for (const skill of SKILLS) {
-      expect(await fs.readlink(path.join(skillsHome, skill))).toBe(bundled(root, "new", skill));
-    }
-  });
 });

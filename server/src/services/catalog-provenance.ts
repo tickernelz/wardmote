@@ -1,4 +1,4 @@
-import { readPackageMetadataBlock } from "./retired-package-metadata-key.js";
+import { readPackageMetadataBlock } from "./package-metadata.js";
 export const PORTABLE_CATALOG_PROVENANCE_STRING_KEYS = [
   "sourceRef",
   "originHash",

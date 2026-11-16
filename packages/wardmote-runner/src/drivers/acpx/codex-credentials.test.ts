@@ -23,10 +23,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { stageManagedCodexCredential } from "./codex-credentials.js";
-import {
-  RETIRED_CREDENTIAL_CLEANUP_INTENT,
-  RETIRED_CREDENTIAL_STAGING_FILE,
-} from "./retired-codex-credential-names.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -540,25 +536,6 @@ describe("managed Codex credentials", () => {
     await expect(readFile(cleanupIntent)).rejects.toMatchObject({
       code: "ENOENT",
     });
-  });
-
-  it("recovers cleanup intent and staging left under the retired names", async () => {
-    const fixture = await credentialFixture();
-    const destination = join(fixture.home, "auth.json");
-    const retiredIntent = join(fixture.home, RETIRED_CREDENTIAL_CLEANUP_INTENT);
-    const retiredStaging = join(fixture.home, RETIRED_CREDENTIAL_STAGING_FILE);
-    await writeFile(destination, '{"crash_stale":true}', { mode: 0o600 });
-    await writeFile(retiredStaging, '{"crash_staged":true}', { mode: 0o600 });
-    await writeFile(retiredIntent, "retired-cleanup\n", { mode: 0o600 });
-
-    const lease = await stageManagedCodexCredential({
-      agentHomeDirectory: fixture.home,
-      environment: { OPENAI_API_KEY: "launch-only-key" },
-    });
-    for (const path of [destination, retiredStaging, retiredIntent]) {
-      await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    await lease.close();
   });
 
   it("scrubs a crash-left credential staging file before admission", async () => {

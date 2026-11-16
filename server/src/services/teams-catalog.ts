@@ -26,7 +26,6 @@ import { parseFrontmatterMarkdown } from "@tickernelz/wardmote-shared/frontmatte
 import {
   COMPANY_PACKAGE_EXTENSION_FILE,
   COMPANY_PACKAGE_EXTENSION_SCHEMA,
-  adoptRetiredCompanyPackageExtension,
 } from "@tickernelz/wardmote-shared/company-package-extension";
 import { conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { agentService } from "./agents.js";
@@ -819,7 +818,7 @@ export function teamsCatalogService(db: Db) {
     errors.push(...skillPrep.errors);
 
     const targetManager = await resolveTargetManagerReference(companyId, options);
-    const files = adoptRetiredCompanyPackageExtension(await readCatalogTeamSourceFiles(team));
+    const files = await readCatalogTeamSourceFiles(team);
     const existingExtension =
       typeof files[COMPANY_PACKAGE_EXTENSION_FILE] === "string"
         ? parseYamlDocument(files[COMPANY_PACKAGE_EXTENSION_FILE])

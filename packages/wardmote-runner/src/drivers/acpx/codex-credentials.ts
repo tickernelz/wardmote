@@ -12,10 +12,6 @@ import {
 import { createServer, type Server } from "node:net";
 import { isAbsolute, join, resolve } from "node:path";
 
-import {
-  RETIRED_CREDENTIAL_CLEANUP_INTENT,
-  RETIRED_CREDENTIAL_STAGING_FILE,
-} from "./retired-codex-credential-names.js";
 import { verifiedRuntimeExecutableHandoff } from "./verified-runtime-executable.js";
 
 const MAX_CODEX_CREDENTIAL_BYTES = 256 * 1024;
@@ -248,18 +244,12 @@ async function stageClaimedManagedCodexCredential(
     home,
     intentPath,
   );
-  await recoverPersistedCredentialCleanup(
-    destination,
-    join(home, RETIRED_CREDENTIAL_STAGING_FILE),
-    home,
-    join(home, RETIRED_CREDENTIAL_CLEANUP_INTENT),
-  );
   // The isolated home is itself the durable recovery anchor. Scrub both the
   // installed credential and the deterministic staging pathname before every
   // admission, even when a prior cleanup-intent entry was lost with a runner
   // crash. Only after their absence is durable may a new intent be created.
   await removeCredentialArtifacts(
-    [destination, stagingPath, join(home, RETIRED_CREDENTIAL_STAGING_FILE)],
+    [destination, stagingPath],
     home,
   );
   const environment = input.environment ?? {};

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { RETIRED_LINKED_KEY_PREFIX } from "../../services/openwa/retired-linked-key-name.js";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -556,7 +555,6 @@ describe("OpenWA linked read-only numbers (embedded Postgres + fake gateway)", (
     const response = await request(app).delete(base + "/" + linkedId);
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ revoked: false, warning: expect.stringContaining('"wardmote-linked-' + linkedId.slice(0, 8) + '"') });
-    expect(response.body.warning).toContain('"' + RETIRED_LINKED_KEY_PREFIX + linkedId.slice(0, 8) + '"');
     expect(response.body.warning).toMatch(/OpenWA dashboard/);
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ linkedSessionId: linkedId, gatewayKeyName: "wardmote-linked-" + linkedId.slice(0, 8) }), expect.stringContaining("OpenWA dashboard"));
     warn.mockRestore();

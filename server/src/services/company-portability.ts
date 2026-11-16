@@ -1,13 +1,11 @@
 import { createAgentLifecycle } from "./agent-lifecycle.js";
-import { RETIRED_PACKAGE_METADATA_KEY, readPackageMetadataBlock } from "./retired-package-metadata-key.js";
+import { readPackageMetadataBlock } from "./package-metadata.js";
 import { agentAppearanceSchema } from "@tickernelz/wardmote-shared";
 import {
   COMPANY_PACKAGE_EXTENSION_FILE,
   COMPANY_PACKAGE_EXTENSION_SCHEMA,
-  adoptRetiredCompanyPackageExtension,
   findCompanyPackageExtensionPath,
   isCompanyPackageExtensionFile,
-  isRetiredCompanyPackageExtensionFile,
 } from "@tickernelz/wardmote-shared/company-package-extension";
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -2657,7 +2655,6 @@ async function withSkillSourceMetadata(skill: CompanySkill, markdown: string) {
   metadata.skillKey = skill.key;
   metadata.wardmoteSkillKey = skill.key;
   const previousBlock = readPackageMetadataBlock(metadata);
-  delete metadata[RETIRED_PACKAGE_METADATA_KEY];
   metadata.wardmote = {
     ...(previousBlock ?? {}),
     skillKey: skill.key,
@@ -3037,7 +3034,7 @@ function buildManifestFromPackageFiles(
   files: Record<string, CompanyPortabilityFileEntry>,
   opts?: { sourceLabel?: { companyId: string; companyName: string } | null },
 ): ResolvedSource {
-  const normalizedFiles = adoptRetiredCompanyPackageExtension(normalizeFileMap(files));
+  const normalizedFiles = normalizeFileMap(files);
   const companyPath = typeof normalizedFiles["COMPANY.md"] === "string"
     ? normalizedFiles["COMPANY.md"]
     : undefined;
@@ -3746,8 +3743,7 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         return (
           relative.endsWith(".md") ||
           relative.startsWith("skills/") ||
-          isCompanyPackageExtensionFile(relative) ||
-          isRetiredCompanyPackageExtensionFile(relative)
+          isCompanyPackageExtensionFile(relative)
         );
       });
     for (const repoPath of candidatePaths) {

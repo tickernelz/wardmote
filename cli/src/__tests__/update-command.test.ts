@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { buildNextManifest, writeManagedShim, flipCurrentAtomic, initializeInstallStore, payloadPathFor, readInstallManifest, resolveInstallStorePaths, writeInstallManifestAtomic, type InstallManifest, type InstallRecord } from "../install-store.js";
-import { LEGACY_HOME_DIRNAME } from "@tickernelz/wardmote-shared/home-paths";
 import type { CommandRunner } from "../commands/install.js";
 import { detectInstallMode, resolveUpdateRequest, rollbackManagedInstall, updateCommand } from "../commands/update.js";
 
@@ -218,7 +217,7 @@ describe("update command", () => {
       for (const bin of bins) fs.symlinkSync(`../@tickernelz/${packageName}/dist/index.js`, path.join(payload, "node_modules", ".bin", bin));
       return payload;
     };
-    const legacyPayload = install("2026.1105.1", "paperclip-pro", ["paperclip-pro"]);
+    const legacyPayload = install("2026.1105.1", "other-cli", ["other-cli"]);
     flipCurrentAtomic(legacyPayload, paths);
     const legacyManifest: InstallManifest = { schemaVersion: 1, ...record(legacyPayload, "2026.1105.1"), previous: [] };
     writeInstallManifestAtomic(legacyManifest, paths);
@@ -281,19 +280,6 @@ describe("update command", () => {
     const runCommand = vi.fn(async (_file: string, args: string[]) => args[0] === "view" ? { stdout: '"2.0.0"\n', stderr: "" } : { stdout: "", stderr: "" });
     await updateCommand({ dryRun: true }, { paths, executablePath: executable, runCommand });
     expect(runCommand).toHaveBeenCalledWith("npm", expect.arrayContaining(["view", "@tickernelz/wardmote@latest"]), expect.anything());
-  });
-
-  it("rolls back to a payload recorded under the migrated legacy home link", () => {
-    const userHome = path.join(root, "home");
-    const paths = resolveInstallStorePaths({ homeDir: userHome, wardmoteHome: path.join(userHome, ".wardmote") }); initializeInstallStore(paths);
-    fs.symlinkSync(paths.wardmoteHome, path.join(userHome, LEGACY_HOME_DIRNAME));
-    const legacyPath = (payload: string) => path.join(userHome, LEGACY_HOME_DIRNAME, path.relative(paths.wardmoteHome, payload));
-    const previousPayload = payloadPathFor(paths, "npm", "1"); createPayload(previousPayload, "1");
-    const currentPayload = payloadPathFor(paths, "npm", "2"); createPayload(currentPayload, "2");
-    flipCurrentAtomic(currentPayload, paths);
-    writeInstallManifestAtomic({ schemaVersion: 1, ...record(legacyPath(currentPayload), "2"), previous: [record(legacyPath(previousPayload), "1")] }, paths);
-    expect(rollbackManagedInstall(paths).version).toBe("1");
-    expect(fs.realpathSync(paths.currentPath)).toBe(fs.realpathSync(previousPayload));
   });
 
   it("rolls back the active payload when restart validation fails", async () => {

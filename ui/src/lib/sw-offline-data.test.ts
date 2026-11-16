@@ -257,15 +257,8 @@ describe("service worker offline data (per-session cache)", () => {
 });
 
 describe("service worker update hand-off", () => {
-  async function install(w: ReturnType<typeof worker>) {
-    const pending: Promise<unknown>[] = [];
-    w.handlers.get("install")!({ waitUntil: (promise: Promise<unknown>) => pending.push(promise) });
-    await Promise.all(pending);
-  }
-
   it("waits for the user instead of taking over open tabs", async () => {
     const w = worker(["wardmote-shell-old"]);
-    await install(w);
     expect(w.skipWaiting).not.toHaveBeenCalled();
     await w.message("wardmote.skip-waiting");
     expect(w.skipWaiting).toHaveBeenCalledOnce();
@@ -278,9 +271,4 @@ describe("service worker update hand-off", () => {
     expect(port.postMessage).toHaveBeenCalledWith({ type: "wardmote.build-id", buildId: "fixture-production" });
   });
 
-  it("takes over at once from a legacy Wardmote worker whose tabs cannot show the update toast", async () => {
-    const w = worker(["paperclip-public-assets-old"]);
-    await install(w);
-    expect(w.skipWaiting).toHaveBeenCalledOnce();
-  });
 });

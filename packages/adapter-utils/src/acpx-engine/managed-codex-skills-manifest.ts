@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { RETIRED_MANAGED_CODEX_SKILLS_MANIFEST } from "../retired-marker-names.js";
 import { parseObject } from "../server-utils.js";
 
 const MANAGED_CODEX_SKILLS_MANIFEST = ".wardmote-managed-skills.json";
 
 export async function readManagedCodexSkillsManifest(skillsHome: string): Promise<Set<string>> {
-  const current = await readManifestFile(path.join(skillsHome, MANAGED_CODEX_SKILLS_MANIFEST));
-  if (current) return current;
-  return (await readManifestFile(path.join(skillsHome, RETIRED_MANAGED_CODEX_SKILLS_MANIFEST))) ?? new Set();
+  return (await readManifestFile(path.join(skillsHome, MANAGED_CODEX_SKILLS_MANIFEST))) ?? new Set();
 }
 
 async function readManifestFile(manifestPath: string): Promise<Set<string> | null> {
@@ -31,5 +28,4 @@ export async function writeManagedCodexSkillsManifest(skillsHome: string, skillN
     `${JSON.stringify({ version: 1, managedSkillNames }, null, 2)}\n`,
     "utf8",
   );
-  await fs.rm(path.join(skillsHome, RETIRED_MANAGED_CODEX_SKILLS_MANIFEST), { force: true });
 }

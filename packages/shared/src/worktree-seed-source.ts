@@ -1,7 +1,6 @@
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync, type Stats } from "node:fs";
 import path from "node:path";
 import { resolveWardmoteInstanceId } from "./home-paths.js";
-import { adoptRetiredRepoConfigDir } from "./repo-config-dir.js";
 
 export type WorktreeSeedSourceDiagnostic = {
   configPath?: unknown;
@@ -67,7 +66,6 @@ function inspectDeclaredEntry(entryPath: string, configPath: string, detail?: st
 }
 
 export function baseWorkspaceDeclaresInstanceConfig(baseWorkspaceCwd: string): boolean {
-  adoptRetiredRepoConfigDir(baseWorkspaceCwd);
   const configDir = path.join(baseWorkspaceCwd, ".wardmote");
   const configPath = path.join(configDir, "config.json");
   if (inspectDeclaredEntry(configPath, configPath)) return true;

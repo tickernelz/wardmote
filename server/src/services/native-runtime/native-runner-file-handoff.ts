@@ -35,7 +35,6 @@ import type { StorageService } from "../../storage/types.js";
 import { readProcessStartedAt } from "../hot-restart.js";
 import { issueService } from "../issues.js";
 import { getNativeReviewAssignment, readNativeReviewAssignmentContext } from "./native-review-participant.js";
-import { RETIRED_STAGING_ROOT } from "./retired-staging-root.js";
 
 export type RemoteWorkspaceFileReader = (input: Pick<NativeRunnerFileHandoffInput, "contentRef" | "byteSize" | "sha256">) => Promise<Buffer>;
 
@@ -486,7 +485,6 @@ async function scrubNativeRunnerStagingResidue(
   activePaths: ReadonlySet<string>,
   processDirectoryName: string,
 ): Promise<string[]> {
-  await scrubStagingRoot(workspaceRoot, new Set(), processDirectoryName, RETIRED_STAGING_ROOT);
   return scrubStagingRoot(workspaceRoot, activePaths, processDirectoryName, STAGING_ROOT);
 }
 

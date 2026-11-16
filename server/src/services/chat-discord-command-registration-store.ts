@@ -70,7 +70,6 @@ async function stored(
   database: Database,
   scope: DiscordCommandRegistrationScope,
   lock = false,
-  allowKnownPriorDefinition = false,
 ) {
   const owners = database
     .select()
@@ -109,7 +108,6 @@ async function stored(
   const state = parseDiscordCommandRegistration(
     row.payload.registration,
     scope,
-    allowKnownPriorDefinition,
   );
   if (
     !state ||
@@ -206,7 +204,7 @@ export async function reconcileStoredDiscordCommandRegistration(
           return { state: proposed, deferred: false };
         }
       }
-      const current = await stored(tx, scope, true, true);
+      const current = await stored(tx, scope, true);
       if (!current) deny(); // In particular, never recreate an orphaned action.
       const result = current.row.result;
       const due =
@@ -230,7 +228,7 @@ export async function reconcileStoredDiscordCommandRegistration(
     if (initial.deferred) return { kind: "deferred" };
     const check = async (tx: Tx) => {
       await authorize(tx);
-      const current = await stored(tx, scope, true, true);
+      const current = await stored(tx, scope, true);
       if (!current || !same(current.state, state)) deny();
       return current;
     };

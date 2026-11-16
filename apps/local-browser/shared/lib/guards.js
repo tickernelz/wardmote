@@ -2,7 +2,6 @@
   "use strict";
 
   var STORAGE_KEY = "lb.guards";
-  var LEGACY_TAB_KEY = "protectPaperclipTab";
   var FALLBACK = { protectWardmoteTab: true, protectFocusedTab: true, networkBufferSize: 1000 };
   var FALLBACK_BUFFER = { min: 50, max: 20000 };
 
@@ -33,11 +32,7 @@
     var bounds = bufferBounds();
     var size = typeof source.networkBufferSize === "number" && Number.isFinite(source.networkBufferSize) ? Math.round(source.networkBufferSize) : base.networkBufferSize;
     return {
-      protectWardmoteTab: typeof source.protectWardmoteTab === "boolean"
-        ? source.protectWardmoteTab
-        : typeof source[LEGACY_TAB_KEY] === "boolean"
-          ? source[LEGACY_TAB_KEY]
-          : base.protectWardmoteTab,
+      protectWardmoteTab: typeof source.protectWardmoteTab === "boolean" ? source.protectWardmoteTab : base.protectWardmoteTab,
       protectFocusedTab: typeof source.protectFocusedTab === "boolean" ? source.protectFocusedTab : base.protectFocusedTab,
       networkBufferSize: Math.min(bounds.max, Math.max(bounds.min, size))
     };
