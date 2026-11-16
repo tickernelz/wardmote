@@ -17339,26 +17339,24 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
                 ? await openwaAbsenceDeliveryIds(taskTx, taskEndpoint, openwaDecoration, conversation!.id, activeDelivery.id)
                 : undefined,
           });
-        if (taskEndpoint.provider === "imessage-photon") {
-          await logActivity(
-            taskTx as Db,
-            {
-              companyId: taskEndpoint.companyId,
-              actorType: taskUserId ? "user" : "system",
-              actorId: taskUserId ?? "chat:imessage-photon",
-              action: "issue.comment_added",
-              entityType: "issue",
-              entityId: issue.id,
-              details: {
-                commentId: comment.id,
-                issueIdentifier: issue.identifier,
-                source: "chat:imessage-photon",
-                endpointId: taskEndpoint.id,
-              },
+        await logActivity(
+          taskTx as Db,
+          {
+            companyId: taskEndpoint.companyId,
+            actorType: taskUserId ? "user" : "system",
+            actorId: taskUserId ?? `chat:${taskEndpoint.provider}`,
+            action: "issue.comment_added",
+            entityType: "issue",
+            entityId: issue.id,
+            details: {
+              commentId: comment.id,
+              issueIdentifier: issue.identifier,
+              source: `chat:${taskEndpoint.provider}`,
+              endpointId: taskEndpoint.id,
             },
-            inboundActivityPublications,
-          );
-        }
+          },
+          inboundActivityPublications,
+        );
         return { actorUserId: taskUserId, comment, conversation, issue };
       };
       const taskMutation = await db.transaction(async (tx) => {
@@ -18967,6 +18965,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
     });
     if (!activeDelivery) return;
 
+    const lifecycleActivityPublications: ActivityPublication[] = [];
     try {
       await db.transaction(async (tx) => {
         const admittedRuntimeContext = lifecycleRuntimeFence(activeDelivery);
@@ -19525,12 +19524,29 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           return;
         }
 
-        await issuesSvc.addComment(
+        const lifecycleComment = await issuesSvc.addComment(
           linkedTarget.issueId,
           lifecycle.text,
           {},
           { authorType: "system" },
           tx,
+        );
+        await logActivity(
+          tx as unknown as Db,
+          {
+            companyId: endpoint.companyId,
+            actorType: "system",
+            actorId: `chat:${endpoint.provider}`,
+            action: "issue.comment_added",
+            entityType: "issue",
+            entityId: linkedTarget.issueId,
+            details: {
+              commentId: lifecycleComment.id,
+              source: `chat:${endpoint.provider}`,
+              endpointId: endpoint.id,
+            },
+          },
+          lifecycleActivityPublications,
         );
         await notifyChatDeliveryWork(tx);
         await tx
@@ -19550,6 +19566,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
             ),
           );
       });
+      for (const publication of lifecycleActivityPublications) publishActivity(publication);
     } catch (error) {
       const terminal = activeDelivery.attempts >= 5;
       await db.transaction(async (tx) => {

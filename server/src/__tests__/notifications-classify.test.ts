@@ -106,6 +106,7 @@ describe("classifyLiveEvent", () => {
 
   it.each([
     { name: "user comment", event: activity({ actorType: "user", actorId: "owner", agentId: null, action: "issue.comment_added", details: { commentId: "c-2" } }) },
+    { name: "unlinked chat sender message", event: activity({ actorType: "system", actorId: "chat:openwa", agentId: null, action: "issue.comment_added", details: { commentId: "c-6", source: "chat:openwa" } }) },
     { name: "user approval", event: activity({ actorType: "user", actorId: "owner", agentId: null, action: "approval.created", entityType: "approval", entityId: "a-2" }) },
     { name: "user assignment", event: activity({ actorType: "user", actorId: "owner", agentId: null, action: "issue.updated", details: { assigneeUserId: "board-2", _previous: { assigneeUserId: null } } }) },
     { name: "succeeded run", event: runStatus("succeeded") },

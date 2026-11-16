@@ -445,7 +445,7 @@ describe("LiveUpdatesProvider issue invalidation", () => {
     });
     expect(invalidations).not.toContainEqual({
       queryKey: queryKeys.issues.documents("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
   });
 
@@ -631,19 +631,19 @@ describe("LiveUpdatesProvider issue invalidation", () => {
 
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.detail("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.activity("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.comments("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
   });
 
-  it("treats self-authored comment-driven issue updates as inactive-only refreshes", () => {
+  it("treats self-authored comment-driven issue updates as stale-only refreshes", () => {
     const invalidations: unknown[] = [];
     const queryClient = {
       invalidateQueries: (input: unknown) => {
@@ -669,19 +669,19 @@ describe("LiveUpdatesProvider issue invalidation", () => {
 
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.detail("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.activity("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
     expect(invalidations).not.toContainEqual({
       queryKey: queryKeys.issues.comments("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
   });
 
-  it("keeps visible issue detail refetches inactive for downstream agent updates", () => {
+  it("keeps visible issue detail stale-only for downstream agent updates", () => {
     const invalidations: unknown[] = [];
     const queryClient = {
       invalidateQueries: (input: unknown) => {
@@ -720,11 +720,11 @@ describe("LiveUpdatesProvider issue invalidation", () => {
 
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.detail("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.activity("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
   });
 
@@ -773,7 +773,7 @@ describe("LiveUpdatesProvider issue invalidation", () => {
     });
     expect(invalidations).not.toContainEqual({
       queryKey: queryKeys.issues.detail("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
   });
 
@@ -819,18 +819,18 @@ describe("LiveUpdatesProvider issue invalidation", () => {
 
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.detail("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.interactions("issue-1"),
     });
     expect(invalidations).not.toContainEqual({
       queryKey: queryKeys.issues.interactions("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
   });
 
-  it("keeps visible issue comment updates inactive-only instead of active refetching", () => {
+  it("keeps visible issue comment updates stale-only instead of refetching", () => {
     const invalidations: unknown[] = [];
     const queryClient = {
       invalidateQueries: (input: unknown) => {
@@ -870,15 +870,15 @@ describe("LiveUpdatesProvider issue invalidation", () => {
 
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.detail("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.activity("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
     expect(invalidations).toContainEqual({
       queryKey: queryKeys.issues.comments("issue-1"),
-      refetchType: "inactive",
+      refetchType: "none",
     });
   });
 
@@ -1058,6 +1058,62 @@ describe("LiveUpdatesProvider issue invalidation", () => {
 });
 
 describe("LiveUpdatesProvider visible issue comment hydration", () => {
+  const commentPayload = {
+    entityType: "issue",
+    entityId: "issue-1",
+    action: "issue.comment_added",
+    actorType: "user",
+    actorId: "user-1",
+    details: { identifier: "PAP-759", commentId: "comment-9", source: "chat:openwa" },
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    getCommentMock.mockReset();
+  });
+
+  function cachedIssueClient() {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.issues.detail("PAP-759"), { id: "issue-1", identifier: "PAP-759", assigneeAgentId: "agent-1" });
+    return queryClient;
+  }
+
+  it("hydrates a new comment on a visible task whose window lost focus", async () => {
+    vi.stubGlobal("document", { visibilityState: "visible", hasFocus: () => false });
+    getCommentMock.mockResolvedValueOnce({ id: "comment-9", issueId: "issue-1", body: "Pesan dari WhatsApp", createdAt: "2026-11-16T01:00:00.000Z" });
+    const queryClient = cachedIssueClient();
+
+    expect(__liveUpdatesTestUtils.shouldDeferVisibleIssueCommentActivity(queryClient, "/PAP/issues/PAP-759", commentPayload)).toBe(true);
+    await expect(__liveUpdatesTestUtils.hydrateVisibleIssueComment(queryClient, "/PAP/issues/PAP-759", commentPayload)).resolves.toBe(true);
+
+    expect(queryClient.getQueryData(queryKeys.issues.comments("issue-1"))).toMatchObject({ pages: [[{ id: "comment-9", body: "Pesan dari WhatsApp" }]] });
+  });
+
+  it("leaves a hidden task to the refresh it runs when it becomes visible", () => {
+    vi.stubGlobal("document", { visibilityState: "hidden", hasFocus: () => false });
+
+    expect(__liveUpdatesTestUtils.shouldDeferVisibleIssueCommentActivity(cachedIssueClient(), "/PAP/issues/PAP-759", commentPayload)).toBe(false);
+  });
+
+  it("does not run a stale inactive comment query when the open task receives a comment", async () => {
+    const queryClient = cachedIssueClient();
+    const staleQuery = vi.fn(async () => ({ pages: [[]], pageParams: [null] }));
+    await queryClient.prefetchQuery({ queryKey: queryKeys.issues.comments("PAP-759"), queryFn: staleQuery });
+    staleQuery.mockClear();
+
+    __liveUpdatesTestUtils.invalidateActivityQueries(
+      queryClient,
+      "company-1",
+      commentPayload,
+      { userId: null, agentId: null },
+      { pathname: "/PAP/issues/PAP-759", isForegrounded: true },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(staleQuery).not.toHaveBeenCalled();
+    expect(queryClient.getQueryState(queryKeys.issues.comments("PAP-759"))?.isInvalidated).toBe(true);
+  });
+
   it("hydrates the new comment into the cache the task page observes by id", async () => {
     getCommentMock.mockResolvedValueOnce({
       id: "comment-2",

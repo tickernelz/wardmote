@@ -152,7 +152,7 @@ function parseActivity(event: LiveEvent): NotificationTrigger | null {
 
   if (action === "issue.comment_added") {
     const commentId = str(details.commentId);
-    if (!commentId) return null;
+    if (!commentId || str(details.source)?.startsWith("chat:")) return null;
     return {
       ...baseTrigger(event, "comment", `comment:${commentId}`),
       ...common,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, asc, eq } from "drizzle-orm";
 import {
+  activityLog,
   agents,
   agentWakeupRequests,
   assets,
@@ -18,6 +19,7 @@ import {
   createDb,
   heartbeatRuns,
   issueAttachments,
+  issueComments,
   issues,
   toolConnections,
   type Db,
@@ -31,6 +33,7 @@ import { ChatSdkRuntime } from "../../services/chat-sdk-runtime.js";
 import { resolveChatRunPresentationAuthorizationReason } from "../../services/chat-run-publications.js";
 import { instanceSettingsService } from "../../services/instance-settings.js";
 import { issueService } from "../../services/issues.js";
+import { subscribeCompanyLiveEvents } from "../../services/live-events.js";
 import { secretService } from "../../services/secrets.js";
 import { applyOpenwaRunContext, resolveOpenwaRunContext } from "../../services/openwa/authority.js";
 import { OPENWA_WAKE_CONTEXT_KEY, buildOpenwaRunGuidance, type OpenwaWakeEvent } from "../../services/openwa/guidance.js";
@@ -324,6 +327,35 @@ describe("OpenWA round trip (embedded Postgres + fake gateway)", () => {
     expect(t.gateway.sends[0]).not.toHaveProperty("quotedMessageId");
     const [settled] = await db.select().from(chatDeliveries).where(eq(chatDeliveries.id, wake.delivery.id));
     expect(settled!.answerState).toBe("answered");
+  }, 120_000);
+
+  it("publishes each inbound message to the open task only after its comment commits", async () => {
+    const t = await setup();
+    await goLive(t);
+    const published: Array<{ details: Record<string, unknown>; committed: Promise<Array<{ body: string }>> }> = [];
+    const unsubscribe = subscribeCompanyLiveEvents(t.companyId, (event) => {
+      if (event.type !== "activity.logged" || event.payload.action !== "issue.comment_added") return;
+      const details = event.payload.details as Record<string, unknown>;
+      published.push({
+        details,
+        committed: db.select({ body: issueComments.body }).from(issueComments).where(eq(issueComments.id, String(details.commentId))),
+      });
+    });
+    try {
+      const wake = await admitted(t, { chatId: jid(OWNER_PHONE), body: "pesan masuk dari WhatsApp" });
+      const issueId = String(wake.wake.contextSnapshot!.issueId);
+      const [issue] = await db.select({ identifier: issues.identifier }).from(issues).where(eq(issues.id, issueId));
+      expect(published).toHaveLength(1);
+      expect(published[0]!.details).toMatchObject({ source: "chat:openwa", issueIdentifier: issue!.identifier, endpointId: t.endpointId });
+      expect(await published[0]!.committed).toEqual([{ body: "pesan masuk dari WhatsApp" }]);
+      const rows = await db
+        .select({ actorType: activityLog.actorType })
+        .from(activityLog)
+        .where(and(eq(activityLog.entityId, issueId), eq(activityLog.action, "issue.comment_added")));
+      expect(rows).toEqual([{ actorType: "user" }]);
+    } finally {
+      unsubscribe();
+    }
   }, 120_000);
 
   it("quotes the trigger when replying to a group mention", async () => {

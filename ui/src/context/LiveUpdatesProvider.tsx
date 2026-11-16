@@ -839,6 +839,10 @@ function shouldDeferIssueRefetchForVisibleAgentActivity(
   );
 }
 
+function commentRouteOptions(options?: VisibleRouteOptions): VisibleRouteOptions {
+  return { isForegrounded: options?.isForegrounded ?? getPageVisibility().visible };
+}
+
 function shouldDeferVisibleIssueCommentActivity(
   queryClient: QueryClient,
   pathname: string,
@@ -856,7 +860,7 @@ function shouldDeferVisibleIssueCommentActivity(
   const context = resolveVisibleIssueRouteContext(
     queryClient,
     pathname,
-    options,
+    commentRouteOptions(options),
   );
   if (!context) return false;
 
@@ -883,7 +887,7 @@ async function hydrateVisibleIssueComment(
   const context = resolveVisibleIssueRouteContext(
     queryClient,
     pathname,
-    options,
+    commentRouteOptions(options),
   );
   if (!context) return false;
 
@@ -1047,6 +1051,7 @@ function buildActivityToast(
       !!currentActor.agentId &&
       actorId === currentActor.agentId);
   if (isSelfActivity) return null;
+  if (action === "issue.comment_added" && readString(details?.source)?.startsWith("chat:")) return null;
 
   if (action === "issue.created") {
     return {
@@ -1526,7 +1531,7 @@ function invalidateActivityQueries(
           selfCommentActivity ||
           visibleIssueAgentActivity ||
           visibleIssueCommentActivity
-            ? { refetchType: "inactive" as const }
+            ? { refetchType: "none" as const }
             : undefined;
         queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(ref), ...invalidationOptions });
         queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(ref), ...invalidationOptions });
