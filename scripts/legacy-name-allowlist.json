@@ -21,10 +21,6 @@
       "reason": "Migrasi database yang sudah diterapkan bersifat append-only; pengenal baru hanya lewat migrasi baru.",
       "approvedBy": "Kartu Zhafron 7b2d7ba2 diterima 2026-11-14 (ZHA-5833): lisensi dan migrasi tetap permanen; migrasi-otomatis dibuang satu rilis setelah PC, integron dan lab0 upgrade ke rilis yang memuat rename ini; sebelumnya: Kartu Zhafron 1a487cb3 diterima 2026-11-13 14:27 UTC (ZHA-5833); sebelumnya: Deskripsi ZHA-5279 bagian risiko (Wira atas permintaan Zhafron 2026-11-08)"
     },
-    "migrasi-otomatis": {
-      "reason": "Sisa migrasi otomatis yang hanya bisa dibuang lewat rilis ekstensi Local Browser bertanda tangan AMO: kunci guard tab lama di penyimpanan ekstensi (apps/local-browser). Kode migrasi otomatis lain sudah dibuang di ZHA-6112.",
-      "approvedBy": "Kartu Zhafron 7b2d7ba2 diterima 2026-11-14 (ZHA-5833): lisensi dan migrasi tetap permanen; migrasi-otomatis dibuang satu rilis setelah PC, integron dan lab0 upgrade ke rilis yang memuat rename ini; sebelumnya: Kartu Zhafron 1a487cb3 diterima 2026-11-13 14:27 UTC (ZHA-5833); sebelumnya: Keputusan Zhafron 2026-11-08 11:54 UTC (migrasi otomatis di install/upgrade), deskripsi ZHA-5279 butir keputusan 2; ZHA-6112 (2026-11-16): sisa ekstensi menunggu rilis ekstensi bertanda tangan berikutnya"
-    },
     "turunan": {
       "reason": "Teks yang harus sama persis dengan pengenal lama di tempat lain dan berubah bersamanya: jalur berkas tes di data durasi shard, user/database Postgres tertanam yang dipakai 22 berkas. Hilang saat pengenal asalnya diganti di fase rename.",
       "approvedBy": "Raka (ZHA-5279), ditinjau Hendra di PR perbaikan main"
@@ -82,10 +78,6 @@
     ["LICENSE",1,"lisensi"],
     ["README.md",7,"repo-eksternal"],
     ["SECURITY.md",4,"repo-eksternal"],
-    ["apps/local-browser/chromium/lib/guards.js",1,"migrasi-otomatis"],
-    ["apps/local-browser/firefox/lib/guards.js",1,"migrasi-otomatis"],
-    ["apps/local-browser/shared/lib/guards.js",1,"migrasi-otomatis"],
-    ["apps/local-browser/shared/lib/guards.test.mjs",1,"migrasi-otomatis"],
     ["doc/CHANNELS.md",16,"repo-eksternal"],
     ["doc/CLI.md",4,"repo-eksternal"],
     ["doc/INSTALLING.md",4,"repo-eksternal"],
