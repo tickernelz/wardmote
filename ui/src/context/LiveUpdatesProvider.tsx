@@ -855,7 +855,7 @@ function shouldDeferVisibleIssueCommentActivity(
   const details = readRecord(payload.details);
 
   if (entityType !== "issue" || !entityId) return false;
-  if (action !== "issue.comment_added") return false;
+  if (action !== "issue.comment_added" || !readString(details?.commentId)) return false;
 
   const context = resolveVisibleIssueRouteContext(
     queryClient,

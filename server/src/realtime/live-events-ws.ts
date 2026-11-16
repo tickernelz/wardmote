@@ -36,6 +36,14 @@ interface WsServer {
   emit(event: "connection", ws: WsSocket, req: IncomingMessage): boolean;
 }
 
+function commentLiveDetails(details: unknown) {
+  const record = details && typeof details === "object" ? details as Record<string, unknown> : {};
+  return {
+    ...(typeof record.commentId === "string" ? { commentId: record.commentId } : {}),
+    ...(typeof record.source === "string" ? { source: record.source } : {}),
+  };
+}
+
 const require = createRequire(import.meta.url);
 const { WebSocket, WebSocketServer } = require("ws") as {
   WebSocket: { OPEN: number };
@@ -296,6 +304,7 @@ export function setupLiveEventsWebSocketServer(
         action: payload.action, entityType: payload.entityType, entityId: payload.entityId,
         // The task read check above authorizes attribution, but not arbitrary details.
         ...(issueId ? await activityToastIdentity(db, event.companyId, payload) : {}),
+        ...(issueId && payload.action === "issue.comment_added" ? { details: commentLiveDetails(payload.details) } : {}),
       } };
       if (event.type === "agent.status") return { ...event, payload: { agentId: payload.agentId, status: payload.status } };
       if (event.type === "external_object.updated") return { ...event, payload: { externalObjectId: payload.externalObjectId } };

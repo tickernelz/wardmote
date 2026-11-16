@@ -1089,6 +1089,39 @@ describe("LiveUpdatesProvider visible issue comment hydration", () => {
     expect(queryClient.getQueryData(queryKeys.issues.comments("issue-1"))).toMatchObject({ pages: [[{ id: "comment-9", body: "Pesan dari WhatsApp" }]] });
   });
 
+  it("hydrates and stays silent for the comment shape an authenticated socket delivers", async () => {
+    vi.stubGlobal("document", { visibilityState: "visible", hasFocus: () => true });
+    getCommentMock.mockResolvedValueOnce({ id: "comment-9", issueId: "issue-1", body: "Pesan dari WhatsApp", createdAt: "2026-11-16T01:00:00.000Z" });
+    const queryClient = cachedIssueClient();
+    const authenticatedPayload = {
+      action: "issue.comment_added",
+      entityType: "issue",
+      entityId: "issue-1",
+      actorType: "user",
+      actorId: "user-2",
+      details: { commentId: "comment-9", source: "chat:openwa" },
+    };
+
+    await expect(__liveUpdatesTestUtils.hydrateVisibleIssueComment(queryClient, "/PAP/issues/PAP-759", authenticatedPayload)).resolves.toBe(true);
+    expect(queryClient.getQueryData(queryKeys.issues.comments("issue-1"))).toMatchObject({ pages: [[{ id: "comment-9" }]] });
+    expect(__liveUpdatesTestUtils.buildActivityToast(queryClient, "company-1", authenticatedPayload, { userId: "user-1", agentId: null })).toBeNull();
+  });
+
+  it("refetches the open task's comments when an event cannot be hydrated", async () => {
+    const queryClient = cachedIssueClient();
+    const commentsQuery = vi.fn(async () => ({ pages: [[]], pageParams: [null] }));
+    const observer = new QueryObserver(queryClient, { queryKey: queryKeys.issues.comments("issue-1"), queryFn: commentsQuery });
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(observer.getCurrentResult().isSuccess).toBe(true));
+    const withoutCommentId = { action: "issue.comment_added", entityType: "issue", entityId: "issue-1", actorType: "agent", actorId: "agent-1" };
+
+    expect(__liveUpdatesTestUtils.shouldDeferVisibleIssueCommentActivity(queryClient, "/PAP/issues/PAP-759", withoutCommentId, { isForegrounded: true })).toBe(false);
+    __liveUpdatesTestUtils.invalidateActivityQueries(queryClient, "company-1", withoutCommentId, { userId: null, agentId: null }, { pathname: "/PAP/issues/PAP-759", isForegrounded: true });
+
+    await vi.waitFor(() => expect(commentsQuery).toHaveBeenCalledTimes(2));
+    unsubscribe();
+  });
+
   it("leaves a hidden task to the refresh it runs when it becomes visible", () => {
     vi.stubGlobal("document", { visibilityState: "hidden", hasFocus: () => false });
 

@@ -59,6 +59,22 @@ describe("authenticated activity notifications", () => {
       await second;
       expect(messages[1].payload).toMatchObject({ actorName: "Coder", actorType: "agent", actorId: "agent", actorAppearance: { paletteId: "bubblegum-sky" } });
       expect(messages[1].payload).not.toHaveProperty("details");
+      const comment = (entityId: string, source: string) => publishLiveEvent({ companyId: "company", type: "activity.logged", payload: {
+        action: "issue.comment_added", entityType: "issue", entityId, actorType: "user", actorId: "viewer",
+        details: { commentId: "comment-1", source, bodySnippet: "private comment", identifier: "ZHA-1", secret: "not for the socket" },
+      } });
+      comment("hidden", "chat:openwa");
+      const third = once(socket, "message");
+      comment("visible", "chat:openwa");
+      await third;
+      expect(messages).toHaveLength(3);
+      expect(messages[2].payload).toEqual({ action: "issue.comment_added", entityType: "issue", entityId: "visible", actorType: "user", actorId: "viewer",
+        details: { commentId: "comment-1", source: "chat:openwa" } });
+      const fourth = once(socket, "message");
+      comment("visible", "comment");
+      await fourth;
+      expect(messages[3].payload).toMatchObject({ actorName: "Alex Example", details: { commentId: "comment-1", source: "comment" } });
+      expect(Object.keys(messages[3].payload.details as object).sort()).toEqual(["commentId", "source"]);
     } finally {
       socket.terminate();
       await new Promise<void>((resolve) => server.close(() => resolve()));

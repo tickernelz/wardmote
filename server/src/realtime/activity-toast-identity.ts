@@ -3,6 +3,11 @@ import { agents, authUsers, companyMemberships, type Db } from "@tickernelz/ward
 
 const TOAST_ACTIONS = new Set(["issue.created", "issue.updated", "issue.comment_added"]);
 
+function isChatComment(payload: Record<string, unknown>) {
+  const details = payload.details as Record<string, unknown> | null | undefined;
+  return payload.action === "issue.comment_added" && typeof details?.source === "string" && details.source.startsWith("chat:");
+}
+
 /** Called only after the viewer can read the activity's task. Never copy details. */
 export async function activityToastIdentity(
   db: Db,
@@ -12,7 +17,7 @@ export async function activityToastIdentity(
   const actorType = typeof payload.actorType === "string" ? payload.actorType : null;
   const actorId = typeof payload.actorId === "string" ? payload.actorId : null;
   const identity = { actorType, actorId };
-  if (!actorId || !TOAST_ACTIONS.has(String(payload.action))) return identity;
+  if (!actorId || !TOAST_ACTIONS.has(String(payload.action)) || isChatComment(payload)) return identity;
 
   if (actorType === "agent") {
     const [agent] = await db
