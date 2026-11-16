@@ -1421,14 +1421,30 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     expect(audit.map((row) => (row.metadata as { interactionId?: string }).interactionId).sort()).toEqual([waiting.id, fresh.id].sort());
     expect(audit.find((row) => (row.metadata as { interactionId?: string }).interactionId === waiting.id)!.metadata).toMatchObject({ destructive: true, source: "card" });
   }, 120_000);
-  it("autonomous mode starts a new digest when an action lands after the open digest was claimed", async () => {
+  it("autonomous mode starts a new digest when the open digest is claimed while an action is being recorded", async () => {
     const t = await setup({ policy: { approvals: { autonomous: true } } });
     const run = await runStart(t, await admitted(t, { chatId: jid(MEMBER_A), body: "buat task" }));
     const digests = () => db.select().from(chatActions).where(and(eq(chatActions.endpointId, t.endpointId), eq(chatActions.kind, OPENWA_AUTONOMOUS_DIGEST_ACTION_KIND))).orderBy(asc(chatActions.createdAt));
     await requestApproval(run.binding, { message: "First" });
     const [first] = await digests();
-    await db.update(chatActions).set({ status: "processing" }).where(eq(chatActions.id, first!.id));
-    await requestApproval(run.binding, { message: "Second" });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let markClaimed!: () => void;
+    const claimedRow = new Promise<void>((resolve) => (markClaimed = resolve));
+    const claimer = db.transaction(async (tx) => {
+      await tx.update(chatActions).set({ status: "processing" }).where(eq(chatActions.id, first!.id));
+      markClaimed();
+      await gate;
+    });
+    await claimedRow;
+    const second = requestApproval(run.binding, { message: "Second" });
+    await until(async () => {
+      const waiting = (await db.execute(sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`)) as unknown as Array<{ n: number }>;
+      return Number(waiting[0]?.n ?? 0) > 0;
+    });
+    release();
+    await claimer;
+    await second;
     const [claimed, fresh] = await digests();
     expect((claimed!.payload as { events: unknown[] }).events).toHaveLength(1);
     expect(fresh).toMatchObject({ status: "received", payload: expect.objectContaining({ events: [expect.objectContaining({ summary: "Create a follow-up task for the invoice bug" })] }) });
