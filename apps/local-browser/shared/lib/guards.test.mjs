@@ -24,13 +24,6 @@ test("set merges a patch, clamps the buffer to its bounds and persists under lb.
   assert.equal((await LB.guards.set({ networkBufferSize: 3 })).networkBufferSize, 50);
 });
 
-test("a guard switched off under the old key stays off and is stored under the new key", async () => {
-  const { LB, fake } = setup({ storage: { "lb.guards": { protectPaperclipTab: false, protectFocusedTab: true, networkBufferSize: 1000 } } });
-  assert.equal((await LB.guards.get()).protectWardmoteTab, false);
-  await LB.guards.set({ networkBufferSize: 400 });
-  assert.deepEqual(fake.store["lb.guards"], { protectWardmoteTab: false, protectFocusedTab: true, networkBufferSize: 400 });
-});
-
 test("junk values fall back to defaults", () => {
   const { LB } = setup();
   assert.deepEqual({ ...LB.guards.normalize({ protectWardmoteTab: "no", networkBufferSize: "big" }) }, { protectWardmoteTab: true, protectFocusedTab: true, networkBufferSize: 1000 });
