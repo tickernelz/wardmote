@@ -46,6 +46,7 @@ import { applyOpenwaRunContext, resolveOpenwaRunContext, type OpenwaRunContext }
 import { accessService } from "../../services/access.js";
 import { buildOpenwaRunGuidance } from "../../services/openwa/guidance.js";
 import { executeOpenwaTool, type OpenwaToolBinding } from "../../services/openwa/tools.js";
+import { OPENWA_AUTONOMOUS_DIGEST_ACTION_KIND, processPendingOpenwaAutonomousDigests } from "../../services/openwa/autonomous.js";
 import { issueThreadInteractionService } from "../../services/issue-thread-interactions.js";
 import { chatChannelRoutes } from "../../routes/chat-channels.js";
 import { errorHandler } from "../../middleware/index.js";
@@ -1327,5 +1328,94 @@ describe("OpenWA owner approvals and grants (embedded Postgres + fake gateway)",
     );
     const [row] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, card.id));
     expect(row).toMatchObject({ issueId: issue!.id, kind: "request_confirmation", status: "pending" });
+  }, 120_000);
+
+  it("autonomous mode: off asks the owner; on approves at once, settles the backlog once and sends one digest per window", async () => {
+    const t = await setup();
+    const wakeA = await admitted(t, { chatId: jid(MEMBER_A), body: "tolong buatkan task untuk invoice 42" });
+    const runA = await runStart(t, wakeA);
+    const pending = await requestApproval(runA.binding);
+    expect(pending).toMatchObject({ status: "pending" });
+    const bubblesBefore = t.gateway.sends.length;
+    const autonomousRows = () => db.select().from(chatAuditEntries).where(and(eq(chatAuditEntries.endpointId, t.endpointId), eq(chatAuditEntries.kind, "autonomous_action")));
+    const digests = () => db.select().from(chatActions).where(and(eq(chatActions.endpointId, t.endpointId), eq(chatActions.kind, OPENWA_AUTONOMOUS_DIGEST_ACTION_KIND))).orderBy(asc(chatActions.createdAt));
+    expect(await autonomousRows()).toEqual([]);
+    expect(await digests()).toEqual([]);
+
+    await t.service.openwa.updatePolicy(t.endpointId, { approvals: { autonomous: true } }, t.userId);
+    expect(await requestRow(pending.requestId)).toMatchObject({ status: "approved", resolvedVia: "autonomous", resolvedByUserId: null });
+    expect(await grantsOf(pending.requestId)).toEqual([expect.objectContaining({ category: "create_task", approvedVia: "autonomous", approvedByUserId: null })]);
+
+    const wakeB = await admitted(t, { chatId: jid(MEMBER_B), body: "hapus branch lama" });
+    const runB = await runStart(t, wakeB);
+    const startedAt = Date.now();
+    const approved = (await executeOpenwaTool(db, runB.binding, "openwa_request_approval", {
+      categories: ["external_tools"],
+      scope: "one_action",
+      summary: "Delete the stale release branch",
+      proposedAction: "git push origin --delete release/old",
+      messageToOwners: "Member asks to delete a branch",
+      destructive: true,
+      idempotencyKey: key(),
+    })) as Record<string, unknown>;
+    expect(approved).toMatchObject({ status: "approved", autonomous: true, categories: ["external_tools"] });
+    expect(String(approved.note)).toContain("Autonomous mode is on");
+    expect(t.gateway.sends.length).toBe(bubblesBefore);
+    expect(await grantsOf(String(approved.requestId))).toEqual([expect.objectContaining({ approvedVia: "autonomous", status: "live" })]);
+    const auditForB = await db.select().from(chatAuditEntries).where(and(eq(chatAuditEntries.endpointId, t.endpointId), eq(chatAuditEntries.runId, runB.runId)));
+    expect(auditForB.filter((row) => row.kind.startsWith("approval_"))).toEqual([]);
+    expect(auditForB.filter((row) => row.kind === "autonomous_action")).toEqual([
+      expect.objectContaining({ metadata: expect.objectContaining({ requestId: approved.requestId, destructive: true, requesterRole: "non_owner" }) }),
+    ]);
+    expect(await autonomousRows()).toHaveLength(2);
+
+    const [open] = await digests();
+    expect(open).toMatchObject({ status: "received" });
+    expect((open!.payload as { events: unknown[] }).events).toHaveLength(2);
+    expect(Date.parse(String((open!.result as { retryAt: string }).retryAt))).toBeLessThanOrEqual(startedAt + 5 * 60_000 + 1_000);
+
+    await db.update(chatActions).set({ result: { retryAt: new Date(Date.now() - 1_000).toISOString() } }).where(eq(chatActions.id, open!.id));
+    expect(await processPendingOpenwaAutonomousDigests(db)).toBe(1);
+    expect(await processPendingOpenwaAutonomousDigests(db)).toBe(0);
+    const digestSends = t.gateway.sends.slice(bubblesBefore);
+    expect(digestSends).toHaveLength(1);
+    expect(digestSends[0]).toMatchObject({ chatId: jid(OWNER_PHONE) });
+    expect(digestSends[0]!.text).toContain("Autonomous mode digest");
+    expect(digestSends[0]!.text).toContain("DESTRUCTIVE");
+    expect(digestSends[0]!.text).toContain("Delete the stale release branch");
+    expect(await db.select().from(chatAuditEntries).where(and(eq(chatAuditEntries.endpointId, t.endpointId), eq(chatAuditEntries.kind, "autonomous_digest")))).toHaveLength(1);
+
+    const runC = await runStart(t, await admitted(t, { chatId: jid(MEMBER_A), body: "buat task lagi" }));
+    const before = Date.now();
+    await requestApproval(runC.binding, { message: "Third" });
+    const [, next] = await digests();
+    expect(next).toMatchObject({ status: "received" });
+    expect(Date.parse(String((next!.result as { retryAt: string }).retryAt))).toBeGreaterThanOrEqual(before + 30 * 60_000 - 1_000);
+  }, 120_000);
+
+  it("autonomous mode accepts confirmation cards in the conversation tree, destructive ones included, and leaves other trees alone", async () => {
+    const t = await setup();
+    const run = await runStart(t, await admitted(t, { chatId: jid(MEMBER_A), body: "rapikan repo" }));
+    const [child] = await db.insert(issues).values({ companyId: t.companyId, title: "Cleanup", status: "todo", assigneeAgentId: t.agentId, parentId: run.issueId }).returning();
+    const [outside] = await db.insert(issues).values({ companyId: t.companyId, title: "Unrelated", status: "todo", assigneeAgentId: t.agentId }).returning();
+    const cards = issueThreadInteractionService(db);
+    const card = (issueId: string, destructive: boolean) =>
+      cards.create({ id: issueId, companyId: t.companyId }, { kind: "request_confirmation", continuationPolicy: "wake_assignee", payload: { version: 1, prompt: "Delete old branches?", destructive } }, { agentId: t.agentId });
+    const waiting = await card(child!.id, true);
+    const elsewhere = await card(outside!.id, true);
+    expect(waiting.status).toBe("pending");
+
+    await t.service.openwa.updatePolicy(t.endpointId, { approvals: { autonomous: true } }, t.userId);
+    const status = async (id: string) => (await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, id)))[0]!;
+    expect(await status(waiting.id)).toMatchObject({
+      status: "accepted",
+      result: expect.objectContaining({ resolutionDetails: expect.objectContaining({ source: "openwa_autonomous_mode", label: "auto-accepted by autonomous mode", endpointId: t.endpointId }) }),
+    });
+    expect(await status(elsewhere.id)).toMatchObject({ status: "pending" });
+    const fresh = await card(child!.id, false);
+    expect(fresh.status).toBe("accepted");
+    const audit = await db.select().from(chatAuditEntries).where(and(eq(chatAuditEntries.endpointId, t.endpointId), eq(chatAuditEntries.kind, "autonomous_action")));
+    expect(audit.map((row) => (row.metadata as { interactionId?: string }).interactionId).sort()).toEqual([waiting.id, fresh.id].sort());
+    expect(audit.find((row) => (row.metadata as { interactionId?: string }).interactionId === waiting.id)!.metadata).toMatchObject({ destructive: true, source: "card" });
   }, 120_000);
 });

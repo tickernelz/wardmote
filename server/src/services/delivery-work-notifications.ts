@@ -11,6 +11,7 @@ export const DELIVERY_QUEUES = {
   chatSessionSyncs: "chat-session-syncs",
   chatVerification: "chat-verification",
   chatOpenwaPendingCards: "chat-openwa-pending-cards",
+  chatOpenwaAutonomousDigests: "chat-openwa-autonomous-digests",
   chatInbound: "chat-inbound",
   chatPublications: "chat-publications",
   chatReceipts: "chat-slack-receipts",

@@ -108,7 +108,7 @@ export const OPENWA_TOOLS = [
   tool(
     "request_approval",
     "write",
-    "Ask the owners to approve categories for this chat's requester. You write messageToOwners (markdown, one WhatsApp bubble per owner chat); owners approve by replying to it or in the OpenWA Approvals tab. Remind: remindRequestId + messageToOwners. Silence never approves.",
+    "Ask the owners to approve categories for this chat's requester. You write messageToOwners (markdown, one WhatsApp bubble per owner chat); owners approve by replying to it or in the OpenWA Approvals tab. Remind: remindRequestId + messageToOwners. Silence never approves. In autonomous mode it is approved at once without a bubble and goes into the owners' next digest; set destructive for a destructive or hard-to-undo action.",
     {
       categories: z.array(z.enum(GRANT_CATEGORIES)).min(1).max(GRANT_CATEGORIES.length).optional(),
       scope: z.enum(["one_action", "requester"]).optional(),
@@ -116,12 +116,13 @@ export const OPENWA_TOOLS = [
       proposedAction: z.string().trim().min(1).max(10_000).optional(),
       messageToOwners: z.string().trim().min(1).max(OPENWA_APPROVAL_MESSAGE_MAX_LENGTH),
       remindRequestId: uuid.optional(),
+      destructive: z.boolean().optional(),
       idempotencyKey: uuid,
     },
     (value, ctx) => {
       const issue = (message: string) => ctx.addIssue({ code: "custom", message });
       if (value.remindRequestId) {
-        if (value.categories || value.scope || value.summary || value.proposedAction) issue("A reminder takes only remindRequestId and messageToOwners");
+        if (value.categories || value.scope || value.summary || value.proposedAction || value.destructive !== undefined) issue("A reminder takes only remindRequestId and messageToOwners");
       } else if (!value.categories || !value.summary || !value.proposedAction) issue("categories, summary and proposedAction are required");
       if (value.categories && new Set(value.categories).size !== value.categories.length) issue("categories must be unique");
     },
@@ -172,7 +173,7 @@ export const OPENWA_TOOLS = [
   tool(
     "endpoint_config",
     "write",
-    "Owner-triggered runs only: sender lists, one chat's settings (default origin; null clears), approvals, reminders, pending TTL, burst window, custom instructions. No args reads them. Credentials, number mode, owners, gateway admin stay in Wardmote.",
+    "Owner-triggered runs only: sender lists, one chat's settings (default origin; null clears), approvals (autonomous: owners are no longer asked and get a digest afterwards), reminders, pending TTL, burst window, custom instructions. No args reads them. Credentials, number mode, owners, gateway admin stay in Wardmote.",
     {
       senders: z
         .object({
@@ -201,6 +202,7 @@ export const OPENWA_TOOLS = [
           crossChatSend: z.boolean().optional(),
           waAdmin: z.boolean().optional(),
           gatewayAdmin: z.boolean().optional(),
+          autonomous: z.boolean().optional(),
           reminderMinutes: z.number().int().min(1).max(1440).optional(),
           maxReminders: z.number().int().min(0).max(10).optional(),
           pendingTtlHours: z.number().int().min(1).max(168).optional(),

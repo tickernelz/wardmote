@@ -365,6 +365,7 @@ export const openwaEndpointPolicySchema = z
         crossChatSend: z.boolean().default(true),
         waAdmin: z.boolean().default(true),
         gatewayAdmin: z.boolean().default(true),
+        autonomous: z.boolean().default(false),
         reminderMinutes: z.number().int().min(1).max(1440).default(30),
         maxReminders: z.number().int().min(0).max(10).default(3),
         grantTtlHours: z.number().int().min(1).max(720).default(24),

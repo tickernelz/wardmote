@@ -3957,10 +3957,12 @@ export function IssueThreadInteractionCard({
   const ownerRelayAgentLabel = ownerRelay
     ? resolveActorLabel({ agentId: ownerRelay.relayedByAgentId, agentMap, currentUserId, userLabelMap })
     : null;
-  const autonomyWindowResolution =
+  const autoAcceptResolution =
     interaction.kind === "request_confirmation" && interaction.status === "accepted"
       ? interaction.result?.resolutionDetails ?? null
       : null;
+  const autonomyWindowResolution = autoAcceptResolution?.source === "autonomy_window" ? autoAcceptResolution : null;
+  const openwaAutonomousResolution = autoAcceptResolution?.source === "openwa_autonomous_mode" ? autoAcceptResolution : null;
   // PAP-17280: the effective audience, shown *before* anyone responds so a
   // reader never has to guess whether an open card is waiting on them. Derived
   // from the same server snapshot the resolver routes enforce, so the copy
@@ -4235,6 +4237,17 @@ export function IssueThreadInteractionCard({
             <span className="font-medium text-ink">
               autonomy window ({resolveActorLabel({ userId: autonomyWindowResolution.grantedByUserId, currentUserId, userLabelMap })}, until{" "}
               {formatClockTime(autonomyWindowResolution.expiresAt)})
+            </span>
+            {interaction.resolvedAt ? ` on ${formatShortDate(interaction.resolvedAt)}` : ""}
+          </div>
+        ) : openwaAutonomousResolution ? (
+          <div
+            className="mt-4 flex flex-wrap items-center gap-x-1 gap-y-0.5 border-t border-line/60 pt-3 text-xs text-ink-3"
+            data-testid="interaction-openwa-autonomous-footer"
+          >
+            <span className="font-medium text-ink">
+              {openwaAutonomousResolution.label}
+              {openwaAutonomousResolution.endpointName ? ` (${openwaAutonomousResolution.endpointName})` : ""}
             </span>
             {interaction.resolvedAt ? ` on ${formatShortDate(interaction.resolvedAt)}` : ""}
           </div>

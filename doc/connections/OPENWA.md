@@ -595,6 +595,36 @@ targets the conversation issue, not a run.
   revokes every live grant that owner approved (`openwa.grant_revoked`). Pending
   requests stay open for the other owners.
 
+### Autonomous mode
+
+**Autonomous mode** (`approvals.autonomous`, default off) is set by an owner in
+Settings → Approvals or through `openwa_endpoint_config` in an owner run. The
+change is audited (`config_changed` with before/after, and
+`openwa.config_changed` activity with `autonomous`). While it is on:
+
+- `openwa_request_approval` is approved at once: the request is stored as
+  `approved` with `resolvedVia: "autonomous"`, grants carry
+  `approvedVia: "autonomous"`, no bubble or reminder is sent, and one audit row
+  `autonomous_action` is written. The result carries `autonomous: true` and a
+  `note`; the agent marks a destructive action with `destructive: true`.
+- A `request_confirmation` card created by an agent on the endpoint's
+  conversation issue or any descendant is accepted at once, destructive ones
+  included, with `resolutionDetails.label` "auto-accepted by autonomous mode".
+  Cards with a tool action, secret proposal or connection authorization, cards
+  addressed to an agent, completion reviews, cards on `in_review` issues and
+  other card kinds still wait for a person. Company approvals (hire agent,
+  CEO strategy, budget override, board approval) are not affected.
+- Turning it on settles, once, every pending approval request of the endpoint
+  and every eligible pending card in its conversation trees.
+- Owners get one digest per endpoint in the origin chat's report group (or the
+  owner-only group, else each owner's direct chat): what was done, by which
+  agent, for which sender role, on which task (with link), with destructive
+  actions marked. A digest collects actions for 30 minutes; a destructive
+  action brings it forward to at most 5 minutes. Summaries pass through the
+  run-log secret redaction. Each digest is audited as `autonomous_digest`.
+- The guidance prefix is byte-identical with the mode on and off; the run
+  section adds the line `Autonomous mode: on`. Non-owner text stays data.
+
 ## Agent tools
 
 Exposure: native runner tools; the HTTP route
@@ -612,7 +642,7 @@ Every call is audited as `tool_called`.
 | `openwa_read_chat` | read | Page chat history, newest first, from the stored source (cursor) or live (`deep` reaches 2000 messages). |
 | `openwa_get_media` | read | Store one message's media as a task attachment; returns attachment id, mime, size, `localPath` (absolute file inside the storage root, local-disk storage only) or `contentPath` (attachment API path) and transcript when available (cut to fit 16 KB with `transcriptTruncated`). |
 | `openwa_find` | read | Find contacts and chats by name or number, check a number, or resolve a LID (exactly one of `query`, `phone`, `lid`); query results page with `cursor`. |
-| `openwa_request_approval` | write | Ask the owners for categories; remind with `remindRequestId`. |
+| `openwa_request_approval` | write | Ask the owners for categories; remind with `remindRequestId`. In autonomous mode it is approved at once and goes into the owners' digest (`destructive` marks a destructive action). |
 | `openwa_approval_resolve` | write | Record the owner's decision (`approve`, `reject`, `clarify`) in an owner run of that owner's discussion; approve/reject need the owner's explicit words, else 409 `owner_decision_unclear`. |
 | `openwa_approval_withdraw` | write | Withdraw your own pending request from this chat (origin or bubble chat) with a `reason` and optional `ownerMessageRef`, only from an owner run or a run of the agent that created it (else 403 `owner_only`); sends and executes nothing, stops its reminders. |
 | `openwa_stay_silent` | write | Mark the listed (default all visible pending) triggers silenced. |

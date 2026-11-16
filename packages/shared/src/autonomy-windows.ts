@@ -49,6 +49,23 @@ export const autonomyWindowResolutionDetailsSchema = z.object({
 
 export type AutonomyWindowResolutionDetails = z.infer<typeof autonomyWindowResolutionDetailsSchema>;
 
+export const OPENWA_AUTONOMOUS_SYSTEM_ACTOR_ID = "system:openwa-autonomous";
+export const OPENWA_AUTONOMOUS_RESOLUTION_SOURCE = "openwa_autonomous_mode";
+export const OPENWA_AUTONOMOUS_RESOLUTION_LABEL = "auto-accepted by autonomous mode";
+
+export const openwaAutonomousResolutionDetailsSchema = z.object({
+  source: z.literal(OPENWA_AUTONOMOUS_RESOLUTION_SOURCE),
+  label: z.literal(OPENWA_AUTONOMOUS_RESOLUTION_LABEL),
+  endpointId: z.string().uuid(),
+  endpointName: z.string().max(200).nullable(),
+});
+
+export type OpenwaAutonomousResolutionDetails = z.infer<typeof openwaAutonomousResolutionDetailsSchema>;
+
+export const autoAcceptResolutionDetailsSchema = z.union([autonomyWindowResolutionDetailsSchema, openwaAutonomousResolutionDetailsSchema]);
+
+export type AutoAcceptResolutionDetails = z.infer<typeof autoAcceptResolutionDetailsSchema>;
+
 export const openIssueAutonomyWindowSchema = z
   .object({
     issueIds: z.array(z.string().trim().min(1).max(200)).min(1).max(AUTONOMY_WINDOW_MAX_ROOTS),

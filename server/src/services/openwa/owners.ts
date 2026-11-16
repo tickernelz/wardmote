@@ -6,6 +6,7 @@ import {
   chatEndpoints,
   chatExternalPrincipals,
   chatIdentityLinks,
+  chatOwnerApprovalRequests,
   chatOwnerGrants,
   chatSenderRules,
   companyMemberships,
@@ -23,6 +24,7 @@ import {
   type OpenwaTriggerClass,
 } from "@tickernelz/wardmote-shared";
 import { badRequest, conflict, notFound, unprocessable } from "../../errors.js";
+import { logger } from "../../middleware/logger.js";
 import { logActivity, publishActivity, type ActivityPublication } from "../activity-log.js";
 import { openwaThreadId, parseOpenwaThreadId } from "./adapter.js";
 import type { OpenwaGatewayClient } from "./gateway.js";
@@ -911,6 +913,8 @@ export function openwaOwnerService(db: Db, deps: OpenwaOwnerServiceDeps) {
     const inflightMode = modeChanged ? requestedMode : endpoint.inflightMode;
     if (!policyChanged.length && !modeChanged) return { policy: before, policyRevision: endpoint.policyRevision, inflightMode };
     const changed = modeChanged ? [...policyChanged, "inflightMode"].sort() : policyChanged;
+    const autonomousChanged = before.approvals.autonomous !== parsed.data.approvals.autonomous;
+    const autonomous = { before: before.approvals.autonomous, after: parsed.data.approvals.autonomous };
     const revision = await mutate(endpoint, async (tx, publications) => {
       const [current] = await tx
         .select({ policy: chatEndpoints.policy, inflightMode: chatEndpoints.inflightMode })
@@ -936,10 +940,22 @@ export function openwaOwnerService(db: Db, deps: OpenwaOwnerServiceDeps) {
           scope: "endpoint",
           changed,
           ...(modeChanged ? { inflightMode: { before: endpoint.inflightMode, after: inflightMode } } : {}),
+          ...(autonomousChanged ? { autonomous } : {}),
         },
         publications,
         origin,
       );
+      if (autonomousChanged && !origin)
+        await recordOpenwaAudit(tx, {
+          companyId: endpoint.companyId,
+          endpointId: endpoint.id,
+          kind: "config_changed",
+          actorKind: actorUserId ? "user" : "system",
+          actorRef: actorUserId ?? "board",
+          metadata: { scope: "endpoint", changed: ["approvals.autonomous"], via: "wardmote" },
+          content: { before: { autonomous: autonomous.before }, after: { autonomous: autonomous.after } },
+          retentionDays: openwaAuditRetentionDays(endpoint.policy),
+        });
       if (origin) {
         const pick = (policy: Record<string, unknown>) => Object.fromEntries(changed.map((key) => [key, policy[key] ?? null]));
         await configAudit(
@@ -956,7 +972,39 @@ export function openwaOwnerService(db: Db, deps: OpenwaOwnerServiceDeps) {
       }
       return endpoint.policyRevision + 1;
     });
+    if (autonomousChanged && autonomous.after) await settleAutonomousBacklog(endpoint);
     return { policy: parsed.data, policyRevision: revision, inflightMode };
+  }
+
+  async function settleAutonomousBacklog(endpoint: EndpointRow) {
+    const [{ openwaWakeRuntime, resolveOpenwaApproval }, { issueThreadInteractionService }] = await Promise.all([
+      import("./approvals.js"),
+      import("../issue-thread-interactions.js"),
+    ]);
+    const pending = await db
+      .select({ id: chatOwnerApprovalRequests.id })
+      .from(chatOwnerApprovalRequests)
+      .where(
+        and(
+          eq(chatOwnerApprovalRequests.companyId, endpoint.companyId),
+          eq(chatOwnerApprovalRequests.endpointId, endpoint.id),
+          eq(chatOwnerApprovalRequests.status, "pending"),
+        ),
+      );
+    for (const request of pending)
+      await resolveOpenwaApproval(db, {
+        companyId: endpoint.companyId,
+        endpointId: endpoint.id,
+        requestId: request.id,
+        decision: "approve",
+        via: "autonomous",
+        owner: { autonomous: true },
+        ownerText: null,
+      }).catch((error) => logger.warn({ err: error, endpointId: endpoint.id, requestId: request.id }, "autonomous mode could not approve a pending OpenWA request"));
+    const wakeup = openwaWakeRuntime(db)?.wakeup;
+    await issueThreadInteractionService(db, wakeup ? { wakeup } : {})
+      .acceptPendingInOpenwaAutonomousMode(endpoint.companyId, endpoint.id)
+      .catch((error) => logger.warn({ err: error, endpointId: endpoint.id }, "autonomous mode could not accept pending cards"));
   }
 
   async function health(endpointId: string): Promise<OpenwaEndpointHealth> {

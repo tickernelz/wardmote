@@ -175,6 +175,11 @@ export function registerOpenwaToolRuntime(db: Db, runtime: OpenwaToolRuntime): (
   };
 }
 
+export async function openwaToolRuntimeFor(db: Db, endpoint: EndpointRow): Promise<OpenwaToolRuntimeHandle | null> {
+  const runtime = runtimes.get(db);
+  return runtime ? runtime.resolve(endpoint) : null;
+}
+
 export function openwaToolOwners(db: Db): OpenwaOwnerService {
   const runtime = runtimes.get(db);
   if (!runtime) throw new OpenwaToolError(503, "gateway_unavailable", "The OpenWA runtime is not available in this process");

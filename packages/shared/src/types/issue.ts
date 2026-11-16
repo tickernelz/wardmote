@@ -1,5 +1,5 @@
 import type { ExecutionProjection, ExecutionBlocker } from "./execution-projection.js";
-import type { AutonomyWindowResolutionDetails } from "../autonomy-windows.js";
+import type { AutoAcceptResolutionDetails } from "../autonomy-windows.js";
 import type {
   IssueCommentAuthorType,
   IssueCommentMetadataRowType,
@@ -1661,7 +1661,7 @@ export interface RequestConfirmationResult {
   commentId?: string | null;
   supersededByInteractionId?: string | null;
   staleTarget?: RequestConfirmationTarget | null;
-  resolutionDetails?: AutonomyWindowResolutionDetails;
+  resolutionDetails?: AutoAcceptResolutionDetails;
   resumeFailure?: {
     status: "retrying" | "needs_attention";
     errorCode: string | null;
