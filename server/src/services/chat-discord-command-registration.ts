@@ -394,7 +394,7 @@ async function request(
 export async function reconcileDiscordCommandRegistration(
   input: ReconcileDiscordCommandRegistrationOptions,
 ): Promise<DiscordCommandRegistrationResult> {
-  let state = parseDiscordCommandRegistration(input.state, input.scope, true);
+  let state = parseDiscordCommandRegistration(input.state, input.scope);
   const runtimeFence = fenceSchema.safeParse(input.runtimeFence);
   if (
     !state ||
@@ -536,9 +536,6 @@ export async function reconcileDiscordCommandRegistration(
       return { kind: "conflict", reason: "owned_command_changed" };
     }
     if (exactDefinition(existing, state.ownerId)) return settle(existing);
-    if (state.receipt.definitionDigest !== definitionDigest(state.ownerId)) {
-      return { kind: "conflict", reason: "owned_command_changed" };
-    }
   } else if (commands.filter((command) => command.type === 1).length >= 100) {
     return { kind: "conflict", reason: "command_limit" };
   }

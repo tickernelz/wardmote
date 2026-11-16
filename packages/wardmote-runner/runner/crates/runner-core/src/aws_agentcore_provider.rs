@@ -46,9 +46,7 @@ fn memory_actor_id(session_id: &str) -> String {
 
 fn asset_digest_metadata(metadata: Option<&HashMap<String, String>>) -> Option<&str> {
     metadata
-        .and_then(|metadata| {
-            metadata.get(AGENTCORE_DIGEST_METADATA)
-        })
+        .and_then(|metadata| metadata.get(AGENTCORE_DIGEST_METADATA))
         .map(String::as_str)
 }
 // Harness invocations can spend substantial time starting a new runtime before
@@ -270,9 +268,7 @@ impl NetworkWorker {
         let (ready_tx, ready_rx) = mpsc::channel();
         let join = thread::Builder::new()
             .name("wardmote-aws-agentcore-network".to_owned())
-            .spawn(move || {
-                network_loop(config, session_id, command_rx, event_tx, ready_tx)
-            })
+            .spawn(move || network_loop(config, session_id, command_rx, event_tx, ready_tx))
             .map_err(|error| {
                 LocalRunnerError::invalid(format!(
                     "failed to start AgentCore network worker: {error}"
@@ -816,7 +812,13 @@ fn network_loop(
             }
             NetworkCommand::DeleteMemory { reply } => {
                 let result = runtime.block_on(async {
-                    delete_all_memory_events(&client, &config, &session_id, &memory_actor_id(&session_id)).await
+                    delete_all_memory_events(
+                        &client,
+                        &config,
+                        &session_id,
+                        &memory_actor_id(&session_id),
+                    )
+                    .await
                 });
                 let _ = reply.send(result);
             }
@@ -1154,10 +1156,7 @@ impl AwsAgentCoreHarnessProvider {
         let session_id = resume_session_id
             .map(str::to_owned)
             .unwrap_or_else(new_runtime_session_id);
-        let (worker, actor_id) = NetworkWorker::start(
-            config.clone(),
-            session_id.clone(),
-        )?;
+        let (worker, actor_id) = NetworkWorker::start(config.clone(), session_id.clone())?;
         let (encoded, allowed, reverse, schemas) = encode_tools(&tools)?;
         Ok(Self {
             config: config.clone(),
