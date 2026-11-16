@@ -8,7 +8,6 @@ import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 import postgres from "postgres";
 import { randomUUID } from "node:crypto";
-import { RETIRED_BACKUP_FILENAME_PREFIX, RETIRED_STATEMENT_BREAKPOINT } from "./retired-backup-names.js";
 
 export type BackupRetentionPolicy = {
   dailyDays: number;
@@ -102,7 +101,7 @@ const BACKUP_BREAKPOINT_DETECT_BYTES = 64 * 1024;
 const STATEMENT_BREAKPOINT = "-- wardmote statement breakpoint 69f6f3f1-42fd-46a6-bf17-d1d85f8f3900";
 
 function isStatementBreakpoint(line: string): boolean {
-  return line === STATEMENT_BREAKPOINT || line === RETIRED_STATEMENT_BREAKPOINT;
+  return line === STATEMENT_BREAKPOINT;
 }
 
 function sanitizeRestoreErrorMessage(error: unknown): string {
@@ -362,20 +361,6 @@ export function removeAbandonedPartialBackups(backupDir: string, nowMs = Date.no
     removed += 1;
   }
   return removed;
-}
-
-/** Renames backups written under the retired filename prefix so retention keeps pruning them; idempotent. */
-export function adoptRetiredBackupFilenames(backupDir: string): number {
-  if (!existsSync(backupDir)) return 0;
-  let renamed = 0;
-  for (const name of readdirSync(backupDir)) {
-    if (!name.startsWith(`${RETIRED_BACKUP_FILENAME_PREFIX}-`) || !isBackupFilename(name)) continue;
-    const next = resolve(backupDir, `${DATABASE_BACKUP_FILENAME_PREFIX}${name.slice(RETIRED_BACKUP_FILENAME_PREFIX.length)}`);
-    if (existsSync(next)) continue;
-    renameSync(resolve(backupDir, name), next);
-    renamed += 1;
-  }
-  return renamed;
 }
 
 /**
@@ -658,10 +643,10 @@ async function hasStatementBreakpoints(backupFile: string): Promise<boolean> {
   try {
     for await (const chunk of stream) {
       text += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-      if (text.includes(STATEMENT_BREAKPOINT) || text.includes(RETIRED_STATEMENT_BREAKPOINT)) return true;
+      if (text.includes(STATEMENT_BREAKPOINT)) return true;
       if (Buffer.byteLength(text, "utf8") >= BACKUP_BREAKPOINT_DETECT_BYTES) return false;
     }
-    return text.includes(STATEMENT_BREAKPOINT) || text.includes(RETIRED_STATEMENT_BREAKPOINT);
+    return text.includes(STATEMENT_BREAKPOINT);
   } finally {
     stream.destroy();
     raw.destroy();
@@ -807,7 +792,6 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
   };
   const targetDir = opts.pinned ? pinnedBackupDir(opts.backupDir) : opts.backupDir;
   mkdirSync(targetDir, { recursive: true });
-  if (filenamePrefix === DATABASE_BACKUP_FILENAME_PREFIX) adoptRetiredBackupFilenames(opts.backupDir);
   // Initial and final sleep checks can run within the same second. A failed
   // second checkpoint must never overwrite the first verified recovery point.
   const checkpointSuffix = opts.verifyBeforePrune ? `-${randomUUID()}` : "";

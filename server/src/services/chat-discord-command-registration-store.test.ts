@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   afterAll,
   afterEach,
@@ -22,7 +22,6 @@ import {
   toolConnections,
 } from "@tickernelz/wardmote-db";
 import { discordWardmoteCommandDefinition } from "./chat-discord-command-registration.js";
-import { RETIRED_DISCORD_COMMAND_NAME } from "./retired-discord-command-name.js";
 import {
   readRegisteredDiscordCommandRegistration,
   reconcileStoredDiscordCommandRegistration,
@@ -237,60 +236,6 @@ suite("Discord command ownership store (real PostgreSQL, no network)", () => {
     f.options.force = true;
     expect(await f.reconcile()).toMatchObject({ kind: "registered" });
     expect(f.calls).toEqual(["GET", "POST", "GET"]);
-  });
-
-  it("keeps prior-copy authority unavailable until its exact owned remote definition is durably upgraded", async () => {
-    const f = await fixture();
-    expect(await f.reconcile()).toMatchObject({ kind: "registered" });
-    const original = await f.read();
-    const registration = original!.payload.registration as {
-      ownerId: string;
-      receipt: Record<string, unknown>;
-    };
-    const prior = discordWardmoteCommandDefinition(registration.ownerId);
-    prior.name = RETIRED_DISCORD_COMMAND_NAME;
-    prior.options[2]!.description = "Close the current Wardmote task";
-    const remote = f.remote[0]!;
-    f.remote[0] = {
-      ...prior,
-      id: remote.id,
-      application_id: remote.application_id,
-      version: remote.version,
-    };
-    await db
-      .update(chatActions)
-      .set({
-        payload: {
-          registration: {
-            ...registration,
-            receipt: {
-              ...registration.receipt,
-              definitionDigest: createHash("sha256")
-                .update(JSON.stringify(prior))
-                .digest("hex"),
-            },
-          },
-        },
-      })
-      .where(eq(chatActions.id, original!.id));
-    await f.due();
-    expect(
-      await readRegisteredDiscordCommandRegistration(db, f.scope),
-    ).toBeNull();
-    f.calls.length = 0;
-    expect(await f.reconcile()).toMatchObject({ kind: "registered" });
-    expect(f.calls).toEqual(["GET", "PATCH"]);
-    const current = await f.read();
-    expect(current!.id).toBe(original!.id);
-    expect(
-      await readRegisteredDiscordCommandRegistration(db, f.scope),
-    ).toMatchObject({
-      ownerId: registration.ownerId,
-      receipt: { commandId: remote.id },
-    });
-    expect(f.remote[0]).toMatchObject(
-      discordWardmoteCommandDefinition(registration.ownerId),
-    );
   });
 
   it("serializes concurrent initial claim and never duplicates the POST", async () => {

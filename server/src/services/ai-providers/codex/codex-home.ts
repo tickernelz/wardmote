@@ -4,7 +4,6 @@ import path from "node:path";
 import type { AdapterExecutionContext } from "@tickernelz/wardmote-adapter-utils";
 import { resolveWardmoteInstanceRootForAdapter } from "@tickernelz/wardmote-adapter-utils/server-utils";
 import { isCodexAuthCachePath, readSubscriptionAccountId } from "./codex-auth-cache.js";
-import { RETIRED_CODEX_MANAGED_MCP_BLOCK } from "../../retired-marker-names.js";
 
 const TRUTHY_ENV_RE = /^(1|true|yes|on)$/i;
 const COPIED_SHARED_FILES = ["config.json", "config.toml", "instructions.md"] as const;
@@ -262,7 +261,7 @@ function stripBlock(config: string, markers: { start: string; end: string }): st
 }
 
 function stripManagedMcpBlock(config: string): string {
-  return stripBlock(stripBlock(config, RETIRED_CODEX_MANAGED_MCP_BLOCK), MANAGED_MCP_BLOCK);
+  return stripBlock(config, MANAGED_MCP_BLOCK);
 }
 
 function readCodexMcpServerNames(config: string): Set<string> {

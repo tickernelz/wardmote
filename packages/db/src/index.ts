@@ -24,7 +24,6 @@ export {
 export {
   runDatabaseBackup,
   runDatabaseRestore,
-  adoptRetiredBackupFilenames,
   DATABASE_BACKUP_FILENAME_PREFIX,
   DATABASE_BACKUP_SKIPPED_MARKER,
   DatabaseBackupSkippedError,
@@ -46,8 +45,6 @@ export {
   EMBEDDED_POSTGRES_DATABASE,
   embeddedPostgresUrl,
   embeddedPostgresAdminUrl,
-  migrateEmbeddedPostgresIdentity,
-  type EmbeddedIdentityMigration,
 } from "./embedded-identity.js";
 export {
   createEmbeddedPostgresLogBuffer,

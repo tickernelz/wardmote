@@ -1,5 +1,4 @@
 import { githubRunReplyState } from "./chat-run-publications.js";
-import { withRetiredGitHubMarker } from "./retired-github-marker.js";
 import { stageReceiptReactionRemovals } from "./chat-receipt-reactions.js";
 import {
   GitHubPublicationLeaseLost,
@@ -1037,7 +1036,7 @@ export function githubChatReviewService(db: Db, fetchImpl = fetch) {
               >(`${route}?per_page=100&page=${page}`);
               const found = rows.find(
                 (row) =>
-                  withRetiredGitHubMarker(bodyMarker).some((variant) => row.body?.includes(variant)) &&
+                  row.body?.includes(bodyMarker) === true &&
                   row.user?.login === source.endpoint.botUsername,
               );
               if (found) return found;

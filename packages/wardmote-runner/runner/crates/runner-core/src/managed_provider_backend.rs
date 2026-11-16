@@ -35,7 +35,6 @@ use crate::provider_bridge::{
 use crate::provider_events::{
     normalize_codex_notification, with_terminal_outcome, NormalizedProviderEvent,
 };
-use crate::retired_agentcore_names::RETIRED_AGENTCORE_COST_SOURCE;
 
 pub const MANAGED_PROVIDER_STATE_FILE: &str = "managed-provider-state.json";
 const MANAGED_PROVIDER_STATE_SCHEMA: &str = "wardmote.runner.managed-provider-state.v1";
@@ -477,7 +476,7 @@ fn valid_agentcore_usage_snapshot(value: &Value) -> bool {
             .is_none_or(|(floor, estimated)| estimated >= floor)
         && matches!(
             object.get("costSource").and_then(Value::as_str),
-            Some(AGENTCORE_COST_SOURCE | RETIRED_AGENTCORE_COST_SOURCE)
+            Some(AGENTCORE_COST_SOURCE)
         )
 }
 
@@ -3225,9 +3224,6 @@ mod tests {
             "costSource": "wardmote_estimate"
         });
         assert!(valid_agentcore_usage_snapshot(&usage));
-        let mut retired = usage.clone();
-        retired["costSource"] = json!(RETIRED_AGENTCORE_COST_SOURCE);
-        assert!(valid_agentcore_usage_snapshot(&retired));
         let mut foreign = usage.clone();
         foreign["costSource"] = json!("provider_reported");
         assert!(!valid_agentcore_usage_snapshot(&foreign));

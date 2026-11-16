@@ -1,6 +1,6 @@
 import type { Sandbox as CloudflareSandbox } from "@cloudflare/sandbox";
 import { getSandbox } from "@cloudflare/sandbox";
-import { buildLeaseSandboxId, buildRetiredSentinelPath, buildSentinelPath, isTimeoutError } from "./helpers.js";
+import { buildLeaseSandboxId, buildSentinelPath, isTimeoutError } from "./helpers.js";
 
 export interface BridgeEnv {
   Sandbox: DurableObjectNamespace<CloudflareSandbox>;
@@ -54,4 +54,4 @@ export async function applySandboxKeepAlive(
   await sandbox.setKeepAlive(keepAlive);
 }
 
-export { buildLeaseSandboxId, buildRetiredSentinelPath, buildSentinelPath, isTimeoutError };
+export { buildLeaseSandboxId, buildSentinelPath, isTimeoutError };

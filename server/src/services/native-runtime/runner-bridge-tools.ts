@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { RETIRED_DOT_HOME } from "./retired-dot-home.js";
 import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -177,7 +176,6 @@ async function executeWorkspaceToolInLane(root: string, name: string, raw: unkno
   }
   if (name !== "workspace_run" || !workspaceCommandSandboxAvailable()) throw new Error("runner_workspace_command_sandbox_unavailable");
   const cwd = await fs.realpath(root), privateHome = path.join(cwd, DOT_HOME);
-  await fs.rm(await confined(cwd, RETIRED_DOT_HOME, true), { recursive: true, force: true });
   await fs.mkdir(privateHome, { recursive: true, mode: 0o700 });
   await confined(cwd, DOT_HOME);
   // Bubblewrap owns a private PID namespace and an init/reaper. Killing the

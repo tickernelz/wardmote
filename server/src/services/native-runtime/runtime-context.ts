@@ -23,7 +23,6 @@ import {
   type NativeRuntimeContextSnapshot,
 } from "../../vendor/wardmote-runner/index.js";
 import { resolveWardmoteInstanceRoot } from "../../home-paths.js";
-import { retiredSchemaId } from "@tickernelz/wardmote-shared/retired-names";
 import { agentInstructionsService, agentInstructionsBundleMode } from "../agent-instructions.js";
 import { agentInstructionRevisionService } from "../agent-instruction-revisions.js";
 import { toolAccessService } from "../tool-access.js";
@@ -108,17 +107,8 @@ export async function materializeAsset(files: AssetFile[]): Promise<NativeRuntim
   const manifestPath = path.join(assetsRoot, "manifests", `${assetDigest}.json`);
   const existing = await fs.readFile(manifestPath, "utf8").catch(() => null);
   if (existing !== null) {
-    const retired = existing === manifestFor(retiredSchemaId(RUNTIME_ASSET_MANIFEST_SCHEMA));
-    if ((!retired && sha256(existing) !== manifestDigest) || !(await fs.stat(rootPath).catch(() => null))?.isDirectory()) throw new Error(`runtime context asset verification failed: ${assetDigest}`);
+    if (sha256(existing) !== manifestDigest || !(await fs.stat(rootPath).catch(() => null))?.isDirectory()) throw new Error(`runtime context asset verification failed: ${assetDigest}`);
     await verifyMaterializedAsset(rootPath, manifestFiles);
-    if (retired) {
-      const replacement = path.join(path.dirname(manifestPath), `.${assetDigest}.${randomUUID()}.tmp`);
-      await fs.writeFile(replacement, manifestText, { flag: "wx", mode: 0o400 });
-      await fs.rename(replacement, manifestPath).catch(async (error: unknown) => {
-        await fs.rm(replacement, { force: true });
-        throw error;
-      });
-    }
     return { schema: NATIVE_RUNTIME_ASSET_SCHEMA, digest: assetDigest, manifestDigest, rootPath, fileCount: manifestFiles.length, totalBytes };
   }
   const stagingRoot = path.join(assetsRoot, ".staging", randomUUID());

@@ -55,7 +55,6 @@ import {
   EMBEDDED_POSTGRES_DATABASE,
   embeddedPostgresUrl,
   embeddedPostgresAdminUrl,
-  migrateEmbeddedPostgresIdentity,
 } from "@tickernelz/wardmote-db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
@@ -94,7 +93,7 @@ import { questionResponseDeliveryService } from "./services/question-response-de
 import { attachmentRetentionService, ATTACHMENT_RETENTION_TICK_MS } from "./services/attachment-retention.js";
 import { runLogRetentionService } from "./services/run-log-retention.js";
 import { diskGuardService } from "./services/disk-guard.js";
-import { defaultOmpSessionRoot, moveRetiredOmpSessionRoot } from "@tickernelz/wardmote-adapter-omp-local/server";
+import { defaultOmpSessionRoot } from "@tickernelz/wardmote-adapter-omp-local/server";
 import { defaultOmpAgentDir } from "./services/omp-session-retention.js";
 import { openwaAuditPurgeScheduler } from "./services/openwa/audit.js";
 import { deliverNativeQuestionResponse } from "./services/native-runtime/native-question-bridge.js";
@@ -134,10 +133,8 @@ import {
 } from "./shutdown.js";
 import { extendStartTimeoutUntilReady, systemdNotify } from "./services/systemd-notify.js";
 import { flushInFlightRunLogMirrors, resolveRunLogBasePath } from "./services/run-log-store.js";
-import { migrateRetiredNames } from "./services/retired-name-migration.js";
 import { createWardmoteUpdateService } from "./services/wardmote-updates.js";
 import { createInstanceUpdateInstaller, startInstanceAutoUpdater } from "./services/wardmote-update-runtime.js";
-export { migrateRetiredNames } from "./services/retired-name-migration.js";
 import { getMaxAttachmentBytes } from "./attachment-types.js";
 import { setWardmoteBridgeAttachmentMaxBytesSource } from "@tickernelz/wardmote-adapter-utils/execution-target";
 import {
@@ -514,7 +511,6 @@ async function startServerWithDatabaseTeardown(
     const runningPid = getRunningPid();
     if (runningPid) {
       port = embeddedPostgresOwnerPort(readFileSync(postmasterPidFile, "utf8"), dataDir, runningPid);
-      await migrateEmbeddedPostgresIdentity({ port, dataDir });
       const actualDataDir = await getPostgresDataDirectory(embeddedPostgresAdminUrl(port));
       if (typeof actualDataDir !== "string" || resolve(actualDataDir) !== resolve(dataDir)) {
         throw new Error("Refusing to reuse PostgreSQL: its data directory belongs to another instance.");
@@ -523,7 +519,6 @@ async function startServerWithDatabaseTeardown(
     } else {
       const configuredAdminConnectionString = embeddedPostgresAdminUrl(configuredPort);
       try {
-        await migrateEmbeddedPostgresIdentity({ port: configuredPort, dataDir });
         const actualDataDir = await getPostgresDataDirectory(configuredAdminConnectionString);
         if (
           typeof actualDataDir !== "string" ||
@@ -582,9 +577,6 @@ async function startServerWithDatabaseTeardown(
           });
         }
         embeddedPostgresStartedByThisProcess = true;
-        if (await migrateEmbeddedPostgresIdentity({ port, dataDir }) === "migrated") {
-          logger.info("Renamed the embedded PostgreSQL role and database to wardmote");
-        }
         embeddedPostgresSupervisor = createEmbeddedPostgresSupervisor({
           initialInstance: embeddedPostgres,
           createInstance: createEmbeddedPostgres,
@@ -650,42 +642,6 @@ async function startServerWithDatabaseTeardown(
   };
   startupDatabase.close = closeDatabaseClients;
 
-  const ownsOmpSessionRoot = !isTruthyRuntimeEnvValue(process.env.WARDMOTE_IN_WORKTREE) && resolveWardmoteInstanceId() === "default";
-  const ompSessionRootMove = !ownsOmpSessionRoot ? null : await moveRetiredOmpSessionRoot().catch((err: unknown) => {
-    logger.warn({ err }, "could not move the OMP session root written before the Wardmote rename; those agents start fresh OMP sessions");
-    return null;
-  });
-  if (ompSessionRootMove?.status === "moved") {
-    logger.info({ ompSessionRoot: defaultOmpSessionRoot() }, "Moved OMP sessions to the Wardmote session root");
-    if (ompSessionRootMove.conflicts.length > 0) {
-      logger.warn(
-        { ompSessionRoot: defaultOmpSessionRoot(), agentDirectories: ompSessionRootMove.conflicts },
-        "Left retired OMP session directories in place because the Wardmote session root already holds sessions for those agents",
-      );
-    }
-  }
-  const retiredNames = await migrateRetiredNames(db);
-  if (retiredNames.files.length > 0 || retiredNames.rows.length > 0) {
-    logger.info(
-      { files: retiredNames.files.length, rows: retiredNames.rows.length, backupDir: retiredNames.backupDir },
-      "Rewrote retired product names in agent instructions and stored agent text",
-    );
-  }
-  if (retiredNames.quarantinedRunnerStates.length > 0) {
-    logger.warn(
-      { stateKeys: retiredNames.quarantinedRunnerStates },
-      "Moved native runner state written under retired product names to quarantine; those sessions start fresh",
-    );
-  }
-  if (retiredNames.externalBundles.length > 0) {
-    logger.warn(
-      { agents: retiredNames.externalBundles },
-      "External instruction bundles were not checked for retired product names; run wardmote migrate-names after moving them to managed storage",
-    );
-  }
-  if (retiredNames.failedBundles.length > 0) {
-    logger.warn({ agents: retiredNames.failedBundles }, "Retired product names could not be rewritten in some agent instruction bundles");
-  }
   
 
   if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
