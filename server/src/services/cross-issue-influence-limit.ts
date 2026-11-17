@@ -17,7 +17,7 @@ const CROSS_ISSUE_INFLUENCE_REJECTED_ACTIVITY = "issue.cross_issue_influence_cap
  * audience is not a licence to resolve, wake, and spawn suggested tasks across
  * the whole company from one run.
  */
-export type CrossIssueInfluenceKind = "comment" | "update" | "interaction_resolution";
+export type CrossIssueInfluenceKind = "comment" | "update" | "interaction_resolution" | "artifact";
 
 export type CrossIssueInfluenceDecision = {
   allowed: boolean;
