@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { RefObject } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ChevronRight, Rows2, Rows3 } from "lucide-react";
 import type { Issue } from "@tickernelz/wardmote-shared";
 import type { LiveRunForIssue } from "../api/heartbeats";
@@ -10,7 +9,6 @@ import { Chip } from "./ui/chip";
 import { Segmented, SegmentedItem } from "./ui/segmented";
 import { AgentAvatar } from "./AgentAvatar";
 import { LiveRunDot } from "./IssueColumns";
-import { findIssuesScrollContainer } from "./IssuesList";
 import { LIVE_NOW_GROUP_LABEL, LiveNowBoardBand } from "./live-now/LiveNowBoardBand";
 import { LiveNowRow, type LiveNowDensity } from "./live-now/LiveNowRow";
 import { LiveNowPausedRow } from "./live-now/LiveNowPaused";
@@ -72,45 +70,6 @@ function readDensity(companyId: string): LiveNowDensity | null {
   return stored === "comfortable" || stored === "compact" ? stored : null;
 }
 
-/** Keeps rows below the element still when it resizes above the viewport; the returned callback exempts the next resize. */
-export function useAboveViewportResizeCompensation(ref: RefObject<HTMLElement | null>): () => void {
-  const skipNextResizeRef = useRef(false);
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const container = findIssuesScrollContainer(element);
-    const scrollTarget: HTMLElement | Window = container ?? window;
-    const bottomBelowViewportTop = () =>
-      element.getBoundingClientRect().bottom - (container ? container.getBoundingClientRect().top : 0);
-    let lastBottom = bottomBelowViewportTop();
-    const syncBottom = () => {
-      lastBottom = bottomBelowViewportTop();
-    };
-    const observer = new ResizeObserver(() => {
-      const bottom = bottomBelowViewportTop();
-      const shift = bottom - lastBottom;
-      const skip = skipNextResizeRef.current;
-      skipNextResizeRef.current = false;
-      if (!skip && shift !== 0 && lastBottom <= 0) {
-        if (container) container.scrollTop += shift;
-        else window.scrollBy(0, shift);
-        syncBottom();
-        return;
-      }
-      lastBottom = bottom;
-    });
-    scrollTarget.addEventListener("scroll", syncBottom, { passive: true });
-    observer.observe(element);
-    return () => {
-      observer.disconnect();
-      scrollTarget.removeEventListener("scroll", syncBottom);
-    };
-  }, [ref]);
-  return useCallback(() => {
-    skipNextResizeRef.current = true;
-  }, []);
-}
-
 interface TasksLiveNowSectionProps {
   companyId: string;
   liveRuns: readonly LiveRunForIssue[] | null | undefined;
@@ -129,8 +88,6 @@ export function TasksLiveNowSection({
   view = "list",
   issueFilter = null,
 }: TasksLiveNowSectionProps) {
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const skipNextResizeCompensation = useAboveViewportResizeCompensation(rootRef);
   const [collapsed, setCollapsed] = useState(() => readStorage(liveNowCollapsedStorageKey(companyId)) === "true");
   const [storedDensity, setStoredDensity] = useState(() => readDensity(companyId));
   const [groupFilter, setGroupFilter] = useState<GroupFilter>("all");
@@ -164,7 +121,6 @@ export function TasksLiveNowSection({
 
   const toggle = () => {
     const next = !collapsed;
-    skipNextResizeCompensation();
     setCollapsed(next);
     writeStorage(liveNowCollapsedStorageKey(companyId), next ? "true" : null);
   };
@@ -217,7 +173,7 @@ export function TasksLiveNowSection({
   };
 
   return (
-    <div ref={rootRef} data-slot="tasks-live-now" data-view={view}>
+    <div data-slot="tasks-live-now" data-view={view}>
       {items.length + heartbeats.length + pausedItems.length > 0 ? (
         <section aria-label="Live now" className="pb-4">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">

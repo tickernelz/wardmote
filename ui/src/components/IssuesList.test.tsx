@@ -2720,6 +2720,58 @@ describe("IssuesList", () => {
     });
   });
 
+  it("reinserts a row that moves to the top instead of moving the rows that stayed", async () => {
+    const base = Date.now();
+    const issues = Array.from({ length: 8 }, (_, index) => createIssue({
+      id: `issue-${index}`,
+      identifier: `PAP-${index}`,
+      title: `Task ${index}`,
+      updatedAt: new Date(base - index * 60_000),
+    }));
+    const list = (items: Issue[]) => (
+      <IssuesList
+        issues={items}
+        agents={[]}
+        projects={[]}
+        viewStateKey="wardmote:test-row-moves"
+        onUpdateIssue={() => undefined}
+      />
+    );
+    const { root, queryClient } = renderWithQueryClient(list(issues), container);
+    await waitForAssertion(() => {
+      expect(container.querySelectorAll("[data-issue-row-id]")).toHaveLength(8);
+    });
+    await flushAnimationFrame();
+
+    const removedRowIds: string[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.removedNodes) {
+          if (node instanceof HTMLElement && node.dataset.issueRowId) removedRowIds.push(node.dataset.issueRowId);
+        }
+      }
+    });
+    observer.observe(container, { childList: true, subtree: true });
+    const moved = createIssue({ ...issues[6]!, updatedAt: new Date(base + 60_000) });
+    await act(() => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>{list([moved, ...issues.filter((issue) => issue.id !== moved.id)])}</TooltipProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await flush();
+    observer.disconnect();
+
+    expect(Array.from(container.querySelectorAll<HTMLElement>("[data-issue-row-id]"), (row) => row.dataset.issueRowId))
+      .toEqual(["issue-6", "issue-0", "issue-1", "issue-2", "issue-3", "issue-4", "issue-5", "issue-7"]);
+    expect(removedRowIds).toEqual(["issue-6"]);
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
   it("draws local-calendar separators between date-sorted rows", async () => {
     const now = new Date();
     const hourAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);

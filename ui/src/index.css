@@ -847,13 +847,6 @@ select:where(:not([multiple]):not(.appearance-none)):where(:not([size]), [size="
 }
 }
 
-@layer layout {
-
-.wardmote-issue-list {
-  overflow-anchor: none;
-}
-}
-
 @layer components {
 
 .wardmote-issue-list-row-deferred {

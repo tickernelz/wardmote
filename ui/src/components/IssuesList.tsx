@@ -1,6 +1,6 @@
 import { AgentIdentity } from "@/components/AgentIdentity";
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from "react";
-import type { ReactNode } from "react";
+import { cloneElement, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVisibilityRefetchInterval } from "@/lib/polling";
 import { accessApi } from "../api/access";
@@ -146,6 +146,53 @@ function escapeAttrValue(value: string): string {
     : value.replace(/["\\]/g, "\\$&");
 }
 
+type RowKeyState = { keys: string[]; generations: Map<string, number>; renderKeys: string[] };
+
+function longestIncreasingSubsequence(values: number[]): number[] {
+  const tails: number[] = [];
+  const previous = new Array<number>(values.length);
+  for (let index = 0; index < values.length; index += 1) {
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (values[tails[middle]!]! < values[index]!) low = middle + 1;
+      else high = middle;
+    }
+    previous[index] = low > 0 ? tails[low - 1]! : -1;
+    tails[low] = index;
+  }
+  const result: number[] = [];
+  for (let index = tails.length > 0 ? tails[tails.length - 1]! : -1; index >= 0; index = previous[index]!) {
+    result.push(index);
+  }
+  return result.reverse();
+}
+
+/** Gives rows that changed relative order a fresh key, so React reinserts them instead of moving the rows that stayed. */
+function insertionStableRowKeys(previous: RowKeyState | undefined, keys: string[]): RowKeyState {
+  const previousIndex = new Map<string, number>();
+  previous?.keys.forEach((key, index) => previousIndex.set(key, index));
+  const carriedIndexes: number[] = [];
+  const carriedPositions: number[] = [];
+  keys.forEach((key, position) => {
+    const index = previousIndex.get(key);
+    if (index === undefined) return;
+    carriedIndexes.push(index);
+    carriedPositions.push(position);
+  });
+  const staying = new Set(longestIncreasingSubsequence(carriedIndexes).map((index) => carriedPositions[index]!));
+  const generations = new Map<string, number>();
+  const renderKeys = keys.map((key, position) => {
+    const carried = previous?.generations.get(key) ?? 0;
+    const generation = previousIndex.has(key) && !staying.has(position) ? carried + 1 : carried;
+    if (generation === 0) return key;
+    generations.set(key, generation);
+    return `${key}~${generation}`;
+  });
+  return { keys, generations, renderKeys };
+}
+
 const INITIAL_ISSUE_ROW_RENDER_LIMIT = 100;
 const ISSUE_ROW_RENDER_BATCH_SIZE = 150;
 const ISSUE_SCROLL_LOAD_THRESHOLD_PX = 320;
@@ -162,68 +209,6 @@ export function findIssuesScrollContainer(element: HTMLElement | null): HTMLElem
   }
   return null;
 }
-const ISSUE_SCROLL_ANCHOR_ROW_COUNT = 12;
-const ISSUE_SCROLL_ANCHOR_TOLERANCE_PX = 24;
-
-type IssueRowScrollAnchor = { identity: string; rows: Array<{ id: string; top: number }> };
-
-function issuesViewportBounds(scrollContainer: HTMLElement | null) {
-  if (!scrollContainer) return { top: 0, bottom: window.innerHeight };
-  const rect = scrollContainer.getBoundingClientRect();
-  return { top: rect.top, bottom: rect.top + scrollContainer.clientHeight };
-}
-
-function captureIssueRowScrollAnchor(
-  root: HTMLElement,
-  scrollContainer: HTMLElement | null,
-  identity: string,
-): IssueRowScrollAnchor {
-  const rows = root.querySelectorAll<HTMLElement>("[data-issue-row-id]");
-  const viewport = issuesViewportBounds(scrollContainer);
-  let low = 0;
-  let high = rows.length;
-  while (low < high) {
-    const middle = (low + high) >> 1;
-    if (rows[middle]!.getBoundingClientRect().bottom <= viewport.top) low = middle + 1;
-    else high = middle;
-  }
-  const anchors: IssueRowScrollAnchor["rows"] = [];
-  for (let index = low; index < rows.length && anchors.length < ISSUE_SCROLL_ANCHOR_ROW_COUNT; index += 1) {
-    const rect = rows[index]!.getBoundingClientRect();
-    if (rect.top >= viewport.bottom) break;
-    anchors.push({ id: rows[index]!.dataset.issueRowId!, top: rect.top - viewport.top });
-  }
-  return { identity, rows: anchors };
-}
-
-function issueRowAnchorShift(
-  root: HTMLElement,
-  scrollContainer: HTMLElement | null,
-  anchor: IssueRowScrollAnchor,
-): number | null {
-  const viewport = issuesViewportBounds(scrollContainer);
-  const shifts: Array<{ shift: number; index: number }> = [];
-  anchor.rows.forEach(({ id, top }, index) => {
-    const row = root.querySelector<HTMLElement>(`[data-issue-row-id="${escapeAttrValue(id)}"]`);
-    if (!row) return;
-    shifts.push({ shift: Math.round(row.getBoundingClientRect().top - viewport.top - top), index });
-  });
-  if (shifts.length === 0) return null;
-  shifts.sort((a, b) => a.shift - b.shift);
-  let best: { count: number; first: { shift: number; index: number } } | null = null;
-  let clusterStart = 0;
-  for (let end = 1; end <= shifts.length; end += 1) {
-    if (end < shifts.length && shifts[end]!.shift - shifts[end - 1]!.shift <= ISSUE_SCROLL_ANCHOR_TOLERANCE_PX) continue;
-    const cluster = shifts.slice(clusterStart, end);
-    const first = cluster.reduce((top, entry) => (entry.index < top.index ? entry : top));
-    if (!best || cluster.length > best.count || (cluster.length === best.count && first.index < best.first.index)) {
-      best = { count: cluster.length, first };
-    }
-    clusterStart = end;
-  }
-  return best!.first.shift;
-}
-
 const boardIssueStatuses = ISSUE_STATUSES;
 const issueStatusLabels: Record<IssueStatus, string> = {
   backlog: "Backlog",
@@ -1930,41 +1915,22 @@ function StreamlinedIssuesList({
     viewState.viewMode,
   ]);
 
-  const scrollAnchorRef = useRef<IssueRowScrollAnchor | null>(null);
-  const captureScrollAnchor = useCallback(() => {
-    const root = rootRef.current;
-    if (!root || viewState.viewMode !== "list") {
-      scrollAnchorRef.current = null;
-      return;
-    }
-    scrollAnchorRef.current = captureIssueRowScrollAnchor(
-      root,
-      findIssuesScrollContainer(root),
-      renderBudgetIdentity,
-    );
-  }, [renderBudgetIdentity, viewState.viewMode]);
-
-  useEffect(() => {
-    if (viewState.viewMode !== "list") return;
-    const scrollTarget: Window | HTMLElement = findIssuesScrollContainer(rootRef.current) ?? window;
-    scrollTarget.addEventListener("scroll", captureScrollAnchor, { passive: true });
-    return () => scrollTarget.removeEventListener("scroll", captureScrollAnchor);
-  }, [captureScrollAnchor, viewState.viewMode]);
-
+  const committedRowKeysRef = useRef<Map<string, RowKeyState>>(new Map());
+  const renderedRowKeys = new Map<string, RowKeyState>();
   useLayoutEffect(() => {
-    const root = rootRef.current;
-    const anchor = scrollAnchorRef.current;
-    if (root && anchor && anchor.identity === renderBudgetIdentity && viewState.viewMode === "list") {
-      const scrollContainer = findIssuesScrollContainer(root);
-      const shift = issueRowAnchorShift(root, scrollContainer, anchor);
-      if (shift === null) return;
-      if (shift !== 0) {
-        if (scrollContainer) scrollContainer.scrollTop += shift;
-        else window.scrollBy(0, shift);
-      }
-    }
-    captureScrollAnchor();
-  }, [budgetOrderedIssueIds, captureScrollAnchor, renderBudgetIdentity, renderedIssueRowLimit, viewState.viewMode]);
+    committedRowKeysRef.current = renderedRowKeys;
+  });
+  const withInsertionStableKeys = (groupKey: string, nodes: ReactNode[]) => {
+    const elements = nodes as ReactElement[];
+    const state = insertionStableRowKeys(
+      committedRowKeysRef.current.get(groupKey),
+      elements.map((element) => String(element.key)),
+    );
+    renderedRowKeys.set(groupKey, state);
+    return elements.map((element, index) => (
+      element.key === state.renderKeys[index] ? element : cloneElement(element, { key: state.renderKeys[index] })
+    ));
+  };
 
   const showsListRows = viewState.viewMode === "list" && renderedIssueRowLimit > 0;
   useLayoutEffect(() => {
@@ -1979,15 +1945,7 @@ function StreamlinedIssuesList({
     };
   }, [showsListRows]);
 
-  const listHeaderRef = useRef<HTMLDivElement | null>(null);
   const showListHeader = Boolean(listHeader) && !viewState.liveOnly;
-  useLayoutEffect(() => {
-    const header = listHeaderRef.current;
-    if (!showListHeader || !header || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => captureScrollAnchor());
-    observer.observe(header);
-    return () => observer.disconnect();
-  }, [captureScrollAnchor, showListHeader]);
 
   const hasMoreRenderedRows = viewState.viewMode === "list" && renderedIssueRowLimit < filtered.length;
   const remainingIssueRowCount = Math.max(filtered.length - renderedIssueRowLimit, 0);
@@ -2431,7 +2389,7 @@ function StreamlinedIssuesList({
       />
 
       {showListHeader && listHeader ? (
-        <div ref={listHeaderRef}>{listHeader({ viewMode: viewState.viewMode, issueFilter: headerIssueFilter })}</div>
+        listHeader({ viewMode: viewState.viewMode, issueFilter: headerIssueFilter })
       ) : null}
       {(isLoading || externalObjectFilterLoading) && <PageSkeleton variant="issues-list" />}
       {error && <p className="text-sm text-bad">{error.message}</p>}
@@ -2944,7 +2902,7 @@ function StreamlinedIssuesList({
                 for (const issue of roots) {
                   appendIssueRow(issue, 0);
                 }
-                return nodes;
+                return withInsertionStableKeys(group.key, nodes);
               })()}
             </CollapsibleContent>
           </Collapsible>
