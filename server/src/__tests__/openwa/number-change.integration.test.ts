@@ -363,8 +363,9 @@ describe("OpenWA session relinked to another number (embedded Postgres + fake ga
     relink(t);
     t.gateway.emit("session.status", { sessionId: SESSION_ID, status: "qr" });
     t.gateway.emit("session.status", { sessionId: SESSION_ID, status: "ready" });
-    await until(async () => (await endpointRow(t)).status === "attention");
+    await until(async () => (await endpointRow(t)).lastError?.startsWith("OpenWA number:") === true);
     const held = await endpointRow(t);
+    expect(held.status).toBe("attention");
     expect(held.botExternalId).toBe(OLD_PHONE);
     expect(held.lastError).toMatch(/^OpenWA number: this OpenWA session is now linked to \+62xxx\.\.\.0622, which another Wardmote channel already uses/);
     expect((await audits(t, "bot_number_changed"))[0]!.metadata).toMatchObject({ outcome: "conflict", conflictingEndpointId: otherId });

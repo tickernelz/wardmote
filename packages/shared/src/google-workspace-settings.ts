@@ -212,6 +212,15 @@ export interface GoogleClientSecretFile {
   problems: GoogleClientSecretProblem[];
 }
 
+function isLoopbackHttpRedirect(uri: string): boolean {
+  try {
+    const parsed = new URL(uri);
+    return parsed.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function parseGoogleClientSecretJson(text: string, expectedRedirectUri: string): GoogleClientSecretFile {
   let parsed: unknown;
   try {
@@ -227,7 +236,7 @@ export function parseGoogleClientSecretJson(text: string, expectedRedirectUri: s
   const trimmed = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
   const redirectUris = Array.isArray(client.redirect_uris) ? client.redirect_uris.filter((uri): uri is string => typeof uri === "string") : [];
   const problems: GoogleClientSecretProblem[] = [];
-  if (client === installed) problems.push("installed_client");
+  if (client === installed && !isLoopbackHttpRedirect(expectedRedirectUri)) problems.push("installed_client");
   if (!trimmed(client.client_secret)) problems.push("missing_secret");
   if (client === web && !redirectUris.includes(expectedRedirectUri)) problems.push("redirect_uri_missing");
   return {

@@ -16,7 +16,7 @@ import {
   toolProfileBindings,
   toolProfiles,
 } from "@tickernelz/wardmote-db";
-import { googleWorkspaceScopesFor } from "@tickernelz/wardmote-shared";
+import { googleWorkspaceScopesFor, type GoogleWorkspaceService, type GoogleWorkspaceTier } from "@tickernelz/wardmote-shared";
 import { toolAccessService } from "../services/tool-access.js";
 import { createToolGatewayService } from "../services/tool-gateway.js";
 import { registerAssignedMcpGateway } from "../services/native-runtime/assigned-mcp-tools.js";
@@ -43,11 +43,11 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     vi.restoreAllMocks();
   });
 
-  async function fixture() {
+  async function fixture(capabilities: Partial<Record<GoogleWorkspaceService, GoogleWorkspaceTier>> = { gmail: "delete_share" }) {
     const [company] = await db.insert(companies).values({ name: "Google fixture", issuePrefix: `GW${randomUUID().slice(0, 6)}` }).returning();
     await db.insert(companyMemberships).values({ companyId: company.id, principalType: "user", principalId: actor.actorId, membershipRole: "admin", status: "active" });
     const google = createFakeGoogle();
-    const scopes = googleWorkspaceScopesFor({ gmail: "delete_share" });
+    const scopes = googleWorkspaceScopesFor(capabilities);
     const revoked: string[] = [];
     let revokeStatus = 200;
     const handle = async (url: string, init: RequestInit = {}): Promise<Response> => {
@@ -79,7 +79,7 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
       connectionMethodKey: "customer-oauth",
       name: "Google Workspace",
       oauthClient: { clientId: "123456789012-fixture.apps.googleusercontent.com", clientSecret: "fixture-secret" },
-      googleWorkspace: { capabilities: { gmail: "delete_share" }, domain: "example.com" },
+      googleWorkspace: { capabilities, domain: "example.com" },
     }, actor);
     const started = await access.startOAuth(company.id, connected.connectionId, { redirectUri, actor });
     await access.completeOAuthCallback({ state: new URL(started.authorizationUrl).searchParams.get("state")!, code: "fixture-code", redirectUri, actor });
@@ -129,8 +129,37 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
       .rejects.toMatchObject({ reasonCode: "approval_required" });
     const [card] = await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, f.company.id));
     expect(card.policyExplanation).toMatchObject({ google: { externalRecipients: ["g@other.org"], recipientsUnknown: false } });
+    const [request] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
+    expect(request.previewMarkdown).toContain("**Method:** gmail.users.drafts.send");
+    expect(request.previewMarkdown).toContain("**User Id:** me");
+    expect(request.previewMarkdown).toContain("**Outside your domain:** g@other.org");
     await approvePending(f);
     expect(sent).toBe(1);
+  });
+
+  it("names the batchUpdate change and its target on a delete card", async () => {
+    const f = await fixture({ sheets: "delete_share" });
+    await expect(f.gateway.executeTool({
+      sessionToken: f.session.token,
+      tool: f.call!.name,
+      parameters: { method: "sheets.spreadsheets.batchUpdate", params: { spreadsheetId: "sheet-123" }, body: { requests: [{ deleteSheet: { sheetId: 0 } }, ...["addSheet", "repeatCell", "updateCells", "mergeCells", "sortRange", "addBanding"].map((kind) => ({ [kind]: {} }))] } },
+      idempotencyKey: randomUUID(),
+    })).rejects.toMatchObject({ reasonCode: "approval_required" });
+    const [request] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
+    expect(request.previewMarkdown).toContain("This can permanently change or remove data.");
+    expect(request.previewMarkdown).toContain("**Changes:** deleteSheet, addSheet, repeatCell, updateCells, mergeCells, … (7 kinds)");
+    expect(request.previewMarkdown).toContain("**Spreadsheet Id:** sheet-123");
+  });
+
+  it("tells the agent a missing Google scope by its typed code", async () => {
+    const f = await fixture();
+    await f.access.configureGoogleWorkspace(f.connectionId, f.company.id, { capabilities: { gmail: "delete_share", calendar: "read" }, domain: "example.com" }, actor);
+    await expect(f.gateway.executeTool({
+      sessionToken: f.session.token,
+      tool: f.call!.name,
+      parameters: { method: "calendar.colors.get" },
+      idempotencyKey: randomUUID(),
+    })).rejects.toMatchObject({ details: { code: "scope_missing" } });
   });
 
   it("revokes the Google token when the authorization is removed, even if Google refuses", async () => {

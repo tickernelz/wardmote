@@ -17,6 +17,7 @@ import { ToolGatewayHttpError, type ToolGatewayService } from "../services/tool-
 import { forbidden, HttpError } from "../errors.js";
 import { accessService } from "../services/index.js";
 import { listConnectionLifecycleEvents } from "../services/tool-connection-activity.js";
+import { logger } from "../middleware/logger.js";
 
 const TOOL_ACTIVITY_EVENT_TYPES = [
   "call_completed",
@@ -342,8 +343,14 @@ function sendGatewayError(res: import("express").Response, err: unknown) {
     res.status(err.status).json({ error: err.message, ...details });
     return;
   }
-  const message = err instanceof Error ? err.message : String(err);
-  res.status(500).json({ error: message });
+  logger.error({ err }, "Tool gateway request failed");
+  res.status(500).json({ error: "Tool gateway request failed" });
+}
+
+function optionalUuid(value: unknown, field: string): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "string" && uuidPattern.test(value)) return value;
+  throw new ToolGatewayHttpError(400, `${field} must be a UUID when provided`, "invalid_request");
 }
 
 export function toolGatewayRoutes(db: Db, toolGateway: ToolGatewayService) {
@@ -499,8 +506,8 @@ export function toolGatewayRoutes(db: Db, toolGateway: ToolGatewayService) {
         companyId,
         agentId,
         runId,
-        issueId: body.issueId ?? null,
-        projectId: body.projectId ?? null,
+        issueId: optionalUuid(body.issueId, "issueId"),
+        projectId: optionalUuid(body.projectId, "projectId"),
         ttlMs: body.ttlMs,
         actorType: actor.actorType,
         actorId: actor.actorId,

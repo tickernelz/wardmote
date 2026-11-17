@@ -199,7 +199,7 @@ function CredentialsStep({
           <ul className="space-y-1 text-sm">
             <li className={idValid ? "text-ink" : "text-ink-3"}>{idValid ? "✓" : "•"} Client ID looks like a Google OAuth client</li>
             <li className={clientSecret ? "text-ink" : "text-ink-3"}>{clientSecret ? "✓" : "•"} Client secret entered</li>
-            {fileProblems && fileProblems.length === 0 && <li>✓ Web application client with this instance's redirect URI</li>}
+            {fileProblems && fileProblems.length === 0 && <li>✓ Client accepts this instance's redirect URI</li>}
             {fileProblems?.map((problem) => <li key={problem} role="alert" className="text-bad">! {PROBLEM_TEXT[problem]}</li>)}
           </ul>
         </div>

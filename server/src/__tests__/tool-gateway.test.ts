@@ -4741,6 +4741,38 @@ rl.on("line", (line) => {
     expect(listWithHeaderToken.status).toBe(200);
   });
 
+  it("creates agent sessions with an empty issue id and rejects malformed ids without leaking database errors", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    const app = createGatewayRouteApp(db, createTestToolGatewayService(db), {
+      type: "agent",
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    } as Express.Request["actor"]);
+
+    const empty = await request(app).post("/api/tool-gateway/sessions").send({ issueId: "", projectId: "" });
+    expect(empty.status).toBe(201);
+    expect(empty.body.token).toEqual(expect.any(String));
+
+    const malformed = await request(app).post("/api/tool-gateway/sessions").send({ issueId: "not-a-uuid" });
+    expect(malformed.status).toBe(400);
+    expect(malformed.body).toMatchObject({ reasonCode: "invalid_request" });
+    expect(JSON.stringify(malformed.body)).not.toMatch(/insert into|tool_gateway_sessions/i);
+
+    const failing = createTestToolGatewayService(db);
+    failing.createSession = async () => { throw new Error('Failed query: insert into "tool_gateway_sessions" params: secret'); };
+    const failed = await request(createGatewayRouteApp(db, failing, {
+      type: "agent",
+      companyId: company.id,
+      agentId: agent.id,
+      runId: run.id,
+    } as Express.Request["actor"])).post("/api/tool-gateway/sessions").send({});
+    expect(failed.status).toBe(500);
+    expect(failed.body).toEqual({ error: "Tool gateway request failed" });
+  });
+
   it("revokes a gateway session through the authenticated route and audits without token values", async () => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
