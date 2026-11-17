@@ -37,7 +37,7 @@ function deps(
   };
 }
 
-async function decide(input: GoogleCallInput, config = settings(), dependencies = deps()) {
+async function decide(input: GoogleCallInput, config = settings(), dependencies: GooglePolicyDependencies = deps()) {
   const { plan } = await planGoogleCall(discovery, input);
   return decideGoogleCall(plan, config, dependencies);
 }
