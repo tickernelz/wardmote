@@ -78,6 +78,7 @@ export interface OpenwaChatView {
   settings: OpenwaChatSettings;
   ownerPresent: boolean | null;
   participantCount: number | null;
+  numberNotInvited: boolean;
 }
 
 function sessionOf(endpoint: Pick<EndpointRow, "providerAccountId">): string {

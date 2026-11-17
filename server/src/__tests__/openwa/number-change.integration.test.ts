@@ -296,7 +296,7 @@ describe("OpenWA session relinked to another number (embedded Postgres + fake ga
     expect((await audits(t, "bot_number_changed"))[0]!.metadata).toMatchObject({ outcome: "adopted" });
   });
 
-  it("counts a reply to a message the old number sent as reply_to_agent", async () => {
+  it("counts a reply to, or a mention of, the old number as addressing the agent", async () => {
     const t = await setup();
     await joinGroups(t);
     await db.insert(chatOutboundMessages).values({
@@ -312,7 +312,7 @@ describe("OpenWA session relinked to another number (embedded Postgres + fake ga
     });
     await db
       .update(chatEndpointResources)
-      .set({ settings: { triggers: { allMessages: false, replyToAgent: true } } })
+      .set({ settings: { triggers: { allMessages: false, replyToAgent: true, agentMentioned: true } } })
       .where(eq(chatEndpointResources.providerResourceId, "openwa:" + SESSION_ID + ":" + INVITED));
     relink(t);
     t.gateway.emit("session.status", { sessionId: SESSION_ID, status: "qr" });
@@ -337,6 +337,17 @@ describe("OpenWA session relinked to another number (embedded Postgres + fake ga
     }, 30_000);
     const admitted = (await audits(t, "trigger_admitted")).find((entry) => entry.chatKey === INVITED)!;
     expect((admitted.metadata as { rules?: string[] }).rules).toContain("reply_to_agent");
+
+    t.gateway.inbound({ chatId: INVITED, from: INVITED, author: jid(MEMBER_PHONE), body: "@" + OLD_PHONE + " cek ini", extra: { mentionedIds: [jid(OLD_PHONE)] } });
+    await until(async () => {
+      if (Date.now() - swept > 1_000) {
+        swept = Date.now();
+        await t.service.processPendingDeliveries();
+      }
+      return (await audits(t, "trigger_admitted")).filter((entry) => entry.chatKey === INVITED).length >= 2;
+    }, 30_000);
+    const mentioned = (await audits(t, "trigger_admitted")).filter((entry) => entry.chatKey === INVITED)[1]!;
+    expect((mentioned.metadata as { rules?: string[] }).rules).toContain("agent_mentioned");
   });
 
   it("holds the endpoint in attention when another active channel already uses the new number", async () => {

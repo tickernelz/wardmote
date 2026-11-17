@@ -373,7 +373,7 @@ function matchedRules(
     return rules;
   }
   if (!isGroup && triggers.directMessage) rules.push("direct_message");
-  if (!ownerNumber && triggers.agentMentioned && mentions(event, [snapshot.agentJid, ...snapshot.agentLids], snapshot.agentDigits)) rules.push("agent_mentioned");
+  if (!ownerNumber && triggers.agentMentioned && mentions(event, openwaAgentIdentities(snapshot), snapshot.agentDigits)) rules.push("agent_mentioned");
   if (triggers.replyToAgent && quotedFromAgent) rules.push("reply_to_agent");
   if (isGroup && facts.ownerCardAnswer === true) rules.push("owner_card_answer");
   if (!ownerNumber && triggers.commandPrefix.enabled && startsWithPrefix(event.body, triggers.commandPrefix.prefix)) rules.push("command_prefix");
@@ -385,6 +385,10 @@ function matchedRules(
 export function openwaTriggerCandidate(event: OpenwaInboundEvent, snapshot: OpenwaPolicySnapshot, facts: OpenwaClassifyFacts = {}): boolean {
   const triggers = openwaEffectiveTriggers(snapshot.policy.triggers, openwaChatSettings(snapshot, event.chatKey).triggers);
   return matchedRules(snapshot, event, triggers, facts).length > 0 || openwaControlCommand(event.body) !== null;
+}
+
+function openwaAgentIdentities(snapshot: OpenwaPolicySnapshot): string[] {
+  return [snapshot.agentJid, ...snapshot.agentLids, ...snapshot.formerAgentLids.keys(), ...[...snapshot.formerAgentDigits].map((digits) => digits + "@c.us")];
 }
 
 /** True when this id is a number (or its LID) the agent used before its current number. */

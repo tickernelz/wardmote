@@ -27,6 +27,7 @@ import {
   openwaApprovalReplyOwner,
   openwaChatSettings,
   openwaDigits,
+  openwaFormerAgentId,
   openwaGroupEnabled,
   openwaIsOwnerReportChat,
   openwaLearnOwnerLid,
@@ -913,7 +914,7 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
       addressed: classification.addressed,
       control: classification.control,
       quotedFromAgent: fromAgent,
-      agentMentionIds: event.mentionedIds.filter((id) => isAgentJid(snapshot, id)),
+      agentMentionIds: event.mentionedIds.filter((id) => isAgentJid(snapshot, id) || openwaFormerAgentId(snapshot, id)),
     });
     stats.admitted++;
     await runtime.admit(openwaAdmitInput(runtime, adapter, event, decoration));
