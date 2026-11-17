@@ -1082,6 +1082,20 @@ describeEmbeddedPostgres(
         expect(response.status, JSON.stringify(response.body)).toBe(201);
       }
 
+      const [ctoRun] = await db
+        .insert(heartbeatRuns)
+        .values({
+          companyId: fixture.company.id,
+          agentId: fixture.agents.cto.id,
+          status: "running",
+          contextSnapshot: { issueId: fixture.issues.reviewRoot.id },
+        })
+        .returning();
+      await db
+        .update(issues)
+        .set({ checkoutRunId: ctoRun!.id })
+        .where(eq(issues.id, fixture.issues.reviewRoot.id));
+
       const checkedOutPeerUpdate = await request(standardApp)
         .patch(`/api/issues/${fixture.issues.reviewRoot.id}`)
         .send({ status: "blocked" });
@@ -1089,21 +1103,29 @@ describeEmbeddedPostgres(
         checkedOutPeerUpdate.status,
         JSON.stringify(checkedOutPeerUpdate.body),
       ).toBe(409);
-      expect(checkedOutPeerUpdate.body.details.code).toBe(
-        "issue_write_assignee_run_lock",
-      );
+      expect(checkedOutPeerUpdate.body.details).toMatchObject({
+        code: "issue_write_assignee_run_lock",
+        checkoutRunId: ctoRun!.id,
+      });
 
       const documentWrite = await request(standardApp)
         .put(
           `/api/issues/${fixture.issues.reviewRoot.id}/documents/upward-write`,
         )
-        .send({ format: "markdown", body: "No upward document write" });
+        .send({ format: "markdown", body: "Upward report document" });
       expect(documentWrite.status, JSON.stringify(documentWrite.body)).toBe(
-        409,
+        201,
       );
-      expect(documentWrite.body.details.code).toBe(
-        "issue_write_assignee_run_lock",
-      );
+
+      const lowTrustDocumentWrite = await request(lowTrustApp)
+        .put(
+          `/api/issues/${fixture.issues.reviewRoot.id}/documents/contained-write`,
+        )
+        .send({ format: "markdown", body: "Contained document must not cross" });
+      expect(
+        lowTrustDocumentWrite.status,
+        JSON.stringify(lowTrustDocumentWrite.body),
+      ).toBe(403);
 
       for (const closedParent of [
         { assigneeAgentId: null, intent: { reopen: true } },
