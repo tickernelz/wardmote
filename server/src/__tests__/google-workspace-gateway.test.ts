@@ -45,6 +45,7 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   async function fixture(capabilities: Partial<Record<GoogleWorkspaceService, GoogleWorkspaceTier>> = { gmail: "delete_share" }) {
@@ -169,6 +170,7 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
   it("answers a Google failure on the run's MCP gateway as a tool error, also when the same call repeats", async () => {
     const f = await fixture();
     f.google.override(/\/gmail\/v1\/users\/me\/messages\/bad-id/, () => googleError(400, "badRequest", "Request contains an invalid argument."));
+    vi.stubEnv("WARDMOTE_API_URL", "https://wardmote.example.test");
     const [server] = await buildWardmoteRuntimeMcpServers({ db, agent: f.agent, runId: f.binding.runId });
     const app = express().use(express.json()).use(mcpGatewayProtocolRoutes(f.gateway));
     const call = () => supertest(app)
