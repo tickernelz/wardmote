@@ -6036,6 +6036,13 @@ export function issueRoutes(
     }
     const runId = requireAgentRunId(req, res);
     if (!runId) return false;
+    if (
+      options.additive &&
+      issue.checkoutRunId !== runId &&
+      (await liveAssigneeCheckoutRun(issue))
+    ) {
+      return assertCrossIssueInfluenceWithinRunCap(req, res, issue, "artifact");
+    }
     const ownership = await svc.assertCheckoutOwner(
       issue.id,
       actorAgentId,

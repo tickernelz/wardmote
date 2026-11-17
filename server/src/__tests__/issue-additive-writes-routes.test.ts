@@ -261,3 +261,97 @@ describeEmbeddedPostgres("additive writes on another agent's in_progress issue",
     expect(rows).toEqual([]);
   });
 });
+
+describeEmbeddedPostgres("additive writes from a second run of the issue's own assignee", () => {
+  let db!: Db;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("wardmote-assignee-additive-");
+    db = createDb(tempDb.connectionString);
+  }, 60_000);
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  async function secondRun(fixture: Awaited<ReturnType<typeof seedFixture>>) {
+    const [otherIssue] = await db
+      .insert(issues)
+      .values({
+        companyId: fixture.companyId,
+        title: "Assignee's other task",
+        status: "in_progress",
+        priority: "medium",
+        assigneeAgentId: fixture.conversationAgent.id,
+      })
+      .returning();
+    const run = await seedRun(db, fixture.companyId, fixture.conversationAgent.id, otherIssue!.id);
+    const actor: Express.Request["actor"] = {
+      type: "agent",
+      agentId: fixture.conversationAgent.id,
+      companyId: fixture.companyId,
+      runId: run.id,
+      source: "agent_jwt",
+    };
+    return { run, app: createApp(db, actor) };
+  }
+
+  it("accepts the attachment while the assignee's other run holds the checkout, and leaves that checkout alone", async () => {
+    const fixture = await seedFixture(db);
+    const holder = await holdCheckout(db, fixture, "running");
+    const second = await secondRun(fixture);
+
+    const res = await uploadReport(second.app, fixture.companyId, fixture.conversationIssue.id);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.createdByAgentId).toBe(fixture.conversationAgent.id);
+    const [persisted] = await db
+      .select({ checkoutRunId: issues.checkoutRunId, executionRunId: issues.executionRunId })
+      .from(issues)
+      .where(eq(issues.id, fixture.conversationIssue.id));
+    expect(persisted).toEqual({ checkoutRunId: holder.id, executionRunId: holder.id });
+    const observed = await db
+      .select({ details: activityLog.details })
+      .from(activityLog)
+      .where(and(eq(activityLog.runId, second.run.id), eq(activityLog.action, "issue.cross_issue_influence_observed")));
+    expect(observed).toEqual([{ details: expect.objectContaining({ kind: "artifact", targetIssueId: fixture.conversationIssue.id }) }]);
+  });
+
+  it("still refuses the second run a field change while the other run holds the checkout", async () => {
+    const fixture = await seedFixture(db);
+    const holder = await holdCheckout(db, fixture, "running");
+    const second = await secondRun(fixture);
+
+    const res = await request(second.app).patch(`/api/issues/${fixture.conversationIssue.id}`).send({ title: "Renamed" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.error).toBe("Issue run ownership conflict");
+    expect(res.body.details).toMatchObject({ checkoutRunId: holder.id, actorRunId: second.run.id });
+  });
+
+  it("still refuses the second run's attachment once its cross-issue write cap is spent", async () => {
+    const fixture = await seedFixture(db);
+    await holdCheckout(db, fixture, "running");
+    const second = await secondRun(fixture);
+    await db.insert(activityLog).values(
+      Array.from({ length: CROSS_ISSUE_INFLUENCE_LIMIT }, () => ({
+        companyId: fixture.companyId,
+        actorType: "agent",
+        actorId: fixture.conversationAgent.id,
+        agentId: fixture.conversationAgent.id,
+        runId: second.run.id,
+        action: "issue.cross_issue_influence_observed",
+        entityType: "issue",
+        entityId: fixture.peerIssue.id,
+      })),
+    );
+
+    const res = await uploadReport(second.app, fixture.companyId, fixture.conversationIssue.id);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(429);
+    expect(res.body.details.code).toBe("cross_issue_influence_cap_exceeded");
+    const rows = await db.select().from(issueAttachments).where(eq(issueAttachments.issueId, fixture.conversationIssue.id));
+    expect(rows).toEqual([]);
+  });
+});
