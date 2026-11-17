@@ -31,6 +31,7 @@ const mockExternalObjectsService = vi.hoisted(() => ({
 const mockInstanceSettingsService = vi.hoisted(() => ({
   getExperimental: vi.fn(),
 }));
+const mockObserveCrossIssueInfluence = vi.hoisted(() => vi.fn());
 
 function registerRouteMocks() {
   vi.doMock("../services/external-objects.js", () => ({
@@ -39,6 +40,11 @@ function registerRouteMocks() {
 
   vi.doMock("../services/instance-settings.js", () => ({
     instanceSettingsService: () => mockInstanceSettingsService,
+  }));
+
+  vi.doMock("../services/cross-issue-influence-limit.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../services/cross-issue-influence-limit.js")>()),
+    observeCrossIssueInfluence: mockObserveCrossIssueInfluence,
   }));
 
   vi.doMock("../services/task-watchdog-scope.js", () => ({
@@ -311,15 +317,38 @@ describe("external object routes", () => {
     expect(logActivity).not.toHaveBeenCalled();
   });
 
-  it("requires active checkout ownership for agent manual refresh", async () => {
+  it("lets a peer agent refresh external objects on another agent's checkout within the cross-issue cap", async () => {
+    mockObserveCrossIssueInfluence.mockResolvedValue(null);
     const app = await createApp(peerActor());
 
     const res = await request(app)
       .post(`/api/issues/${issueId}/external-objects/refresh`)
       .send({});
 
-    expect(res.status).toBe(409);
-    expect(res.body.details.code).toBe("issue_write_assignee_run_lock");
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
+    expect(mockObserveCrossIssueInfluence).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ agentId: peerAgentId, targetIssueId: issueId, kind: "artifact" }),
+    );
+  });
+
+  it("refuses a peer agent refresh once the run's cross-issue cap is spent", async () => {
+    mockObserveCrossIssueInfluence.mockResolvedValue({
+      allowed: false,
+      mode: "enforce",
+      count: 21,
+      cap: 20,
+      enforceAt: "2026-08-11T00:00:00.000Z",
+    });
+    const app = await createApp(peerActor());
+
+    const res = await request(app)
+      .post(`/api/issues/${issueId}/external-objects/refresh`)
+      .send({});
+
+    expect(res.status, JSON.stringify(res.body)).toBe(429);
+    expect(res.body.details.code).toBe("cross_issue_influence_cap_exceeded");
     expect(mockExternalObjectsService.refreshIssueObjects).not.toHaveBeenCalled();
   });
 

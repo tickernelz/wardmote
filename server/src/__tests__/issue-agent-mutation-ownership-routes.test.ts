@@ -18,6 +18,7 @@ const mockIssueService = vi.hoisted(() => ({
   addComment: vi.fn(),
   assertCheckoutOwner: vi.fn(),
   create: vi.fn(),
+  createAttachment: vi.fn(),
   createChild: vi.fn(),
   decomposeAcceptedPlan: vi.fn(),
   getAttachmentById: vi.fn(),
@@ -844,15 +845,89 @@ describe("agent issue mutation checkout ownership", () => {
     }));
   });
 
+  const liveCheckoutRunId = "99999999-9999-4999-8999-aaaaaaaaaaaa";
+  const liveCheckoutRunStartedAt = new Date("2026-11-17T03:57:09.000Z");
+
+  function holdCheckoutWithRun(status: string) {
+    mockIssueService.getById.mockResolvedValue(makeIssue({ checkoutRunId: liveCheckoutRunId }));
+    mockHeartbeatService.getRun.mockImplementation(async (runId: string) =>
+      runId === liveCheckoutRunId
+        ? { id: liveCheckoutRunId, companyId, agentId: ownerAgentId, status, startedAt: liveCheckoutRunStartedAt }
+        : null,
+    );
+  }
+
+  describe.each([
+    ["with the assignee's run live", "running"],
+    ["after the assignee's run ended", "succeeded"],
+  ])("additive writes %s", (_label, runStatus) => {
+    it.each([
+      [
+        "document upsert",
+        (app: express.Express) =>
+          request(app).put(`/api/issues/${issueId}/documents/plan`).send({ format: "markdown", body: "# peer" }),
+        200,
+      ],
+      ["work product update", (app: express.Express) => request(app).patch("/api/work-products/product-1").send({ title: "Peer" }), 200],
+      [
+        "attachment upload",
+        (app: express.Express) =>
+          request(app)
+            .post(`/api/companies/${companyId}/issues/${issueId}/attachments`)
+            .attach("file", Buffer.from("report"), { filename: "report.txt", contentType: "text/plain" }),
+        201,
+      ],
+    ])("lets a peer agent without manage-active-checkouts make a %s on another agent's in_progress issue", async (_name, sendRequest, expectedStatus) => {
+      holdCheckoutWithRun(runStatus);
+      mockIssueService.createAttachment.mockResolvedValue({
+        id: "attachment-peer",
+        companyId,
+        issueId,
+        issueCommentId: null,
+        assetId: "asset-peer",
+        provider: "local_disk",
+        objectKey: "issues/peer/report.txt",
+        contentType: "text/plain",
+        byteSize: 6,
+        sha256: "sha",
+        originalFilename: "report.txt",
+        createdByAgentId: peerAgentId,
+        createdByUserId: null,
+        createdAt: new Date("2026-11-17T04:16:00.000Z"),
+        updatedAt: new Date("2026-11-17T04:16:00.000Z"),
+      });
+
+      const res = await sendRequest(await createApp(peerActor()));
+
+      expect(res.status, JSON.stringify(res.body)).toBe(expectedStatus);
+      expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
+      expect(mockObserveCrossIssueInfluence).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ agentId: peerAgentId, targetIssueId: issueId, kind: "artifact" }),
+      );
+    });
+  });
+
+  it("does not charge a manage-active-checkouts holder's additive write to the cross-issue cap", async () => {
+    holdCheckoutWithRun("running");
+    const defaultDecide = mockAccessService.decide.getMockImplementation()!;
+    mockAccessService.decide.mockImplementation(async (input: { action: string }) =>
+      input.action === "tasks:manage_active_checkouts"
+        ? { allowed: true, action: input.action, reason: "allow_explicit_grant", explanation: "Allowed by test grant." }
+        : defaultDecide(input),
+    );
+
+    const res = await request(await createApp(peerActor()))
+      .put(`/api/issues/${issueId}/documents/plan`)
+      .send({ format: "markdown", body: "# override" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockObserveCrossIssueInfluence).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["patch", (app: express.Express) => request(app).patch(`/api/issues/${issueId}`).send({ title: "Blocked" })],
     ["delete", (app: express.Express) => request(app).delete(`/api/issues/${issueId}`)],
-    [
-      "document upsert",
-      (app: express.Express) =>
-        request(app).put(`/api/issues/${issueId}/documents/plan`).send({ format: "markdown", body: "# blocked" }),
-    ],
-    ["work product update", (app: express.Express) => request(app).patch("/api/work-products/product-1").send({ title: "Blocked" })],
     [
       "low-trust promotion",
       (app: express.Express) =>
@@ -863,33 +938,40 @@ describe("agent issue mutation checkout ownership", () => {
           summary: "Sanitized output",
         }),
     ],
-    [
-      "attachment upload",
-      (app: express.Express) =>
-        request(app)
-          .post(`/api/companies/${companyId}/issues/${issueId}/attachments`)
-          .attach("file", Buffer.from("report"), { filename: "report.txt", contentType: "text/plain" }),
-    ],
     ["attachment delete", (app: express.Express) => request(app).delete("/api/attachments/attachment-1")],
-  ])("rejects peer agent %s on another agent's active checkout", async (_name, sendRequest) => {
+  ])("rejects a peer agent %s while the assignee's checkout run is live, naming that run", async (_name, sendRequest) => {
+    holdCheckoutWithRun("running");
+
     const res = await sendRequest(await createApp(peerActor()));
 
     expect(res.status, JSON.stringify(res.body)).toBe(409);
-    // Plan §6: the run lock names the boundary and routes to the open channel.
     expect(res.body.details.code).toBe("issue_write_assignee_run_lock");
     expect(res.body.details.boundary).toBe("Run checkout lock");
-    expect(res.body.error).toContain("Who can act:");
+    expect(res.body.details.checkoutRunId).toBe(liveCheckoutRunId);
+    expect(res.body.details.checkoutRunStartedAt).toBe(liveCheckoutRunStartedAt.toISOString());
+    expect(res.body.error).toContain(liveCheckoutRunId);
+    expect(res.body.error).toContain(liveCheckoutRunStartedAt.toISOString());
     expect(res.body.error).toContain("Comment instead");
+    expect(res.body.error).not.toContain("on its own");
     expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
     expect(mockIssueService.update).not.toHaveBeenCalled();
-    expect(mockIssueService.addComment).not.toHaveBeenCalled();
-    expect(mockDocumentService.upsertIssueDocument).not.toHaveBeenCalled();
-    expect(mockWorkProductService.createForIssue).not.toHaveBeenCalled();
-    expect(mockWorkProductService.update).not.toHaveBeenCalled();
-    expect(mockStorageService.putFile).not.toHaveBeenCalled();
+    expect(mockIssueService.remove).not.toHaveBeenCalled();
     expect(mockStorageService.deleteObject).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["no checkout run", null],
+    ["a checkout run that already ended", "failed"],
+  ])("lets a peer agent patch another agent's in_progress issue with %s", async (_label, runStatus) => {
+    if (runStatus) holdCheckoutWithRun(runStatus);
+
+    const res = await request(await createApp(peerActor()))
+      .patch(`/api/issues/${issueId}`)
+      .send({ title: "Peer retitle" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.update.mock.calls[0]?.[1]).toMatchObject({ title: "Peer retitle" });
+  });
   it("allows mentioned peer agents to post comments without ownership of an active checkout", async () => {
     mockAccessService.decide.mockImplementation(async (input: { action: string }) => ({
       allowed: input.action === "issue:comment" || input.action === "issue:read",
