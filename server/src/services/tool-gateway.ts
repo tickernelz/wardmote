@@ -5764,7 +5764,8 @@ export function createToolGatewayService(
 
   function googleToolError(error: unknown): unknown {
     if (!(error instanceof GoogleWorkspaceError)) return error;
-    return new ToolGatewayHttpError(GOOGLE_ERROR_STATUS[error.code], `${error.message}. ${error.hint}`, `google_${error.code}`, {
+    const reasonCode = error.code === "google_error" ? error.code : `google_${error.code}`;
+    return new ToolGatewayHttpError(GOOGLE_ERROR_STATUS[error.code], `${error.message}. ${error.hint}`, reasonCode, {
       code: error.code,
       hint: error.hint,
       ...error.details,

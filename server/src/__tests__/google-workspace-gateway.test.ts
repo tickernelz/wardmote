@@ -192,7 +192,7 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     });
     const run = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "bad" } } });
 
-    await expect(run()).rejects.toMatchObject({ status: 424, reasonCode: "google_google_error", details: { code: "google_error", status: 400 } });
+    await expect(run()).rejects.toMatchObject({ status: 424, reasonCode: "google_error", details: { code: "google_error", status: 400 } });
     await expect(run()).rejects.toMatchObject({ status: 409, reasonCode: "replayed_failure", details: { status: "failed" } });
     expect(creates).toBe(1);
   });
@@ -255,6 +255,24 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
       parameters: { method: "calendar.colors.get" },
       idempotencyKey: randomUUID(),
     })).rejects.toMatchObject({ details: { code: "scope_missing" } });
+  });
+
+  it("names a Google failure reasonCode by its typed code without a doubled prefix", async () => {
+    const f = await fixture();
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/missing/, () => googleError(400, "failedPrecondition", "Precondition check failed."));
+    await expect(f.gateway.executeTool({
+      sessionToken: f.session.token,
+      tool: f.call!.name,
+      parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "missing" } },
+      idempotencyKey: randomUUID(),
+    })).rejects.toMatchObject({ reasonCode: "google_error", details: { code: "google_error", reason: "failedPrecondition" } });
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/disabled/, () => googleError(403, "SERVICE_DISABLED", "Gmail API has not been used in project 1 before or it is disabled."));
+    await expect(f.gateway.executeTool({
+      sessionToken: f.session.token,
+      tool: f.call!.name,
+      parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "disabled" } },
+      idempotencyKey: randomUUID(),
+    })).rejects.toMatchObject({ reasonCode: "google_api_not_enabled", details: { code: "api_not_enabled" } });
   });
 
   it("revokes the Google token when the authorization is removed, even if Google refuses", async () => {

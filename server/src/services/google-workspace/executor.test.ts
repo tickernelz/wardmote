@@ -166,12 +166,31 @@ describe("executeGoogleCall files", () => {
     const { google, context, stored } = setup();
     const file = google.addFile("report.pdf", "application/pdf", Buffer.from("%PDF-1.7 bytes"));
     const download = await executeGoogleCall(context, { method: "drive.files.get", params: { fileId: file.id }, download: "attachment" });
-    expect(download.attachment).toEqual({ attachmentId: "att-1", byteSize: 14, contentType: "application/pdf", filename: `${file.id}.pdf` });
+    expect(download.attachment).toEqual({ attachmentId: "att-1", byteSize: 14, contentType: "application/pdf", filename: "report.pdf" });
     expect(Buffer.from(stored[0].bytes).toString()).toBe("%PDF-1.7 bytes");
     const csv = await executeGoogleCall(context, { method: "drive.files.export", params: { fileId: file.id, mimeType: "text/csv" } });
     expect(csv).toMatchObject({ untrusted: true, data: { contentType: "text/csv", text: "a,b\n1,2\n" } });
     const pdf = await executeGoogleCall(context, { method: "drive.files.export", params: { fileId: file.id, mimeType: "application/pdf" } });
     expect(pdf.attachment?.attachmentId).toBe("att-2");
+  });
+
+  it("names a downloaded file after its Drive name, keeping the fileId only when the name is unreadable", async () => {
+    const { google, context } = setup();
+    const doc = google.addFile("Q3/plan", "application/vnd.google-apps.document");
+    const pdf = await executeGoogleCall(context, { method: "drive.files.export", params: { fileId: doc.id, mimeType: "application/pdf" } });
+    expect(pdf.attachment?.filename).toBe("Q3_plan.pdf");
+    expect(pdf.quota.requests).toBe(2);
+    const photo = google.addFile("holiday.jpeg", "image/jpeg", Buffer.from("jpeg"));
+    const image = await executeGoogleCall(context, { method: "drive.files.get", params: { fileId: photo.id }, download: "attachment" });
+    expect(image.attachment?.filename).toBe("holiday.jpeg");
+    google.override(new RegExp(`/drive/v3/files/${doc.id}\\?fields=name`), () => googleError(429, "rateLimitExceeded"));
+    google.requests.length = 0;
+    const unnamed = await executeGoogleCall(context, { method: "drive.files.export", params: { fileId: doc.id, mimeType: "application/pdf" } });
+    expect(unnamed.attachment?.filename).toBe(`${doc.id}.pdf`);
+    expect(google.requests.filter((request) => request.url.includes("fields=name"))).toHaveLength(1);
+    const spoofed = google.addFile(`invoice\u202Efdp.exe${"\u{1F600}".repeat(200)}`, "application/vnd.google-apps.document");
+    const named = await executeGoogleCall(context, { method: "drive.files.export", params: { fileId: spoofed.id, mimeType: "application/pdf" } });
+    expect(named.attachment?.filename).toBe(`invoice_fdp.exe${"\u{1F600}".repeat(185)}.pdf`);
   });
 
   it("refuses download on a method without file content", async () => {
@@ -218,6 +237,23 @@ describe("executeGoogleCall credentials and errors", () => {
       code: "api_not_enabled",
       details: { enableUrl: "https://console.developers.google.com/apis/api/sheets.googleapis.com/overview?project=1" },
     });
+  });
+
+  it("maps a missing Chat app to api_not_enabled with the Chat configuration link", async () => {
+    const { google, context } = setup();
+    google.queue(json({
+      error: {
+        code: 404,
+        message: "Google Chat app not found. To create a Chat app, you must turn on the Chat API and configure the app in the Google Cloud console.",
+        status: "NOT_FOUND",
+      },
+    }, 404));
+    await expect(executeGoogleCall(context, { method: "chat.spaces.create", body: { spaceType: "SPACE", displayName: "Team" } })).rejects.toMatchObject({
+      code: "api_not_enabled",
+      details: { status: 404, enableUrl: "https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat" },
+    });
+    google.queue(json({ error: { code: 404, message: "Requested entity was not found.", status: "NOT_FOUND" } }, 404));
+    await expect(executeGoogleCall(context, { method: "chat.spaces.get", params: { name: "spaces/missing" } })).rejects.toMatchObject({ code: "google_error" });
   });
 
   it("maps a missing scope to scope_missing", async () => {
