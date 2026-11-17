@@ -15,13 +15,14 @@ import {
   toolPolicies,
   toolProfileBindings,
   toolProfiles,
+  toolRateLimitCounters,
 } from "@tickernelz/wardmote-db";
 import { googleWorkspaceScopesFor, type GoogleWorkspaceService, type GoogleWorkspaceTier } from "@tickernelz/wardmote-shared";
 import { toolAccessService } from "../services/tool-access.js";
 import { createToolGatewayService } from "../services/tool-gateway.js";
 import { registerAssignedMcpGateway } from "../services/native-runtime/assigned-mcp-tools.js";
 import { resolveConnectorAssignments } from "../services/connector-runtime.js";
-import { createFakeGoogle } from "./helpers/fake-google.js";
+import { createFakeGoogle, googleError } from "./helpers/fake-google.js";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 
 const support = await getEmbeddedPostgresTestSupport();
@@ -149,6 +150,100 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     expect(request.previewMarkdown).toContain("This can permanently change or remove data.");
     expect(request.previewMarkdown).toContain("**Changes:** deleteSheet, addSheet, repeatCell, updateCells, mergeCells, … (7 kinds)");
     expect(request.previewMarkdown).toContain("**Spreadsheet Id:** sheet-123");
+  });
+
+  it("runs a repeated read again instead of returning the first answer", async () => {
+    const f = await fixture();
+    let lists = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ labels: [{ id: `L${++lists}`, name: "Inbox" }] }));
+    const run = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.list", params: { userId: "me" } } });
+
+    await run();
+    const second = await run();
+
+    expect(lists).toBe(2);
+    expect(second.status).toBe("completed");
+    expect(second.result).toMatchObject({ data: { structuredContent: { data: { labels: [{ id: "L2" }] } } } });
+  });
+
+  it("returns the first result for an identical change without calling Google again", async () => {
+    const f = await fixture();
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ id: `L${++creates}`, name: "Reports" }));
+    const run = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "Reports" } } });
+
+    const first = await run();
+    const second = await run();
+
+    expect(creates).toBe(1);
+    expect(first.status).toBe("completed");
+    expect(second.status).toBe("replayed");
+    expect(second.invocationId).toBe(first.invocationId);
+    expect(second.result).toEqual(first.result);
+    expect(second.result).toMatchObject({ data: { structuredContent: { data: { id: "L1" } } } });
+  });
+
+  it("reports a Google failure with a client status and does not send the identical change again", async () => {
+    const f = await fixture();
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => {
+      creates += 1;
+      return googleError(400, "invalidArgument", "Invalid label name");
+    });
+    const run = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "bad" } } });
+
+    await expect(run()).rejects.toMatchObject({ status: 424, reasonCode: "google_google_error", details: { code: "google_error", status: 400 } });
+    await expect(run()).rejects.toMatchObject({ status: 409, reasonCode: "replayed_failure", details: { status: "failed" } });
+    expect(creates).toBe(1);
+  });
+
+  it("decides an identical call again after a policy denial in the same run", async () => {
+    const f = await fixture();
+    let reads = 0;
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/L1$/, () => Response.json({ id: "L1", name: `Inbox ${++reads}` }));
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ id: `C${++creates}`, name: "Reports" }));
+    const [block] = await db.insert(toolPolicies).values({ companyId: f.company.id, name: "Block Google", policyType: "block", selectors: {}, priority: 10 }).returning();
+    const read = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "L1" } } });
+    const change = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "Reports" } } });
+
+    await expect(read()).rejects.toMatchObject({ status: 403 });
+    await expect(change()).rejects.toMatchObject({ status: 403 });
+    await db.delete(toolPolicies).where(eq(toolPolicies.id, block.id));
+
+    expect((await read()).status).toBe("completed");
+    const created = await change();
+    expect(created.status).toBe("completed");
+    expect((await change()).status).toBe("replayed");
+    expect({ reads, creates }).toEqual({ reads: 1, creates: 1 });
+  });
+
+  it("decides an identical change again after a rate limit in the same run", async () => {
+    const f = await fixture();
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/L1$/, () => Response.json({ id: "L1", name: "Inbox" }));
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ id: `C${++creates}`, name: "Reports" }));
+    await db.insert(toolPolicies).values({ companyId: f.company.id, name: "One Google call", policyType: "rate_limit", selectors: {}, config: { limit: 1, windowSeconds: 3600 }, priority: 10 });
+    const change = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "Reports" } } });
+
+    await f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "L1" } } });
+    await expect(change()).rejects.toMatchObject({ status: 429 });
+    await db.delete(toolRateLimitCounters).where(eq(toolRateLimitCounters.companyId, f.company.id));
+
+    expect((await change()).status).toBe("completed");
+    expect(creates).toBe(1);
+  });
+
+  it("returns an unknown argument as a validation error instead of a policy denial", async () => {
+    const f = await fixture();
+
+    await expect(f.gateway.executeTool({
+      sessionToken: f.session.token,
+      tool: f.call!.name,
+      parameters: { method: "gmail.users.labels.list", params: { userId: "me", bogus: true } },
+    })).rejects.toMatchObject({ status: 400, reasonCode: "google_validation", details: { code: "validation", pointer: "/params/bogus" } });
+    const invocations = await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, f.company.id));
+    expect(invocations.filter((row) => row.policyDecision === "deny")).toEqual([]);
   });
 
   it("tells the agent a missing Google scope by its typed code", async () => {
