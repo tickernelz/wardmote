@@ -73,6 +73,7 @@ export function createFakeGoogle(options: { pageSize?: number } = {}) {
   const spreadsheets = new Map<string, FakeSpreadsheet>();
   const requests: { method: string; url: string }[] = [];
   const queued: Response[] = [];
+  const overrides: [RegExp, () => Response][] = [];
   const resumable = new Map<string, Record<string, unknown>>();
   const pageSize = options.pageSize ?? 2;
 
@@ -195,6 +196,12 @@ export function createFakeGoogle(options: { pageSize?: number } = {}) {
       const body = mimeType === "application/pdf" ? Buffer.from("%PDF-1.7 fake") : Buffer.from("a,b\n1,2\n");
       return new Response(new Uint8Array(body), { headers: { "content-type": mimeType } });
     }],
+    ["GET", /^https:\/\/www\.googleapis\.com\/drive\/v3\/about$/, () => json({ user: { emailAddress: "owner@example.com" } })],
+    ["GET", /^https:\/\/www\.googleapis\.com\/calendar\/v3\/users\/me\/calendarList$/, () => json({ items: [] })],
+    ["GET", /^https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile$/, () => json({ emailAddress: "owner@example.com" })],
+    ["GET", /^https:\/\/tasks\.googleapis\.com\/tasks\/v1\/users\/@me\/lists$/, () => json({ items: [] })],
+    ["GET", /^https:\/\/chat\.googleapis\.com\/v1\/spaces$/, () => json({ spaces: [] })],
+    ["GET", /^https:\/\/people\.googleapis\.com\/v1\/people\/me$/, () => json({ resourceName: "people/me" })],
     ["POST", /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/([^/?]+)\/permissions$/, (request, m) => {
       const file = requireFile(m[1]);
       if (!file) return googleError(404, "notFound");
@@ -215,6 +222,8 @@ export function createFakeGoogle(options: { pageSize?: number } = {}) {
     if (!discovery) requests.push({ method, url: url.href });
     if (!discovery && headers.get("authorization") !== `Bearer ${token}`) return googleError(401, "authError", "Invalid Credentials");
     if (!discovery && queued.length > 0) return queued.shift()!;
+    const override = discovery ? undefined : overrides.find(([pattern]) => pattern.test(url.href));
+    if (override) return override[1]();
     for (const [routeMethod, pattern, handler] of routes) {
       const match = pattern.exec(base);
       if (match && routeMethod === method) return handler({ method, url, headers, body }, match);
@@ -236,6 +245,9 @@ export function createFakeGoogle(options: { pageSize?: number } = {}) {
     },
     queue(...responses: Response[]) {
       queued.push(...responses);
+    },
+    override(pattern: RegExp, respond: () => Response) {
+      overrides.push([pattern, respond]);
     },
     addFile(name: string, mimeType = "text/plain", content = Buffer.from("hello")) {
       return createFile({ name, mimeType }, content, mimeType);

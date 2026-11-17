@@ -8,6 +8,7 @@ import { isGatewayRestConnection } from "./gateway-rest-connections.js";
 import { createGoogleDiscoveryIndex, type GoogleDiscoveryIndex } from "./google-workspace/discovery.js";
 import { GoogleWorkspaceError } from "./google-workspace/errors.js";
 import { googleWorkspaceAttachments } from "./google-workspace/attachments.js";
+import { testGoogleWorkspaceConnection } from "./google-workspace/connection-test.js";
 import {
   decideGoogleWorkspaceTool,
   googleDiscovery,
@@ -8945,6 +8946,32 @@ export function createToolGatewayService(
         try { await resolveConnectionGrant(session, connection, false); resources.push({ id: connectionId, connectionId, label: "Browser Use Cloud" }); } catch { /* Unavailable grants do not contribute a runtime skill. */ }
       }
       return resources;
+    },
+
+    async testGoogleWorkspaceConnection(input: { companyId: string; connectionId: string; userId: string }) {
+      const [connection] = await db
+        .select()
+        .from(toolConnections)
+        .where(and(eq(toolConnections.companyId, input.companyId), eq(toolConnections.id, input.connectionId)));
+      if (!connection || !isGoogleWorkspaceConnection(connection)) {
+        throw new ToolGatewayHttpError(404, "Google Workspace connection not found", "connection_not_found", { connectionId: input.connectionId });
+      }
+      const session: ToolGatewaySession = {
+        id: "google-workspace-test",
+        token: "google-workspace-test",
+        companyId: input.companyId,
+        agentId: null,
+        runId: null,
+        issueId: null,
+        projectId: null,
+        actorType: "user",
+        actorId: input.userId,
+        responsibleUserId: input.userId,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + DEFAULT_SESSION_TTL_MS),
+      };
+      const grant = await resolveConnectionGrant(session, connection, false);
+      return testGoogleWorkspaceConnection(googleRuntimeFor(session, connection, grant));
     },
 
     async googleWorkspaceResources(binding: { companyId: string; agentId: string; runId?: string; issueId?: string }) {

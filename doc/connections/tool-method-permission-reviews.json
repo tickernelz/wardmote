@@ -851,6 +851,25 @@
       "liveProof": "not-run"
     },
     {
+      "app": "google-workspace",
+      "method": "customer-oauth",
+      "auth": "oauth",
+      "policy": "explicit",
+      "requestedScopes": [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email"
+      ],
+      "capability": "tiered",
+      "supportedActions": "Identity scopes at definition time; each connection adds the minimum Google scopes of the service levels its owner picks (googleWorkspaceScopesFor), and the server classes every call per method and batchUpdate request kind.",
+      "evidence": [
+        "https://developers.google.com/workspace/drive/api/guides/api-specific-auth",
+        "https://developers.google.com/workspace/gmail/api/auth/scopes",
+        "https://developers.google.com/identity/protocols/oauth2/web-server#incrementalAuth"
+      ],
+      "reviewedAt": "2026-11-17",
+      "liveProof": "not-run"
+    },
+    {
       "app": "honcho",
       "method": "mcp-api-key",
       "auth": "api_key",

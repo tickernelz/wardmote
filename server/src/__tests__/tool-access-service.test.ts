@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
+import { googleWorkspaceScopesFor } from "@tickernelz/wardmote-shared";
 import {
   afterAll,
   afterEach,
@@ -2490,6 +2491,41 @@ describeEmbeddedPostgres("tool access service", () => {
       })).rejects.toMatchObject({ details: { code: "oauth_scope_widening_rejected" } });
     },
   );
+
+  it("asks Google only for the scopes of the chosen service levels, without a resource indicator", async () => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+    const actor = { actorType: "user" as const, actorId: "board" };
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "google-workspace",
+      connectionMethodKey: "customer-oauth",
+      name: "Google Workspace fixture",
+      grantKind: "organization",
+      oauthClient: { clientId: "gws-client.apps.googleusercontent.com", clientSecret: "gws-secret" },
+    }, actor);
+    const input = { redirectUri: "https://wardmote.example.test/api/tools/oauth/callback", actor };
+    await expect(service.startOAuth(company.id, connected.connectionId, input)).rejects.toMatchObject({ details: { code: "google_workspace_no_services" } });
+    const view = await service.configureGoogleWorkspace(connected.connectionId, company.id, {
+      capabilities: { sheets: "edit", drive: "delete_share", gmail: "read" },
+      scope: { driveFolderIds: ["folder_1"] },
+      domain: "Example.com",
+      methodOverrides: { "constructor.x": "allow" },
+    }, actor);
+    expect(view.settings).toMatchObject({ domain: "example.com", scope: { driveFolderIds: ["folder_1"] } });
+    expect(view.settings.capabilities).toMatchObject({ sheets: "edit", drive: "delete_share", gmail: "read", docs: "off" });
+    const expected = googleWorkspaceScopesFor({ sheets: "edit", drive: "delete_share", gmail: "read" });
+    expect(view.requiredScopes).toEqual(expected);
+    const started = await service.startOAuth(company.id, connected.connectionId, input);
+    const url = new URL(started.authorizationUrl);
+    expect(url.searchParams.get("scope")?.split(" ")).toEqual(expected);
+    expect(url.searchParams.get("include_granted_scopes")).toBe("true");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.has("resource")).toBe(false);
+    await expect(service.startOAuth(company.id, connected.connectionId, { ...input, scopes: [...expected, "https://www.googleapis.com/auth/script.projects"] }))
+      .rejects.toMatchObject({ details: { code: "oauth_scope_widening_rejected" } });
+    const [row] = await db.select().from(toolConnections).where(eq(toolConnections.id, connected.connectionId));
+    expect((row.config.googleWorkspace as { capabilities: Record<string, string> }).capabilities.sheets).toBe("edit");
+  });
 
   it("keeps tools outside a Google Workspace capability profile disabled", async () => {
     const company = await createCompany(db);

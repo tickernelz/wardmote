@@ -11891,7 +11891,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1528",
+    "boardGuard": "assertBoard@tool-access.ts:1563",
     "authorityCapability": null,
     "parameters": [
       {
@@ -11951,7 +11951,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1476",
+    "boardGuard": "assertBoard@tool-access.ts:1511",
     "authorityCapability": null,
     "parameters": [
       {
@@ -11987,7 +11987,7 @@
       "assertCanTestAsAgent"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1784",
+    "boardGuard": "assertBoard@tool-access.ts:1819",
     "authorityCapability": null,
     "parameters": [
       {
@@ -15474,7 +15474,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1553",
+    "boardGuard": "assertBoard@tool-access.ts:1588",
     "authorityCapability": null,
     "parameters": [
       {
@@ -15526,7 +15526,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1503",
+    "boardGuard": "assertBoard@tool-access.ts:1538",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24146,7 +24146,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1209",
+    "boardGuard": "assertBoard@tool-access.ts:1210",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24181,7 +24181,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:779",
+    "boardGuard": "assertBoard@tool-access.ts:780",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24231,7 +24231,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1383",
+    "boardGuard": "assertBoard@tool-access.ts:1384",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24265,7 +24265,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1974",
+    "boardGuard": "assertBoard@tool-access.ts:2009",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24307,7 +24307,42 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1967",
+    "boardGuard": "assertBoard@tool-access.ts:2002",
+    "authorityCapability": null,
+    "parameters": [
+      {
+        "name": "connectionId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ]
+  },
+  {
+    "name": "wardmoteGetToolConnectionGoogleWorkspace",
+    "operationId": "GET /api/tool-connections/{connectionId}/google-workspace",
+    "method": "GET",
+    "path": "/tool-connections/{connectionId}/google-workspace",
+    "description": "Read a Google Workspace connection's service levels, policy, scope limits and missing Google scopes",
+    "toolset": "extended",
+    "authority": "board",
+    "authoritySource": "handler",
+    "tags": [
+      "tool-access"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "guards": [
+      "assertBoard",
+      "assertToolConnectionConfigureAccess"
+    ],
+    "permissions": [],
+    "boardGuard": "assertBoard@tool-access.ts:1396",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24342,7 +24377,7 @@
       "assertBoardAnyToolPermission"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1809",
+    "boardGuard": "assertBoard@tool-access.ts:1844",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24384,7 +24419,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1582",
+    "boardGuard": "assertBoard@tool-access.ts:1617",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24431,7 +24466,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:736",
+    "boardGuard": "assertBoard@tool-access.ts:737",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24571,7 +24606,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2017",
+    "boardGuard": "assertBoard@tool-access.ts:2052",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24614,7 +24649,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2229",
+    "boardGuard": "assertBoard@tool-access.ts:2264",
     "authorityCapability": null,
     "parameters": [
       {
@@ -24652,7 +24687,7 @@
       "hasCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:930",
+    "boardGuard": "assertBoard@tool-access.ts:931",
     "authorityCapability": null,
     "parameters": []
   },
@@ -33557,7 +33592,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1216",
+    "boardGuard": "assertBoard@tool-access.ts:1217",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33610,7 +33645,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1278",
+    "boardGuard": "assertBoard@tool-access.ts:1279",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33708,7 +33743,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1408",
+    "boardGuard": "assertBoard@tool-access.ts:1443",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33742,7 +33777,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1591",
+    "boardGuard": "assertBoard@tool-access.ts:1626",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33777,7 +33812,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1343",
+    "boardGuard": "assertBoard@tool-access.ts:1344",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33813,7 +33848,7 @@
       "assertCanTestAsAgent"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1703",
+    "boardGuard": "assertBoard@tool-access.ts:1738",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33857,7 +33892,7 @@
       "assertCanTestAsAgent"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1662",
+    "boardGuard": "assertBoard@tool-access.ts:1697",
     "authorityCapability": null,
     "parameters": [
       {
@@ -33892,7 +33927,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1202",
+    "boardGuard": "assertBoard@tool-access.ts:1203",
     "authorityCapability": null,
     "parameters": [
       {
@@ -34019,7 +34054,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2250",
+    "boardGuard": "assertBoard@tool-access.ts:2285",
     "authorityCapability": null,
     "parameters": [
       {
@@ -34053,7 +34088,7 @@
       "assertBoard"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1990",
+    "boardGuard": "assertBoard@tool-access.ts:2025",
     "authorityCapability": null,
     "parameters": [
       {
@@ -34088,7 +34123,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1983",
+    "boardGuard": "assertBoard@tool-access.ts:2018",
     "authorityCapability": null,
     "parameters": [
       {
@@ -34123,7 +34158,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2236",
+    "boardGuard": "assertBoard@tool-access.ts:2271",
     "authorityCapability": null,
     "parameters": [
       {
@@ -34234,7 +34269,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2243",
+    "boardGuard": "assertBoard@tool-access.ts:2278",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43093,6 +43128,116 @@
     }
   },
   {
+    "name": "wardmoteSetToolConnectionGoogleWorkspace",
+    "operationId": "PUT /api/tool-connections/{connectionId}/google-workspace",
+    "method": "PUT",
+    "path": "/tool-connections/{connectionId}/google-workspace",
+    "description": "Set a Google Workspace connection's service levels, policy, scope limits and domain",
+    "toolset": "extended",
+    "authority": "board",
+    "authoritySource": "handler",
+    "tags": [
+      "tool-access"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    },
+    "guards": [
+      "assertBoard",
+      "assertToolConnectionConfigureAccess",
+      "getActorInfo"
+    ],
+    "permissions": [],
+    "boardGuard": "assertBoard@tool-access.ts:1404",
+    "authorityCapability": null,
+    "parameters": [
+      {
+        "name": "connectionId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ],
+    "body": {
+      "required": true,
+      "documented": true,
+      "mode": "merge",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "off",
+                "read",
+                "edit",
+                "create",
+                "delete_share"
+              ]
+            }
+          },
+          "classPolicy": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "require_approval",
+                "block"
+              ]
+            }
+          },
+          "domain": {
+            "type": "string"
+          },
+          "methodOverrides": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "require_approval",
+                "block"
+              ]
+            }
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "driveFolderIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sharedDriveIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "spreadsheetIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "capabilities"
+        ]
+      }
+    }
+  },
+  {
     "name": "wardmoteSetToolConnectionGrantMember",
     "operationId": "PUT /api/tool-connections/{connectionId}/grants/{grantId}/members",
     "method": "PUT",
@@ -43115,7 +43260,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1444",
+    "boardGuard": "assertBoard@tool-access.ts:1479",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43179,7 +43324,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1601",
+    "boardGuard": "assertBoard@tool-access.ts:1636",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43827,7 +43972,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1249",
+    "boardGuard": "assertBoard@tool-access.ts:1250",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43871,7 +44016,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:1395",
+    "boardGuard": "assertBoard@tool-access.ts:1430",
     "authorityCapability": null,
     "parameters": [
       {
@@ -45100,6 +45245,41 @@
     }
   },
   {
+    "name": "wardmoteTestToolConnectionWorkspace",
+    "operationId": "POST /api/tool-connections/{connectionId}/google-workspace/test",
+    "method": "POST",
+    "path": "/tool-connections/{connectionId}/google-workspace/test",
+    "description": "Run one cheap read per active Google service and report the write policy",
+    "toolset": "extended",
+    "authority": "board",
+    "authoritySource": "handler",
+    "tags": [
+      "tool-access"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    },
+    "guards": [
+      "assertBoard",
+      "assertToolConnectionConfigureAccess"
+    ],
+    "permissions": [],
+    "boardGuard": "assertBoard@tool-access.ts:1414",
+    "authorityCapability": null,
+    "parameters": [
+      {
+        "name": "connectionId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ]
+  },
+  {
     "name": "wardmoteTestToolPolicy",
     "operationId": "POST /api/companies/{companyId}/tools/policy/test",
     "method": "POST",
@@ -45121,7 +45301,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@tool-access.ts:2486",
+    "boardGuard": "assertBoard@tool-access.ts:2521",
     "authorityCapability": null,
     "parameters": [
       {

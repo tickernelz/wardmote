@@ -219,10 +219,10 @@ export const connectionGrantSchema = z.object({
     oauth: z.object({
       strategy: z.string().trim().min(1).max(100).optional(),
       accessTokenExpiresAt: z.string().datetime().nullable().optional(),
-      scopes: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
+      scopes: z.array(z.string().trim().min(1).max(500)).max(40).optional(),
       scopeSource: z.enum(["provider", "requested_fallback"]).optional(),
-      unrequestedScopes: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
-      requestedScopes: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
+      unrequestedScopes: z.array(z.string().trim().min(1).max(500)).max(40).optional(),
+      requestedScopes: z.array(z.string().trim().min(1).max(500)).max(40).optional(),
       tokenType: z.string().trim().min(1).max(100).optional(),
       refreshTokenExpiresAt: z.string().datetime().optional(),
       refreshedAt: z.string().datetime().optional(),

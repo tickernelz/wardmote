@@ -11,10 +11,17 @@ import { honchoManagedArguments } from "./honcho-connection.js";
 import { defaultConnectionAgentInstructions } from "@tickernelz/wardmote-shared";
 import { isInsufficientConnectionScope, INSUFFICIENT_CONNECTION_SCOPE_MESSAGE } from "./connection-permission-errors.js";
 import { mcpDiscoveryHttpFailure, retainMcpConnectionFailure, withMcpConnectionFailure } from "./mcp-connection-failure.js";
-import { BROWSER_USE_TOOLS, GOOGLE_WORKSPACE_TOOLS } from "@tickernelz/wardmote-shared";
+import {
+  BROWSER_USE_TOOLS,
+  GOOGLE_WORKSPACE_TOOLS,
+  googleWorkspaceScopesFor,
+  normalizeGoogleWorkspaceSettings,
+  type GoogleWorkspaceConnectionSettings,
+  type GoogleWorkspaceSettingsInput,
+} from "@tickernelz/wardmote-shared";
 import { browserUseClient, isBrowserUseConnection } from "./browser-use-client.js";
 import { isGatewayRestConnection } from "./gateway-rest-connections.js";
-import { isGoogleWorkspaceConnection } from "./google-workspace/runtime.js";
+import { googleWorkspaceSettings, grantedGoogleScopes, isGoogleWorkspaceConnection } from "./google-workspace/runtime.js";
 import { isLocalBrowserConnection } from "./connectors/local-browser/connection.js";
 import { LOCAL_BROWSER_CONNECTOR_TOOLS } from "./connectors/local-browser/tools.js";
 import { browserUseService } from "./browser-use.js";
@@ -3876,6 +3883,23 @@ export function toolAccessService(
       void job.finally(() => composioSyncJobs.delete(leaseId)).catch(() => undefined);
     }
     return aggregatorAppsResponse(await getConnectionRow(connectionId), actor);
+  }
+
+  async function googleWorkspaceSettingsView(connection: typeof toolConnections.$inferSelect): Promise<GoogleWorkspaceConnectionSettings> {
+    const settings = googleWorkspaceSettings(connection);
+    const requiredScopes = googleWorkspaceScopesFor(settings.capabilities);
+    const grants = await db
+      .select({ id: connectionGrants.id, kind: connectionGrants.kind, providerTenant: connectionGrants.providerTenant })
+      .from(connectionGrants)
+      .where(and(eq(connectionGrants.connectionId, connection.id), eq(connectionGrants.companyId, connection.companyId), eq(connectionGrants.status, "active")));
+    return {
+      settings,
+      requiredScopes,
+      grants: grants.map((grant) => {
+        const grantedScopes = grantedGoogleScopes(grant);
+        return { grantId: grant.id, kind: grant.kind, grantedScopes, missingScopes: requiredScopes.filter((scope) => !grantedScopes.includes(scope)) };
+      }),
+    };
   }
 
   async function configureArcadeDiscovery(connectionId: string, input: ArcadeDiscoverySetupInput, actor: ActorInfo) {
@@ -9307,8 +9331,9 @@ export function toolAccessService(
         : ("authorization_code" as const);
     // The resource indicator is the MCP endpoint itself, independent of which
     // authorization server ends up serving it.
-    const configuredResource =
-      typeof oauth.resource === "string" && oauth.resource.trim()
+    const configuredResource = isGoogleWorkspaceConnection(connection)
+      ? null
+      : typeof oauth.resource === "string" && oauth.resource.trim()
         ? oauth.resource.trim()
         : canonicalResourceIndicator(remoteEndpoint(connection.config));
     if (configuredAuthorizationUrl && configuredTokenUrl) {
@@ -14147,7 +14172,13 @@ export function toolAccessService(
       : null;
     const requestedScopes = (() => {
       if (!galleryMethod) return input.scopes ?? null;
-      const allowed = normalizeOauthScopes(galleryMethod.defaults?.scopesHint);
+      const googleWorkspace = isGoogleWorkspaceConnection(connection);
+      if (googleWorkspace && !Object.values(googleWorkspaceSettings(connection).capabilities).some((tier) => tier !== "off")) {
+        throw badRequest("Turn on at least one Google service before signing in", { code: "google_workspace_no_services" });
+      }
+      const allowed = googleWorkspace
+        ? googleWorkspaceScopesFor(googleWorkspaceSettings(connection).capabilities)
+        : normalizeOauthScopes(galleryMethod.defaults?.scopesHint);
       if (!input.scopes) return allowed;
       const requested = normalizeOauthScopes(input.scopes);
       const widened = requested.filter((scope) => !allowed.includes(scope));
@@ -14415,6 +14446,8 @@ export function toolAccessService(
       // OIDC offline access requires consent unless the provider has another
       // established basis for granting it. A generic server has no reviewed override.
       authorizationUrl.searchParams.set("prompt", "consent");
+    if (reviewedAuthorizationParams?.include_granted_scopes)
+      authorizationUrl.searchParams.set("include_granted_scopes", reviewedAuthorizationParams.include_granted_scopes);
 
     if (
       authorizationSubjectUserId &&
@@ -18010,6 +18043,26 @@ export function toolAccessService(
     checkHealth: checkConnectionHealth,
 
     refreshCatalog,
+
+    googleWorkspaceSettings: async (connectionId: string, companyId: string): Promise<GoogleWorkspaceConnectionSettings> => {
+      const connection = await getConnectionRow(connectionId, companyId);
+      if (!isGoogleWorkspaceConnection(connection)) throw unprocessable("This connection is not Google Workspace.");
+      return googleWorkspaceSettingsView(connection);
+    },
+
+    configureGoogleWorkspace: async (connectionId: string, companyId: string, input: GoogleWorkspaceSettingsInput, actor: ActorInfo): Promise<GoogleWorkspaceConnectionSettings> => {
+      const updated = await db.transaction(async (tx) => {
+        const [connection] = await tx.select().from(toolConnections).where(and(eq(toolConnections.id, connectionId), eq(toolConnections.companyId, companyId))).for("update");
+        if (!connection || !isGoogleWorkspaceConnection(connection)) throw unprocessable("This connection is not Google Workspace.");
+        if (connection.status === "archived") throw conflict("Archived app connections cannot be changed");
+        const config = { ...connection.config, googleWorkspace: normalizeGoogleWorkspaceSettings(input) };
+        const [row] = await tx.update(toolConnections).set({ config, transportConfig: config, updatedAt: now() }).where(and(eq(toolConnections.id, connectionId), eq(toolConnections.companyId, companyId))).returning();
+        return row;
+      });
+      const view = await googleWorkspaceSettingsView(updated);
+      await audit({ companyId, connectionId, action: "tool_connection.google_workspace_updated", outcome: "success", actor, details: { capabilities: view.settings.capabilities, classPolicy: view.settings.classPolicy, scope: view.settings.scope, domain: view.settings.domain, methodOverrides: Object.keys(view.settings.methodOverrides).length } });
+      return view;
+    },
 
     configureRailwaySsh: async (connectionId: string, companyId: string, input: ConfigureRailwaySsh, actor: ActorInfo): Promise<RailwaySshSetup | null> => {
       const knownHosts = input.action === "enable" ? validateRailwayKnownHosts(input.knownHosts) : "";

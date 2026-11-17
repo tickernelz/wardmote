@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "slug": "google-workspace",
+  "name": "Google Workspace",
+  "description": "Let agents read and work in Drive, Sheets, Docs, Slides, Gmail, Calendar, Forms, Tasks, Chat, Meet, Contacts and Apps Script through the Google APIs.",
+  "categories": [
+    "productivity",
+    "content"
+  ],
+  "featured": true,
+  "branding": {
+    "logoUrl": "/brands/apps/google-workspace.svg"
+  },
+  "urlPatterns": [
+    "https://workspace.google.com/*"
+  ],
+  "docsUrl": "https://developers.google.com/workspace",
+  "redirectConstraints": "https-or-loopback-http",
+  "methods": [
+    {
+      "key": "customer-oauth",
+      "label": "Use your own Google OAuth app",
+      "transport": "rest_api",
+      "auth": "oauth",
+      "grantKinds": [
+        "user",
+        "organization"
+      ],
+      "ownershipModes": [
+        "customer"
+      ],
+      "whenToUse": "Use a Google OAuth client from your own Google Cloud project. Wardmote asks only for the scopes of the levels you pick.",
+      "defaults": {
+        "serverUrl": "https://www.googleapis.com",
+        "authorizationEndpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+        "tokenEndpoint": "https://oauth2.googleapis.com/token",
+        "metadataUrl": "https://accounts.google.com/.well-known/openid-configuration",
+        "scopesHint": [
+          "openid",
+          "https://www.googleapis.com/auth/userinfo.email"
+        ],
+        "oauthAuthorizationParams": {
+          "access_type": "offline",
+          "prompt": "consent",
+          "include_granted_scopes": "true"
+        }
+      },
+      "guidanceMd": "Create a Google Cloud project, enable the Workspace APIs, create an OAuth client of type Web application with Wardmote's callback URI, then paste its Client ID and secret or drop its client_secret.json.",
+      "consoleLinks": {
+        "register": "https://console.cloud.google.com/auth/clients",
+        "docs": "https://developers.google.com/workspace/guides/create-credentials"
+      },
+      "warnings": [
+        "Deleting, sharing outside your domain and sending email ask for approval by default.",
+        "The \"Delete and share\" level for Drive uses the restricted drive scope."
+      ],
+      "riskTier": "S4"
+    }
+  ]
+}

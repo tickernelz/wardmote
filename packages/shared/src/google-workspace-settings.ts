@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const GOOGLE_WORKSPACE_API_VERSIONS = {
   drive: "v3",
   sheets: "v4",
@@ -122,4 +124,100 @@ export function googleWorkspaceScopesFor(capabilities: Partial<Record<GoogleWork
     for (const scope of GOOGLE_WORKSPACE_TIER_SCOPES[service][tier]) scopes.add(scope);
   }
   return [...scopes];
+}
+
+const googleWorkspaceIdListSchema = z.array(z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)).max(200);
+
+export const googleWorkspaceSettingsSchema = z.object({
+  capabilities: z.record(z.enum(GOOGLE_WORKSPACE_SERVICE_IDS as [GoogleWorkspaceService, ...GoogleWorkspaceService[]]), z.enum(GOOGLE_WORKSPACE_TIERS)),
+  classPolicy: z.record(z.enum(GOOGLE_WORKSPACE_POLICY_CLASSES), z.enum(GOOGLE_WORKSPACE_POLICY_ACTIONS)).optional(),
+  methodOverrides: z.record(z.string().regex(/^[a-z]+(\.[A-Za-z0-9]+)+(#[A-Za-z]+)?$/), z.enum(GOOGLE_WORKSPACE_POLICY_ACTIONS)).optional(),
+  scope: z
+    .object({
+      driveFolderIds: googleWorkspaceIdListSchema.optional(),
+      sharedDriveIds: googleWorkspaceIdListSchema.optional(),
+      spreadsheetIds: googleWorkspaceIdListSchema.optional(),
+    })
+    .optional(),
+  domain: z.string().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/i).nullable().optional(),
+});
+
+export type GoogleWorkspaceSettingsInput = z.infer<typeof googleWorkspaceSettingsSchema>;
+
+export interface GoogleWorkspaceGrantScopes {
+  grantId: string;
+  kind: string;
+  grantedScopes: string[];
+  missingScopes: string[];
+}
+
+export interface GoogleWorkspaceConnectionSettings {
+  settings: GoogleWorkspaceSettings;
+  requiredScopes: string[];
+  grants: GoogleWorkspaceGrantScopes[];
+}
+
+export const GOOGLE_WORKSPACE_RESTRICTED_SCOPES: ReadonlySet<string> = new Set([
+  g("drive"),
+  g("drive.readonly"),
+  g("gmail.readonly"),
+  g("gmail.modify"),
+  g("gmail.compose"),
+]);
+
+export const GOOGLE_WORKSPACE_ENABLE_API_IDS: Readonly<Record<GoogleWorkspaceService, string>> = {
+  drive: "drive.googleapis.com",
+  sheets: "sheets.googleapis.com",
+  docs: "docs.googleapis.com",
+  slides: "slides.googleapis.com",
+  calendar: "calendar-json.googleapis.com",
+  gmail: "gmail.googleapis.com",
+  forms: "forms.googleapis.com",
+  tasks: "tasks.googleapis.com",
+  chat: "chat.googleapis.com",
+  meet: "meet.googleapis.com",
+  people: "people.googleapis.com",
+  script: "script.googleapis.com",
+};
+
+export function googleWorkspaceScopeClass(scope: string): "restricted" | "sensitive" | "basic" {
+  if (GOOGLE_WORKSPACE_RESTRICTED_SCOPES.has(scope)) return "restricted";
+  return scope === "openid" || scope === g("userinfo.email") ? "basic" : "sensitive";
+}
+
+export type GoogleClientSecretProblem = "not_json" | "no_client" | "installed_client" | "missing_secret" | "redirect_uri_missing";
+
+export interface GoogleClientSecretFile {
+  clientId: string | null;
+  clientSecret: string | null;
+  projectId: string | null;
+  redirectUris: string[];
+  problems: GoogleClientSecretProblem[];
+}
+
+export function parseGoogleClientSecretJson(text: string, expectedRedirectUri: string): GoogleClientSecretFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { clientId: null, clientSecret: null, projectId: null, redirectUris: [], problems: ["not_json"] };
+  }
+  const root = record(parsed);
+  const web = record(root.web);
+  const installed = record(root.installed);
+  const client = Object.keys(web).length > 0 ? web : installed;
+  if (Object.keys(client).length === 0) return { clientId: null, clientSecret: null, projectId: null, redirectUris: [], problems: ["no_client"] };
+  const trimmed = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
+  const redirectUris = Array.isArray(client.redirect_uris) ? client.redirect_uris.filter((uri): uri is string => typeof uri === "string") : [];
+  const problems: GoogleClientSecretProblem[] = [];
+  if (client === installed) problems.push("installed_client");
+  if (!trimmed(client.client_secret)) problems.push("missing_secret");
+  if (client === web && !redirectUris.includes(expectedRedirectUri)) problems.push("redirect_uri_missing");
+  return {
+    clientId: trimmed(client.client_id),
+    clientSecret: trimmed(client.client_secret),
+    projectId: trimmed(client.project_id),
+    redirectUris,
+    problems,
+  };
 }

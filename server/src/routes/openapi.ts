@@ -312,6 +312,7 @@ import {
   // Tool access
   connectToolAppSchema,
   configureRailwaySshSchema,
+  googleWorkspaceSettingsSchema,
   createToolApplicationSchema,
   updateToolApplicationSchema,
   createToolConnectionSchema,
@@ -1709,6 +1710,9 @@ const BOARD_ONLY_OPERATIONS = new Set([
   "POST /api/tool-connections/{connectionId}/health-check",
   "POST /api/tool-connections/{connectionId}/reconnect",
   "POST /api/tool-connections/{connectionId}/railway/ssh",
+  "GET /api/tool-connections/{connectionId}/google-workspace",
+  "PUT /api/tool-connections/{connectionId}/google-workspace",
+  "POST /api/tool-connections/{connectionId}/google-workspace/test",
   "POST /api/tool-connections/{connectionId}/catalog/refresh",
   "GET /api/tool-connections/{connectionId}/catalog",
   "GET /api/tool-connections/{connectionId}/aggregator/apps",
@@ -12858,6 +12862,31 @@ registerCurrentRoute({
   path: "/api/tool-connections/{connectionId}/grants/{grantId}/members",
   tags: ["tool-access"],
   summary: "Replace the member audience of a tool connection grant",
+});
+
+registerCurrentRoute({
+  method: "get",
+  path: "/api/tool-connections/{connectionId}/google-workspace",
+  tags: ["tool-access"],
+  summary: "Read a Google Workspace connection's service levels, policy, scope limits and missing Google scopes",
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 422: r.unprocessable },
+});
+
+registerCurrentRoute({
+  method: "put",
+  path: "/api/tool-connections/{connectionId}/google-workspace",
+  tags: ["tool-access"],
+  summary: "Set a Google Workspace connection's service levels, policy, scope limits and domain",
+  body: googleWorkspaceSettingsSchema,
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 409: r.conflict, 422: r.unprocessable },
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/tool-connections/{connectionId}/google-workspace/test",
+  tags: ["tool-access"],
+  summary: "Run one cheap read per active Google service and report the write policy",
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 501: r.serverError },
 });
 
 registerCurrentRoute({

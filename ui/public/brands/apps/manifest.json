@@ -230,6 +230,16 @@
       ]
     },
     {
+      "slug": "google-workspace",
+      "provider": "Google Workspace",
+      "catalogVisible": true,
+      "localAsset": "/brands/apps/google-workspace.svg",
+      "aliases": [
+        "google workspace",
+        "g suite"
+      ]
+    },
+    {
       "slug": "hugging-face",
       "provider": "Hugging Face",
       "catalogVisible": true,
