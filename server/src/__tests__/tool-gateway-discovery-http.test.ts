@@ -34,7 +34,7 @@ suite("MCP discovery over HTTP", () => {
       }
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: body.method === "initialize"
         ? { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "fixture", version: "1" } }
-        : { content: [{ type: "text", text: "fixture result" }] } }), { headers: { "content-type": "application/json" } });
+        : { content: [{ type: "text", text: "fixture result" }], structuredContent: { answer: 42 } } }), { headers: { "content-type": "application/json" } });
     } });
     const tools = await gateway.listToolsForNamedGateway({ gatewayId: fixture.namedGateway.id, bearerToken: fixture.token.token });
     const tool = tools.find((entry) => entry.catalogEntryId === fixture.entries[4]!.id)!;
@@ -44,6 +44,7 @@ suite("MCP discovery over HTTP", () => {
       .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool.name, arguments: {} } });
     const response = await post();
     expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.result.structuredContent).toEqual({ answer: 42 });
     expect(calls).toBe(1);
     await post().expect(401);
     expect(calls).toBe(1);
@@ -84,6 +85,7 @@ suite("MCP discovery over HTTP", () => {
     expect(read).toBeDefined();
     const called = await post("tools/call", { name: read.name, arguments: {} });
     expect(called.status, JSON.stringify(called.body)).toBe(200);
+    expect(called.body.result).toEqual({ content: [{ type: "text", text: "fixture result" }], isError: false });
     expect(calls).toEqual(["tool_0004"]);
     await db.insert(toolPolicies).values({
       companyId: fixture.company.id, name: `Revoke ${randomUUID()}`, policyType: "block", priority: 0,

@@ -71,6 +71,13 @@ async function discoveryRequest<T>(req: Request, res: Response, work: (signal: A
   }
 }
 
+function mcpStructuredContent(data: unknown): { structuredContent?: Record<string, unknown> } {
+  const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  if (!isObject(data)) return {};
+  if (!("structuredContent" in data)) return { structuredContent: data };
+  return isObject(data.structuredContent) ? { structuredContent: data.structuredContent } : {};
+}
+
 async function handleMcpGatewayProtocol(
   req: Request,
   res: Response,
@@ -200,7 +207,7 @@ async function handleMcpGatewayProtocol(
         id,
         result: {
           content: [{ type: "text", text: contentText }],
-          structuredContent: resultRecord?.data ?? null,
+          ...mcpStructuredContent(resultRecord?.data),
           isError: false,
         },
       });

@@ -249,6 +249,8 @@ function enableUrlFrom(body: GoogleErrorBody): string | null {
   return match ? match[0].replace(/[.)]+$/, "") : null;
 }
 
+const CHAT_APP_CONFIGURATION_URL = "https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat";
+
 export function googleErrorFromResponse(status: number, body: GoogleErrorBody, retryAfter: number | null): GoogleWorkspaceError {
   const reasons = googleReasons(body);
   const message = body.error?.message ?? `Google answered HTTP ${status}`;
@@ -257,6 +259,12 @@ export function googleErrorFromResponse(status: number, body: GoogleErrorBody, r
     return new GoogleWorkspaceError("api_not_enabled", message, "Ask the connection owner to enable this API in Google Cloud Console.", {
       status,
       enableUrl: enableUrlFrom(body),
+    });
+  }
+  if (status === 404 && /Google Chat app not found/i.test(message)) {
+    return new GoogleWorkspaceError("api_not_enabled", message, "Ask the connection owner to configure a Chat app for the Chat API in the Google Cloud project of this connection's OAuth client.", {
+      status,
+      enableUrl: CHAT_APP_CONFIGURATION_URL,
     });
   }
   if (has("insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT")) {
@@ -347,6 +355,13 @@ function extensionFor(contentType: string): string {
   return known[contentType.split(";")[0].trim()] ?? "bin";
 }
 
+function downloadFilename(name: string | null, fallback: string, extension: string, exported: boolean): string {
+  const base = (name ?? "").replace(/[\u0000-\u001f\u007f/\\]+/g, "_").trim().slice(0, 200) || fallback;
+  if (base.toLowerCase().endsWith(`.${extension}`)) return base;
+  if (!exported && base !== fallback && /\.[a-z0-9]{1,8}$/i.test(base)) return base;
+  return `${base}.${extension}`;
+}
+
 function isPageable(entry: GoogleMethodEntry, input: GoogleCallInput): boolean {
   return input.pageAll === true && entry.httpMethod === "GET" && "pageToken" in entry.parameters;
 }
@@ -417,7 +432,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
   const limits = { ...DEFAULT_LIMITS, ...context.limits };
   const fetchImpl = context.fetch ?? fetch;
   const sleep = context.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const { plan, entry } = await planGoogleCall(context.discovery, input);
+  const { plan, entry, index: serviceIndex } = await planGoogleCall(context.discovery, input);
   const verdict = await context.policy(plan);
   const query = verdict.allowed && verdict.query ? verdict.query : plan.query;
   const sourceUrl = urlWithQuery(plan.url, query);
@@ -511,6 +526,19 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
     }
   }
 
+  async function driveFileName(fileId: string): Promise<string | null> {
+    try {
+      const metadata = await send(urlWithQuery(joinRoot(serviceIndex.baseUrl, `files/${encodeURIComponent(fileId)}`), [["fields", "name"], ["supportsAllDrives", "true"]]), {
+        method: "GET",
+        headers: { accept: "application/json" },
+      });
+      const body = (await metadata.json()) as { name?: unknown };
+      return typeof body.name === "string" ? body.name : null;
+    } catch {
+      return null;
+    }
+  }
+
   const jsonHeaders = { accept: "application/json", "content-type": "application/json" };
   let response: Response;
   if (plan.upload) {
@@ -564,7 +592,9 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
       return { ...base, dryRun: false, status: response.status, data: { contentType, text: new TextDecoder().decode(bytes) }, quota: { requests } };
     }
     const fileId = typeof plan.params.fileId === "string" ? plan.params.fileId : "google-file";
-    const attachment = await context.attachments.store({ filename: `${fileId}.${extensionFor(contentType)}`, contentType: contentType.split(";")[0].trim(), bytes });
+    const name = plan.service === "drive" && fileId !== "google-file" ? await driveFileName(fileId) : null;
+    const filename = downloadFilename(name, fileId, extensionFor(contentType), plan.method === "drive.files.export");
+    const attachment = await context.attachments.store({ filename, contentType: contentType.split(";")[0].trim(), bytes });
     return { ...base, dryRun: false, status: response.status, attachment, quota: { requests } };
   }
 
