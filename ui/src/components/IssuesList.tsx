@@ -162,68 +162,6 @@ export function findIssuesScrollContainer(element: HTMLElement | null): HTMLElem
   }
   return null;
 }
-const ISSUE_SCROLL_ANCHOR_ROW_COUNT = 12;
-const ISSUE_SCROLL_ANCHOR_TOLERANCE_PX = 24;
-
-type IssueRowScrollAnchor = { identity: string; rows: Array<{ id: string; top: number }> };
-
-function issuesViewportBounds(scrollContainer: HTMLElement | null) {
-  if (!scrollContainer) return { top: 0, bottom: window.innerHeight };
-  const rect = scrollContainer.getBoundingClientRect();
-  return { top: rect.top, bottom: rect.top + scrollContainer.clientHeight };
-}
-
-function captureIssueRowScrollAnchor(
-  root: HTMLElement,
-  scrollContainer: HTMLElement | null,
-  identity: string,
-): IssueRowScrollAnchor {
-  const rows = root.querySelectorAll<HTMLElement>("[data-issue-row-id]");
-  const viewport = issuesViewportBounds(scrollContainer);
-  let low = 0;
-  let high = rows.length;
-  while (low < high) {
-    const middle = (low + high) >> 1;
-    if (rows[middle]!.getBoundingClientRect().bottom <= viewport.top) low = middle + 1;
-    else high = middle;
-  }
-  const anchors: IssueRowScrollAnchor["rows"] = [];
-  for (let index = low; index < rows.length && anchors.length < ISSUE_SCROLL_ANCHOR_ROW_COUNT; index += 1) {
-    const rect = rows[index]!.getBoundingClientRect();
-    if (rect.top >= viewport.bottom) break;
-    anchors.push({ id: rows[index]!.dataset.issueRowId!, top: rect.top - viewport.top });
-  }
-  return { identity, rows: anchors };
-}
-
-function issueRowAnchorShift(
-  root: HTMLElement,
-  scrollContainer: HTMLElement | null,
-  anchor: IssueRowScrollAnchor,
-): number | null {
-  const viewport = issuesViewportBounds(scrollContainer);
-  const shifts: Array<{ shift: number; index: number }> = [];
-  anchor.rows.forEach(({ id, top }, index) => {
-    const row = root.querySelector<HTMLElement>(`[data-issue-row-id="${escapeAttrValue(id)}"]`);
-    if (!row) return;
-    shifts.push({ shift: Math.round(row.getBoundingClientRect().top - viewport.top - top), index });
-  });
-  if (shifts.length === 0) return null;
-  shifts.sort((a, b) => a.shift - b.shift);
-  let best: { count: number; first: { shift: number; index: number } } | null = null;
-  let clusterStart = 0;
-  for (let end = 1; end <= shifts.length; end += 1) {
-    if (end < shifts.length && shifts[end]!.shift - shifts[end - 1]!.shift <= ISSUE_SCROLL_ANCHOR_TOLERANCE_PX) continue;
-    const cluster = shifts.slice(clusterStart, end);
-    const first = cluster.reduce((top, entry) => (entry.index < top.index ? entry : top));
-    if (!best || cluster.length > best.count || (cluster.length === best.count && first.index < best.first.index)) {
-      best = { count: cluster.length, first };
-    }
-    clusterStart = end;
-  }
-  return best!.first.shift;
-}
-
 const boardIssueStatuses = ISSUE_STATUSES;
 const issueStatusLabels: Record<IssueStatus, string> = {
   backlog: "Backlog",
@@ -1930,42 +1868,6 @@ function StreamlinedIssuesList({
     viewState.viewMode,
   ]);
 
-  const scrollAnchorRef = useRef<IssueRowScrollAnchor | null>(null);
-  const captureScrollAnchor = useCallback(() => {
-    const root = rootRef.current;
-    if (!root || viewState.viewMode !== "list") {
-      scrollAnchorRef.current = null;
-      return;
-    }
-    scrollAnchorRef.current = captureIssueRowScrollAnchor(
-      root,
-      findIssuesScrollContainer(root),
-      renderBudgetIdentity,
-    );
-  }, [renderBudgetIdentity, viewState.viewMode]);
-
-  useEffect(() => {
-    if (viewState.viewMode !== "list") return;
-    const scrollTarget: Window | HTMLElement = findIssuesScrollContainer(rootRef.current) ?? window;
-    scrollTarget.addEventListener("scroll", captureScrollAnchor, { passive: true });
-    return () => scrollTarget.removeEventListener("scroll", captureScrollAnchor);
-  }, [captureScrollAnchor, viewState.viewMode]);
-
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    const anchor = scrollAnchorRef.current;
-    if (root && anchor && anchor.identity === renderBudgetIdentity && viewState.viewMode === "list") {
-      const scrollContainer = findIssuesScrollContainer(root);
-      const shift = issueRowAnchorShift(root, scrollContainer, anchor);
-      if (shift === null) return;
-      if (shift !== 0) {
-        if (scrollContainer) scrollContainer.scrollTop += shift;
-        else window.scrollBy(0, shift);
-      }
-    }
-    captureScrollAnchor();
-  }, [budgetOrderedIssueIds, captureScrollAnchor, renderBudgetIdentity, renderedIssueRowLimit, viewState.viewMode]);
-
   const showsListRows = viewState.viewMode === "list" && renderedIssueRowLimit > 0;
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -1979,15 +1881,7 @@ function StreamlinedIssuesList({
     };
   }, [showsListRows]);
 
-  const listHeaderRef = useRef<HTMLDivElement | null>(null);
   const showListHeader = Boolean(listHeader) && !viewState.liveOnly;
-  useLayoutEffect(() => {
-    const header = listHeaderRef.current;
-    if (!showListHeader || !header || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => captureScrollAnchor());
-    observer.observe(header);
-    return () => observer.disconnect();
-  }, [captureScrollAnchor, showListHeader]);
 
   const hasMoreRenderedRows = viewState.viewMode === "list" && renderedIssueRowLimit < filtered.length;
   const remainingIssueRowCount = Math.max(filtered.length - renderedIssueRowLimit, 0);
@@ -2431,7 +2325,7 @@ function StreamlinedIssuesList({
       />
 
       {showListHeader && listHeader ? (
-        <div ref={listHeaderRef}>{listHeader({ viewMode: viewState.viewMode, issueFilter: headerIssueFilter })}</div>
+        listHeader({ viewMode: viewState.viewMode, issueFilter: headerIssueFilter })
       ) : null}
       {(isLoading || externalObjectFilterLoading) && <PageSkeleton variant="issues-list" />}
       {error && <p className="text-sm text-bad">{error.message}</p>}

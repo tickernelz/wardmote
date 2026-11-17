@@ -2,7 +2,7 @@
 
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { useRef, type AnchorHTMLAttributes, type ReactNode } from "react";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@tickernelz/wardmote-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +12,6 @@ import {
   TasksLiveNowSection,
   liveNowCollapsedStorageKey,
   liveNowDensityStorageKey,
-  useAboveViewportResizeCompensation,
 } from "./TasksLiveNowSection";
 import { classifyLiveNowHealth, countLiveNowHealth } from "./live-now/live-now-health";
 import { buildLiveNowEntries, buildLiveNowHeartbeats } from "./live-now/useLiveNowModel";
@@ -894,81 +893,5 @@ describe("Live now runs the task list does not show", () => {
     expect(kindOf("routine-1")).toBe("Routine");
     expect(kindOf("chat-1")).toBe("Chat");
     expect(container.querySelector("[data-slot='tasks-live-now-hidden']")).toBeNull();
-  });
-});
-
-describe("useAboveViewportResizeCompensation", () => {
-  let skipNextResize: () => void = () => undefined;
-
-  function Probe() {
-    const ref = useRef<HTMLDivElement | null>(null);
-    skipNextResize = useAboveViewportResizeCompensation(ref);
-    return <div ref={ref} data-testid="probe" />;
-  }
-
-  function setup(initial: { top: number; height: number }) {
-    let notify: (() => void) | null = null;
-    vi.stubGlobal("ResizeObserver", class {
-      constructor(callback: () => void) {
-        notify = callback;
-      }
-      observe() {}
-      disconnect() {}
-    });
-    const scroller = document.createElement("div");
-    scroller.style.overflowY = "auto";
-    Object.defineProperty(scroller, "scrollTop", { value: 500, writable: true });
-    container.appendChild(scroller);
-    const box = { ...initial };
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      if (this === scroller) return { top: 100, bottom: 700, height: 600 } as DOMRect;
-      return { top: box.top, bottom: box.top + box.height, height: box.height } as DOMRect;
-    });
-    root = createRoot(scroller);
-    flushSync(() => root!.render(<Probe />));
-    return {
-      scroller,
-      resize(height: number) {
-        box.height = height;
-        notify!();
-      },
-      resizeAlreadyCorrected(height: number) {
-        const delta = height - box.height;
-        box.top -= delta;
-        box.height = height;
-        scroller.scrollTop += delta;
-        scroller.dispatchEvent(new Event("scroll"));
-        notify!();
-      },
-    };
-  }
-
-  it("adds the height delta to scrollTop when the section sits above the viewport", () => {
-    const { scroller, resize } = setup({ top: -300, height: 120 });
-    resize(200);
-    expect(scroller.scrollTop).toBe(580);
-    resize(40);
-    expect(scroller.scrollTop).toBe(420);
-  });
-
-  it("does not compensate twice when the list already restored its rows", () => {
-    const { scroller, resizeAlreadyCorrected } = setup({ top: -300, height: 120 });
-    resizeAlreadyCorrected(200);
-    expect(scroller.scrollTop).toBe(580);
-  });
-
-  it("leaves a user toggle uncompensated and still compensates the next passive resize", () => {
-    const { scroller, resize } = setup({ top: -300, height: 120 });
-    skipNextResize();
-    resize(200);
-    expect(scroller.scrollTop).toBe(500);
-    resize(260);
-    expect(scroller.scrollTop).toBe(560);
-  });
-
-  it("leaves scrollTop alone while the section is visible", () => {
-    const { scroller, resize } = setup({ top: 110, height: 120 });
-    resize(200);
-    expect(scroller.scrollTop).toBe(500);
   });
 });

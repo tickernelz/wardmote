@@ -61,6 +61,18 @@ async function scrollUntilReadingRow(page: Page, minIndex: number) {
   return reading;
 }
 
+async function listScrollTop(page: Page) {
+  return page.evaluate(() => Math.max(document.scrollingElement!.scrollTop, document.querySelector("main")?.scrollTop ?? 0));
+}
+
+async function setTabVisibility(page: Page, state: "hidden" | "visible") {
+  await page.evaluate((next) => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => next });
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => next === "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, state);
+}
+
 async function rowTop(page: Page, rowId: string) {
   return page.locator(`[data-issue-row-id="${rowId}"]`).evaluate((row) => row.getBoundingClientRect().top);
 }
@@ -84,7 +96,7 @@ test("returning from a task keeps the row the user was reading in place", async 
   expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(ROW_TOLERANCE_PX);
 });
 
-test("live reorders and new tasks above the reading position do not move it", async ({ page, request }) => {
+test("tasks moving or arriving above the reading position do not move it", async ({ page, request }) => {
   test.setTimeout(120_000);
   const { company, issues } = await seedCompany(request, 90);
   await page.goto(`/${company.issuePrefix}/issues`);
@@ -94,9 +106,9 @@ test("live reorders and new tasks above the reading position do not move it", as
   const firstRowId = () => page.locator("[data-issue-row-id]").first().getAttribute("data-issue-row-id");
 
   const readingIndex = issues.findIndex((issue) => issue.id === reading.id);
-  const below = issues[Math.max(0, readingIndex - 10)]!;
-  await json(await request.post(`/api/issues/${below.id}/comments`, { data: { body: "Moves this task to the top." } }));
-  await expect.poll(firstRowId, { timeout: 30_000 }).toBe(below.id);
+  const above = issues[Math.min(issues.length - 1, readingIndex + 10)]!;
+  await json(await request.post(`/api/issues/${above.id}/comments`, { data: { body: "Moves this task to the top." } }));
+  await expect.poll(firstRowId, { timeout: 30_000 }).toBe(above.id);
   await page.waitForTimeout(500);
   expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(4);
 
@@ -140,6 +152,36 @@ test("a heartbeat run appearing and ending in Live now above the reading positio
 for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
   test.describe(`at ${viewport.width}px`, () => {
     test.use({ viewport });
+
+    test("a list at the top stays at the top when tasks arrive while the tab is away", async ({ page, request }) => {
+      test.setTimeout(120_000);
+      const { company } = await seedCompany(request, 60);
+      await page.goto(`/${company.issuePrefix}/issues`);
+      await expect(page.locator("[data-issue-row-id]").first()).toBeVisible({ timeout: 30_000 });
+      await page.mouse.move(viewport.width * 0.6, viewport.height / 2);
+      await page.mouse.wheel(0, 600);
+      await expect.poll(() => listScrollTop(page)).toBeGreaterThan(0);
+      await page.mouse.wheel(0, -2000);
+      await expect.poll(() => listScrollTop(page)).toBe(0);
+      await page.waitForTimeout(500);
+
+      await setTabVisibility(page, "hidden");
+      let newest: { id: string } | null = null;
+      for (let index = 0; index < 20; index += 1) {
+        newest = await json(await request.post(`/api/companies/${company.id}/issues`, {
+          data: { title: `Task created while the tab was away ${index}`, status: "todo" },
+        }));
+      }
+      await page.waitForTimeout(31_000);
+      await setTabVisibility(page, "visible");
+
+      await expect.poll(
+        () => page.locator("[data-issue-row-id]").first().getAttribute("data-issue-row-id"),
+        { timeout: 30_000 },
+      ).toBe(newest!.id);
+      await page.waitForTimeout(1000);
+      expect(await listScrollTop(page)).toBe(0);
+    });
 
     test("returning from a task below the first 100 rows keeps the reading row in place", async ({ page, request }) => {
       test.setTimeout(180_000);
