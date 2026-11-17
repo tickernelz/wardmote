@@ -13,7 +13,13 @@ import type { GoogleWorkspaceToolRuntime } from "./runtime.js";
 
 const MISSING_ID = "wardmote-connection-test";
 
-const READ_PROBES: Record<GoogleWorkspaceService, { input: GoogleCallInput; missingIsOk: boolean }> = {
+interface ReadProbe {
+  input: GoogleCallInput;
+  missingIsOk: boolean;
+  malformedIdIsOk?: boolean;
+}
+
+const READ_PROBES: Record<GoogleWorkspaceService, ReadProbe> = {
   drive: { input: { method: "drive.about.get", fields: "user" }, missingIsOk: false },
   sheets: { input: { method: "sheets.spreadsheets.get", params: { spreadsheetId: MISSING_ID } }, missingIsOk: true },
   docs: { input: { method: "docs.documents.get", params: { documentId: MISSING_ID } }, missingIsOk: true },
@@ -23,9 +29,9 @@ const READ_PROBES: Record<GoogleWorkspaceService, { input: GoogleCallInput; miss
   forms: { input: { method: "forms.forms.get", params: { formId: MISSING_ID } }, missingIsOk: true },
   tasks: { input: { method: "tasks.tasklists.list", params: { maxResults: 1 } }, missingIsOk: false },
   chat: { input: { method: "chat.spaces.list", params: { pageSize: 1 } }, missingIsOk: false },
-  meet: { input: { method: "meet.spaces.get", params: { name: `spaces/${MISSING_ID}` } }, missingIsOk: true },
-  people: { input: { method: "people.people.get", params: { resourceName: "people/me", personFields: "names" } }, missingIsOk: false },
-  script: { input: { method: "script.projects.get", params: { scriptId: MISSING_ID } }, missingIsOk: true },
+  meet: { input: { method: "meet.conferenceRecords.list", params: { pageSize: 1 } }, missingIsOk: false },
+  people: { input: { method: "people.people.connections.list", params: { resourceName: "people/me", personFields: "names", pageSize: 1 } }, missingIsOk: false },
+  script: { input: { method: "script.projects.get", params: { scriptId: MISSING_ID } }, missingIsOk: true, malformedIdIsOk: true },
 };
 
 const WRITE_PROBES: Partial<Record<GoogleWorkspaceService, GoogleCallInput>> = {
@@ -65,13 +71,18 @@ async function writeVerdict(runtime: GoogleWorkspaceToolRuntime, service: Google
   return { method: input.method, action: decision.action, reason: decision.error?.message ?? null };
 }
 
+function testItemRejected(probe: ReadProbe, error: unknown): boolean {
+  if (!probe.missingIsOk || !(error instanceof GoogleWorkspaceError) || error.code !== "google_error") return false;
+  if (error.details.status === 404) return true;
+  return probe.malformedIdIsOk === true && error.details.status === 400 && error.details.reason === "INVALID_ARGUMENT";
+}
+
 async function testService(runtime: GoogleWorkspaceToolRuntime, service: GoogleWorkspaceService, tier: GoogleWorkspaceTier): Promise<GoogleWorkspaceServiceTestResult> {
   const probe = READ_PROBES[service];
   try {
     await executeGoogleCall({ ...runtime, policy: async () => ({ allowed: true }) }, probe.input);
   } catch (error) {
-    const missing = error instanceof GoogleWorkspaceError && error.code === "google_error" && error.details.status === 404;
-    if (!(probe.missingIsOk && missing)) return failure(service, tier, probe.input.method, error);
+    if (!testItemRejected(probe, error)) return failure(service, tier, probe.input.method, error);
   }
   const write = tier === "read" ? null : await writeVerdict(runtime, service).catch(() => null);
   return { service, tier, ok: true, method: probe.input.method, code: null, message: null, hint: null, enableUrl: null, write };
