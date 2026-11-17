@@ -17,6 +17,7 @@ import {
   toolPolicies,
   toolProfileBindings,
   toolProfiles,
+  toolRateLimitCounters,
 } from "@tickernelz/wardmote-db";
 import { googleWorkspaceScopesFor, type GoogleWorkspaceService, type GoogleWorkspaceTier } from "@tickernelz/wardmote-shared";
 import { toolAccessService } from "../services/tool-access.js";
@@ -156,6 +157,100 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     expect(request.previewMarkdown).toContain("**Spreadsheet Id:** sheet-123");
   });
 
+  it("runs a repeated read again instead of returning the first answer", async () => {
+    const f = await fixture();
+    let lists = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ labels: [{ id: `L${++lists}`, name: "Inbox" }] }));
+    const run = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.list", params: { userId: "me" } } });
+
+    await run();
+    const second = await run();
+
+    expect(lists).toBe(2);
+    expect(second.status).toBe("completed");
+    expect(second.result).toMatchObject({ data: { structuredContent: { data: { labels: [{ id: "L2" }] } } } });
+  });
+
+  it("returns the first result for an identical change without calling Google again", async () => {
+    const f = await fixture();
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ id: `L${++creates}`, name: "Reports" }));
+    const run = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "Reports" } } });
+
+    const first = await run();
+    const second = await run();
+
+    expect(creates).toBe(1);
+    expect(first.status).toBe("completed");
+    expect(second.status).toBe("replayed");
+    expect(second.invocationId).toBe(first.invocationId);
+    expect(second.result).toEqual(first.result);
+    expect(second.result).toMatchObject({ data: { structuredContent: { data: { id: "L1" } } } });
+  });
+
+  it("reports a Google failure with a client status and does not send the identical change again", async () => {
+    const f = await fixture();
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => {
+      creates += 1;
+      return googleError(400, "invalidArgument", "Invalid label name");
+    });
+    const run = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "bad" } } });
+
+    await expect(run()).rejects.toMatchObject({ status: 424, reasonCode: "google_error", details: { code: "google_error", status: 400 } });
+    await expect(run()).rejects.toMatchObject({ status: 409, reasonCode: "replayed_failure", details: { status: "failed" } });
+    expect(creates).toBe(1);
+  });
+
+  it("decides an identical call again after a policy denial in the same run", async () => {
+    const f = await fixture();
+    let reads = 0;
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/L1$/, () => Response.json({ id: "L1", name: `Inbox ${++reads}` }));
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ id: `C${++creates}`, name: "Reports" }));
+    const [block] = await db.insert(toolPolicies).values({ companyId: f.company.id, name: "Block Google", policyType: "block", selectors: {}, priority: 10 }).returning();
+    const read = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "L1" } } });
+    const change = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "Reports" } } });
+
+    await expect(read()).rejects.toMatchObject({ status: 403 });
+    await expect(change()).rejects.toMatchObject({ status: 403 });
+    await db.delete(toolPolicies).where(eq(toolPolicies.id, block.id));
+
+    expect((await read()).status).toBe("completed");
+    const created = await change();
+    expect(created.status).toBe("completed");
+    expect((await change()).status).toBe("replayed");
+    expect({ reads, creates }).toEqual({ reads: 1, creates: 1 });
+  });
+
+  it("decides an identical change again after a rate limit in the same run", async () => {
+    const f = await fixture();
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/L1$/, () => Response.json({ id: "L1", name: "Inbox" }));
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ id: `C${++creates}`, name: "Reports" }));
+    await db.insert(toolPolicies).values({ companyId: f.company.id, name: "One Google call", policyType: "rate_limit", selectors: {}, config: { limit: 1, windowSeconds: 3600 }, priority: 10 });
+    const change = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "Reports" } } });
+
+    await f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "L1" } } });
+    await expect(change()).rejects.toMatchObject({ status: 429 });
+    await db.delete(toolRateLimitCounters).where(eq(toolRateLimitCounters.companyId, f.company.id));
+
+    expect((await change()).status).toBe("completed");
+    expect(creates).toBe(1);
+  });
+
+  it("returns an unknown argument as a validation error instead of a policy denial", async () => {
+    const f = await fixture();
+
+    await expect(f.gateway.executeTool({
+      sessionToken: f.session.token,
+      tool: f.call!.name,
+      parameters: { method: "gmail.users.labels.list", params: { userId: "me", bogus: true } },
+    })).rejects.toMatchObject({ status: 400, reasonCode: "google_validation", details: { code: "validation", pointer: "/params/bogus" } });
+    const invocations = await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, f.company.id));
+    expect(invocations.filter((row) => row.policyDecision === "deny")).toEqual([]);
+  });
+
   it("tells the agent a missing Google scope by its typed code", async () => {
     const f = await fixture();
     await f.access.configureGoogleWorkspace(f.connectionId, f.company.id, { capabilities: { gmail: "delete_share", calendar: "read" }, domain: "example.com" }, actor);
@@ -169,14 +264,18 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
 
   it("answers a Google failure on the run's MCP gateway as a tool error, also when the same call repeats", async () => {
     const f = await fixture();
-    f.google.override(/\/gmail\/v1\/users\/me\/messages\/bad-id/, () => googleError(400, "badRequest", "Request contains an invalid argument."));
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => {
+      creates += 1;
+      return googleError(400, "badRequest", "Request contains an invalid argument.");
+    });
     vi.stubEnv("WARDMOTE_API_URL", "https://wardmote.example.test");
     const [server] = await buildWardmoteRuntimeMcpServers({ db, agent: f.agent, runId: f.binding.runId });
     const app = express().use(express.json()).use(mcpGatewayProtocolRoutes(f.gateway));
     const call = () => supertest(app)
       .post(new URL(server!.url).pathname)
       .set("authorization", `Bearer ${server!.token}`)
-      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: f.call!.name, arguments: { method: "gmail.users.messages.get", params: { userId: "me", id: "bad-id" } } } });
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: f.call!.name, arguments: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "bad" } } } });
 
     const first = await call();
     expect(first.status).toBe(200);
@@ -188,8 +287,27 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
 
     const repeated = await call();
     expect(repeated.status).toBe(200);
-    expect(repeated.body.result).toMatchObject({ isError: true, structuredContent: { code: "google_error", replayed: true } });
+    expect(repeated.body.result).toMatchObject({ isError: true, structuredContent: { reasonCode: "replayed_failure", status: "failed", errorCode: "google_error" } });
     expect(repeated.body.result.structuredContent.message).toContain("Request contains an invalid argument.");
+    expect(creates).toBe(1);
+  });
+
+  it("names a Google failure reasonCode by its typed code without a doubled prefix", async () => {
+    const f = await fixture();
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/missing/, () => googleError(400, "failedPrecondition", "Precondition check failed."));
+    await expect(f.gateway.executeTool({
+      sessionToken: f.session.token,
+      tool: f.call!.name,
+      parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "missing" } },
+      idempotencyKey: randomUUID(),
+    })).rejects.toMatchObject({ reasonCode: "google_error", details: { code: "google_error", reason: "failedPrecondition" } });
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/disabled/, () => googleError(403, "SERVICE_DISABLED", "Gmail API has not been used in project 1 before or it is disabled."));
+    await expect(f.gateway.executeTool({
+      sessionToken: f.session.token,
+      tool: f.call!.name,
+      parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "disabled" } },
+      idempotencyKey: randomUUID(),
+    })).rejects.toMatchObject({ reasonCode: "google_api_not_enabled", details: { code: "api_not_enabled" } });
   });
 
   it("revokes the Google token when the authorization is removed, even if Google refuses", async () => {

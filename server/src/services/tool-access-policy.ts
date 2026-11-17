@@ -287,6 +287,12 @@ function trustRuleIsActive(policy: typeof toolPolicies.$inferSelect, now = new D
   return true;
 }
 
+function endedByPolicyBeforeExecution(invocation: typeof toolInvocations.$inferSelect): boolean {
+  return invocation.startedAt === null
+    && invocation.approvalState === "not_required"
+    && (invocation.policyDecision === "deny" || invocation.policyDecision === "rate_limited");
+}
+
 function sideEffectIdempotencyKey(ctx: ToolAccessContext, argumentsHash: string): string {
   return `side_effect:${sha256({
     companyId: ctx.companyId,
@@ -1590,7 +1596,12 @@ export function toolAccessPolicyService(db: Db) {
         eq(toolInvocations.companyId, input.companyId),
         eq(toolInvocations.idempotencyKey, idempotencyKey),
       ));
-      if (existing) return { invocation: existing, replayed: true, actionRequest: null };
+      if (existing && !endedByPolicyBeforeExecution(existing)) return { invocation: existing, replayed: true, actionRequest: null };
+      if (existing) {
+        await db.update(toolInvocations)
+          .set({ idempotencyKey: null, updatedAt: new Date() })
+          .where(and(eq(toolInvocations.id, existing.id), eq(toolInvocations.idempotencyKey, idempotencyKey)));
+      }
     }
     const status = accessDecision.decision === "allow"
       ? "authorized"

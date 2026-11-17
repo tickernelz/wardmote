@@ -242,8 +242,9 @@ const GOOGLE_ERROR_STATUS: Record<GoogleWorkspaceError["code"], number> = {
   api_not_enabled: 424,
   auth_expired: 401,
   rate_limited: 429,
-  google_error: 502,
+  google_error: 424,
 };
+const REPLAYED_FAILURE_STATUSES = new Set(["failed", "denied", "timed_out", "rate_limited"]);
 const ACTIVE_GATEWAY_RUN_STATUSES = new Set(["running"]);
 // A tool listing decides access for every tool in the company. The decisions
 // of one listing share a read cache, so this cap only limits how many of them
@@ -371,18 +372,14 @@ export class ToolGatewayHttpError extends Error {
   }
 }
 
-const FAILED_INVOCATION_STATUSES: ReadonlySet<string> = new Set(["failed", "timed_out", "rate_limited", "denied", "cancelled"]);
-
-function replayedInvocationFailure(invocation: typeof toolInvocations.$inferSelect): ToolGatewayHttpError | null {
-  if (!FAILED_INVOCATION_STATUSES.has(invocation.status)) return null;
-  const reasonCode = invocation.errorCode ?? "tool_execution_failed";
-  const message = `${invocation.errorMessage ?? "The call failed"} (Not sent again: this exact call already failed in this run.)`;
-  return new ToolGatewayHttpError(409, message, reasonCode, {
-    invocationId: invocation.id,
-    invocationStatus: invocation.status,
-    replayed: true,
-    ...(reasonCode.startsWith("google_") ? { code: reasonCode.slice("google_".length), message } : {}),
-  });
+function replayedFailure(invocation: typeof toolInvocations.$inferSelect): ToolGatewayHttpError | null {
+  if (!REPLAYED_FAILURE_STATUSES.has(invocation.status)) return null;
+  return new ToolGatewayHttpError(
+    409,
+    `This identical call already ended as ${invocation.status} in this run and is not sent again: ${invocation.errorMessage ?? "no message"}`,
+    "replayed_failure",
+    { invocationId: invocation.id, status: invocation.status, errorCode: invocation.errorCode ?? null },
+  );
 }
 
 interface ExecuteGatewayToolInput {
@@ -5777,7 +5774,8 @@ export function createToolGatewayService(
 
   function googleToolError(error: unknown): unknown {
     if (!(error instanceof GoogleWorkspaceError)) return error;
-    return new ToolGatewayHttpError(GOOGLE_ERROR_STATUS[error.code], `${error.message}. ${error.hint}`, `google_${error.code}`, {
+    const reasonCode = error.code === "google_error" ? error.code : `google_${error.code}`;
+    return new ToolGatewayHttpError(GOOGLE_ERROR_STATUS[error.code], `${error.message}. ${error.hint}`, reasonCode, {
       code: error.code,
       message: error.message,
       hint: error.hint,
@@ -5790,41 +5788,45 @@ export function createToolGatewayService(
     tool: ToolGatewayDescriptor,
     parameters: unknown,
   ): Promise<{
-    decision: "require_approval" | "deny";
-    reasonCode: "requires_approval_policy" | "deny_policy_block";
-    explanation: string;
-    policyExplanation: Record<string, unknown>;
+    sideEffecting: boolean;
+    policy: {
+      decision: "require_approval" | "deny";
+      reasonCode: "requires_approval_policy" | "deny_policy_block";
+      explanation: string;
+      policyExplanation: Record<string, unknown>;
+    } | null;
   } | null> {
     const { connection } = await resolveConnectedRemoteTool(session, tool);
     if (!isGoogleWorkspaceConnection(connection)) return null;
     const grant = await resolveConnectionGrant(session, connection);
+    let verdict: Awaited<ReturnType<typeof decideGoogleWorkspaceTool>>;
     try {
-      const verdict = await decideGoogleWorkspaceTool(googleRuntimeFor(session, connection, grant), tool.upstreamToolName ?? "", parameters);
-      if (!verdict || verdict.action === "allow" || !verdict.error) return null;
-      if (verdict.action === "require_approval") {
-        return {
+      verdict = await decideGoogleWorkspaceTool(googleRuntimeFor(session, connection, grant), tool.upstreamToolName ?? "", parameters);
+    } catch (error) {
+      throw googleToolError(error);
+    }
+    const sideEffecting = verdict !== null && verdict.classes.some((value) => value !== "read");
+    if (!verdict || verdict.action === "allow" || !verdict.error) return { sideEffecting, policy: null };
+    if (verdict.action === "require_approval") {
+      return {
+        sideEffecting,
+        policy: {
           decision: "require_approval",
           reasonCode: "requires_approval_policy",
           explanation: [verdict.error.message, ...verdict.reasons].join(". "),
           policyExplanation: { google: { code: verdict.error.code, ...googleApprovalSnapshot(verdict) } },
-        };
-      }
-      return {
+        },
+      };
+    }
+    return {
+      sideEffecting,
+      policy: {
         decision: "deny",
         reasonCode: "deny_policy_block",
         explanation: `${verdict.error.message}. ${verdict.error.hint}`,
         policyExplanation: { google: { code: verdict.error.code, classes: verdict.classes } },
-      };
-    } catch (error) {
-      if (!(error instanceof GoogleWorkspaceError)) throw error;
-      const pointer = typeof error.details.pointer === "string" ? ` (${error.details.pointer})` : "";
-      return {
-        decision: "deny",
-        reasonCode: "deny_policy_block",
-        explanation: `${error.message}${pointer}. ${error.hint}`,
-        policyExplanation: { google: { code: error.code } },
-      };
-    }
+      },
+    };
   }
 
   const restPreparationListings = new Map<string, { expiresAt: number; tools: Promise<ToolGatewayDescriptor[]> }>();
@@ -10453,7 +10455,7 @@ export function createToolGatewayService(
           })
           .where(eq(toolInvocations.id, invocationId));
       } else {
-        const decisionInput = policyInputForTool({
+        let decisionInput = policyInputForTool({
           session,
           tool,
           parameters: effectiveParameters,
@@ -10470,13 +10472,17 @@ export function createToolGatewayService(
           && isGoogleWorkspaceToolName(tool.upstreamToolName ?? "")
         ) {
           const google = await googleCallDecision(session, tool, effectiveParameters);
-          if (google?.decision === "deny" || (google && accessDecision.allowed)) {
-            accessDecision = { ...accessDecision, allowed: false, ...google };
-          } else if (google) {
+          if (google && !google.sideEffecting) {
+            decisionInput = { ...decisionInput, request: { ...decisionInput.request, sideEffecting: false } };
+          }
+          const googlePolicy = google?.policy ?? null;
+          if (googlePolicy?.decision === "deny" || (googlePolicy && accessDecision.allowed)) {
+            accessDecision = { ...accessDecision, allowed: false, ...googlePolicy };
+          } else if (googlePolicy) {
             accessDecision = {
               ...accessDecision,
-              explanation: `${accessDecision.explanation} ${google.explanation}`,
-              policyExplanation: { ...(accessDecision.policyExplanation ?? {}), ...google.policyExplanation },
+              explanation: `${accessDecision.explanation} ${googlePolicy.explanation}`,
+              policyExplanation: { ...(accessDecision.policyExplanation ?? {}), ...googlePolicy.policyExplanation },
             };
           }
         }
@@ -10490,9 +10496,10 @@ export function createToolGatewayService(
         const retryingSlackRateLimit = recorded.replayed && accessDecision.allowed && tool.providerType === "wardmote_slack_chat" && session.agentId && session.runId && session.issueId
           ? await claimSlackRateLimitRetry(db, { companyId: session.companyId, agentId: session.agentId, runId: session.runId, issueId: session.issueId, endpointId: String(asRecord(tool.providerMetadata)?.endpointId ?? ""), identityContextId: session.identityContextId }, invocationId)
           : false;
+        const slackSettlesOwnFailures = tool.providerType === "wardmote_slack_chat";
+        const failure = recorded.replayed && !retryingSlackRateLimit && !slackSettlesOwnFailures ? replayedFailure(recorded.invocation) : null;
+        if (failure) throw failure;
         if (recorded.replayed && !retryingSlackRateLimit) {
-          const failure = replayedInvocationFailure(recorded.invocation);
-          if (failure) throw failure;
           await writeAudit({
             session,
             companyId: session.companyId,
@@ -10513,7 +10520,7 @@ export function createToolGatewayService(
             invocationId,
             status: "replayed" as const,
             tool: tool.name,
-            result: recorded.invocation.resultSummary ?? null,
+            result: storedInvocationResult(recorded.invocation),
           };
         }
         if (accessDecision.decision === "require_approval") {
@@ -10981,7 +10988,7 @@ export function createToolGatewayService(
       invocationId = recorded.invocation.id;
 
       if (recorded.replayed) {
-        const failure = replayedInvocationFailure(recorded.invocation);
+        const failure = replayedFailure(recorded.invocation);
         if (failure) throw failure;
         return recorded.invocation.resultSummary;
       }
