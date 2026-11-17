@@ -5740,7 +5740,12 @@ export function createToolGatewayService(
     session: ToolGatewaySession,
     tool: ToolGatewayDescriptor,
     parameters: unknown,
-  ): Promise<{ decision: "require_approval" | "deny"; reasonCode: string; explanation: string } | null> {
+  ): Promise<{
+    decision: "require_approval" | "deny";
+    reasonCode: "requires_approval_policy" | "deny_policy_block";
+    explanation: string;
+    policyExplanation: Record<string, unknown>;
+  } | null> {
     const { connection } = await resolveConnectedRemoteTool(session, tool);
     if (!isGoogleWorkspaceConnection(connection)) return null;
     const grant = await resolveConnectionGrant(session, connection);
@@ -5748,13 +5753,28 @@ export function createToolGatewayService(
       const verdict = await decideGoogleWorkspaceTool(googleRuntimeFor(session, connection, grant), tool.upstreamToolName ?? "", parameters);
       if (!verdict || verdict.action === "allow" || !verdict.error) return null;
       if (verdict.action === "require_approval") {
-        return { decision: "require_approval", reasonCode: "google_approval_required", explanation: [verdict.error.message, ...verdict.reasons].join(". ") };
+        return {
+          decision: "require_approval",
+          reasonCode: "requires_approval_policy",
+          explanation: [verdict.error.message, ...verdict.reasons].join(". "),
+          policyExplanation: { google: { code: verdict.error.code, classes: verdict.classes, externalRecipients: verdict.externalRecipients, recipientsUnknown: verdict.recipientsUnknown } },
+        };
       }
-      return { decision: "deny", reasonCode: `google_${verdict.error.code}`, explanation: `${verdict.error.message}. ${verdict.error.hint}` };
+      return {
+        decision: "deny",
+        reasonCode: "deny_policy_block",
+        explanation: `${verdict.error.message}. ${verdict.error.hint}`,
+        policyExplanation: { google: { code: verdict.error.code, classes: verdict.classes } },
+      };
     } catch (error) {
       if (!(error instanceof GoogleWorkspaceError)) throw error;
       const pointer = typeof error.details.pointer === "string" ? ` (${error.details.pointer})` : "";
-      return { decision: "deny", reasonCode: `google_${error.code}`, explanation: `${error.message}${pointer}. ${error.hint}` };
+      return {
+        decision: "deny",
+        reasonCode: "deny_policy_block",
+        explanation: `${error.message}${pointer}. ${error.hint}`,
+        policyExplanation: { google: { code: error.code } },
+      };
     }
   }
 
