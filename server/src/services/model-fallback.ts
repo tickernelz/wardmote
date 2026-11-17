@@ -230,10 +230,7 @@ export async function loadModelCooldowns(
   return cooldowns;
 }
 
-/**
- * Records that a selector is cooling down for the whole company, keeping the later expiry and clearing a probe release.
- * probeAfter is when probing may start; null when the provider named its own wait.
- */
+/** Records a company-wide cooldown (later expiry wins, clears a probe release); probeAfter null means never probe. */
 export async function recordModelCooldown(
   db: Db,
   input: {
@@ -337,10 +334,7 @@ export async function readProbeableModelCooldown(
   return row ? toProbeable(row) : null;
 }
 
-/**
- * Ends a cooldown early after successful probes, only when no cooldown write happened since
- * observedUpdatedAt: a real run failure during the probes keeps the cooldown.
- */
+/** Ends a cooldown after successful probes unless a cooldown write happened since observedUpdatedAt. */
 export async function releaseModelCooldown(
   db: Db,
   input: { companyId: string; selector: string; observedUpdatedAt: Date; now: Date },
@@ -396,10 +390,7 @@ function probationFor(
   return { selector, releasedAt, firstEventTimeoutSec: MODEL_FALLBACK_PROBATION_FIRST_EVENT_TIMEOUT_SEC };
 }
 
-/**
- * Rewrites the run's execution config to start on the selected model with the rest as OMP's chain.
- * A fresh wake starts on the first chain model that is not cooling down; a retry lineage keeps its forced model.
- */
+/** Starts the run on its lineage's forced model, else the first chain model not cooling down, with the rest as OMP's chain. */
 export async function prepareRunModelFallback(input: {
   db: Db;
   companyId: string;

@@ -1,10 +1,19 @@
 import os from "node:os";
 import path from "node:path";
 import type { AdapterModelProbeInput, AdapterModelProbeResult } from "@tickernelz/wardmote-adapter-utils";
-import { ensurePathInEnv, parseObject, runChildProcess } from "@tickernelz/wardmote-adapter-utils/server-utils";
+import {
+  ensurePathInEnv,
+  isForbiddenConfigEnvKey,
+  isWardmoteRuntimeEnvKey,
+  parseObject,
+  runChildProcess,
+  sanitizeInheritedWardmoteEnv,
+} from "@tickernelz/wardmote-adapter-utils/server-utils";
 import { prepareOmpRuntimeConfig, resolveOmpCommand } from "./config.js";
+import { applyPreparedOmpAgentEnvironment } from "./execute.js";
 
-export const OMP_MODEL_PROBE_TIMEOUT_SEC = 15;
+/** Matches the server's probation first-event limit: a model slower than the next run would tolerate does not pass. */
+export const OMP_MODEL_PROBE_TIMEOUT_SEC = 60;
 
 function stringEnv(value: unknown): Record<string, string> {
   const env: Record<string, string> = {};
@@ -12,6 +21,15 @@ function stringEnv(value: unknown): Record<string, string> {
     if (typeof item === "string") env[key] = item;
   }
   return env;
+}
+
+function probeEnv(config: Record<string, unknown>): Record<string, string> {
+  const env = stringEnv(sanitizeInheritedWardmoteEnv(process.env));
+  for (const [key, value] of Object.entries(stringEnv(config.env))) {
+    if (isForbiddenConfigEnvKey(key) || isWardmoteRuntimeEnvKey(key)) continue;
+    env[key] = value;
+  }
+  return stringEnv(ensurePathInEnv(env));
 }
 
 function stringList(value: unknown): string[] {
@@ -51,21 +69,15 @@ function readBenchResult(stdout: string): { ok: boolean; costUsd: number | null;
   return { ok, costUsd: finite(attempt.cost), error: ok ? null : error ?? "the model returned no output token" };
 }
 
-/** Sends one prompt with a one-token output cap through `omp bench`, under the agent's OMP command, profile, agent dir, env and config files. */
+/** One-token `omp bench` call under the agent's OMP command, profile, agent dir, sanitized env and config files. */
 export async function probeOmpModel(input: AdapterModelProbeInput): Promise<AdapterModelProbeResult> {
   const config = parseObject(input.config);
   const startedAt = Date.now();
   const prepared = await prepareOmpRuntimeConfig(config);
   try {
-    const env = stringEnv(ensurePathInEnv({ ...process.env, ...stringEnv(config.env) }));
-    if (prepared.materialized || (prepared.profileSpecified && prepared.profile === null)) {
-      env.OMP_PROFILE = "";
-      env.PI_PROFILE = "";
-    } else if (prepared.profile) {
-      env.OMP_PROFILE = prepared.profile;
-    }
-    const agentDir = prepared.agentDir ?? process.env.WARDMOTE_OMP_AGENT_DIR?.trim();
-    if (agentDir) env.PI_CODING_AGENT_DIR = agentDir;
+    const env = probeEnv(config);
+    applyPreparedOmpAgentEnvironment(env, prepared);
+    if (prepared.profile && !prepared.materialized) env.OMP_PROFILE = prepared.profile;
     const configured = stringList(config.configFiles);
     const configFiles = configured.length ? configured : globalList(process.env.WARDMOTE_OMP_CONFIG_FILES);
     if (configFiles.length) env.PI_CONFIG_FILES = configFiles.join(path.delimiter);

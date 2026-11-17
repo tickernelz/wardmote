@@ -16,6 +16,7 @@ beforeAll(async () => {
   await fs.writeFile(command, `#!/bin/sh
 printf '%s\\n' "$*" > "$PROBE_LOG"
 printf 'profile=%s config=%s\\n' "$OMP_PROFILE" "$PI_CONFIG_FILES" >> "$PROBE_LOG"
+printf 'api=%s cmd=%s private=%s extra=%s\\n' "$WARDMOTE_API_KEY" "$WARDMOTE_CMD" "$WARDMOTE_AGENT_PRIVATE_KEY" "$PROBE_EXTRA" >> "$PROBE_LOG"
 printf '%s' "$PROBE_REPORT"
 exit "\${PROBE_EXIT:-0}"
 `, { mode: 0o755 });
@@ -39,6 +40,25 @@ describe("probeOmpModel", () => {
     const log = await fs.readFile(path.join(dir, "log"), "utf8");
     expect(log).toContain("bench fake/m1 --runs 1 --par 1 --max-tokens 1 --prompt ping --json");
     expect(log).toContain(`profile=work config=/etc/a.yml${path.delimiter}/etc/b.yml`);
+  });
+
+  it("keeps the server's Wardmote credentials and agent identity out of the probe process", async () => {
+    const saved = { api: process.env.WARDMOTE_API_KEY, cmd: process.env.WARDMOTE_CMD };
+    process.env.WARDMOTE_API_KEY = "server-key";
+    process.env.WARDMOTE_CMD = "server-cmd";
+    try {
+      await probeOmpModel({
+        config: config({ PROBE_REPORT: okReport, PROBE_EXTRA: "kept", WARDMOTE_API_KEY: "config-key", WARDMOTE_AGENT_PRIVATE_KEY: "pem" }),
+        selector: "fake/m1",
+      });
+    } finally {
+      if (saved.api === undefined) delete process.env.WARDMOTE_API_KEY;
+      else process.env.WARDMOTE_API_KEY = saved.api;
+      if (saved.cmd === undefined) delete process.env.WARDMOTE_CMD;
+      else process.env.WARDMOTE_CMD = saved.cmd;
+    }
+    const log = await fs.readFile(path.join(dir, "log"), "utf8");
+    expect(log).toContain("api= cmd= private= extra=kept");
   });
 
   it("reports the provider error when the attempt failed", async () => {

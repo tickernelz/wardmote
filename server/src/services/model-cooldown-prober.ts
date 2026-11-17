@@ -25,7 +25,8 @@ export const MODEL_COOLDOWN_PROBE_JITTER = 0.2;
 export const MODEL_COOLDOWN_PROBE_SUCCESSES = 2;
 /** Probes one company and selector may send in any rolling hour. */
 export const MODEL_COOLDOWN_PROBE_HOURLY_LIMIT = 20;
-export const MODEL_COOLDOWN_PROBE_CONCURRENCY = 6;
+/** One omp bench process holds 350-385 MB RSS; two fit the smallest host (integron, about 2 GB available). */
+export const MODEL_COOLDOWN_PROBE_CONCURRENCY = 2;
 export const MODEL_COOLDOWN_RELEASED_EVENT = "model.cooldown_released";
 export const MODEL_COOLDOWN_RELEASED_ACTION = "issue.run_model_cooldown_released";
 const HOUR_MS = 60 * 60_000;

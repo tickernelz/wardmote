@@ -76,8 +76,10 @@ waiting out the rest of its cooldown:
 - The probe is `omp bench <selector> --runs 1 --par 1 --max-tokens 1 --prompt ping --json` through the adapter's
   `probeModel`, with the source run's agent config resolved like a run (secrets included), so endpoint and
   credentials match the run. Measured: 2.1 s and $0.0000123 on `sub2api-deepseek/deepseek-flash`, 2.1 s and $0.0028
-  on `sub2api-claude/claude-opus-5-5`; `omp -p` took 88.9 s and was rejected. A failing provider costs at most
-  the 15 s probe timeout (OMP's HTTP client retries 503s inside that window).
+  on `sub2api-claude/claude-opus-5-5`; `omp -p` took 88.9 s and was rejected. Later runs of the same deepseek-flash
+  probe measured 17-88 s TTFT and 28-51 output tokens (a reasoning model ignores the one-token cap for its thinking),
+  so the probe timeout is 60 s, the same as the probation first-event limit. A failing provider costs about 32 s
+  (OMP's HTTP client retries 503s). One probe process: 315-385 MB RSS, 1.2-1.5 s CPU; at most 2 run at once.
 - Schedule, success rule, hourly limit, release compare-and-set on `updated_at`, events and the 10 min probation with a
   60 s first-event limit are described in `docs/fork/OPERATIONS.md` (Fallback models).
 - The prober is in-process (`server/src/services/model-cooldown-prober.ts`), one per database; streak and hourly
