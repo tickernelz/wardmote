@@ -165,6 +165,23 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     expect(second.result).toMatchObject({ data: { structuredContent: { data: { labels: [{ id: "L2" }] } } } });
   });
 
+  it("returns the first result for an identical change without calling Google again", async () => {
+    const f = await fixture();
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ id: `L${++creates}`, name: "Reports" }));
+    const run = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "Reports" } } });
+
+    const first = await run();
+    const second = await run();
+
+    expect(creates).toBe(1);
+    expect(first.status).toBe("completed");
+    expect(second.status).toBe("replayed");
+    expect(second.invocationId).toBe(first.invocationId);
+    expect(second.result).toEqual(first.result);
+    expect(second.result).toMatchObject({ data: { structuredContent: { data: { id: "L1" } } } });
+  });
+
   it("reports a Google failure with a client status and does not send the identical change again", async () => {
     const f = await fixture();
     let creates = 0;
