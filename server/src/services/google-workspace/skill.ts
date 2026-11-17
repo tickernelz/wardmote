@@ -51,8 +51,9 @@ connection's own Google grant; you never see a Google token.
   call to avoid approval.
 - A call that changes something runs once per run: repeating it with the same
   arguments returns the first result, or its failure, without calling Google
-  again. A read runs again, unless the identical read was denied or rate
-  limited earlier in the run.
+  again. A read always runs again. A call the policy denied or rate limited
+  never reached Google, so repeating it is decided again. A read that waited
+  for approval returns its approved result when repeated in the same task.
 - After \`approval_required\`, wait for the approval card; do not retry.
 - Errors are typed: \`validation\` (fix the field at \`pointer\`),
   \`capability_off\`, \`out_of_scope\`, \`scope_missing\` (the owner must change

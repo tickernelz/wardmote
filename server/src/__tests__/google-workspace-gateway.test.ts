@@ -15,6 +15,7 @@ import {
   toolPolicies,
   toolProfileBindings,
   toolProfiles,
+  toolRateLimitCounters,
 } from "@tickernelz/wardmote-db";
 import { googleWorkspaceScopesFor, type GoogleWorkspaceService, type GoogleWorkspaceTier } from "@tickernelz/wardmote-shared";
 import { toolAccessService } from "../services/tool-access.js";
@@ -193,6 +194,43 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
 
     await expect(run()).rejects.toMatchObject({ status: 424, reasonCode: "google_google_error", details: { code: "google_error", status: 400 } });
     await expect(run()).rejects.toMatchObject({ status: 409, reasonCode: "replayed_failure", details: { status: "failed" } });
+    expect(creates).toBe(1);
+  });
+
+  it("decides an identical call again after a policy denial in the same run", async () => {
+    const f = await fixture();
+    let reads = 0;
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/L1$/, () => Response.json({ id: "L1", name: `Inbox ${++reads}` }));
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ id: `C${++creates}`, name: "Reports" }));
+    const [block] = await db.insert(toolPolicies).values({ companyId: f.company.id, name: "Block Google", policyType: "block", selectors: {}, priority: 10 }).returning();
+    const read = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "L1" } } });
+    const change = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "Reports" } } });
+
+    await expect(read()).rejects.toMatchObject({ status: 403 });
+    await expect(change()).rejects.toMatchObject({ status: 403 });
+    await db.delete(toolPolicies).where(eq(toolPolicies.id, block.id));
+
+    expect((await read()).status).toBe("completed");
+    const created = await change();
+    expect(created.status).toBe("completed");
+    expect((await change()).status).toBe("replayed");
+    expect({ reads, creates }).toEqual({ reads: 1, creates: 1 });
+  });
+
+  it("decides an identical change again after a rate limit in the same run", async () => {
+    const f = await fixture();
+    let creates = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/labels\/L1$/, () => Response.json({ id: "L1", name: "Inbox" }));
+    f.google.override(/\/gmail\/v1\/users\/me\/labels$/, () => Response.json({ id: `C${++creates}`, name: "Reports" }));
+    await db.insert(toolPolicies).values({ companyId: f.company.id, name: "One Google call", policyType: "rate_limit", selectors: {}, config: { limit: 1, windowSeconds: 3600 }, priority: 10 });
+    const change = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "Reports" } } });
+
+    await f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.get", params: { userId: "me", id: "L1" } } });
+    await expect(change()).rejects.toMatchObject({ status: 429 });
+    await db.delete(toolRateLimitCounters).where(eq(toolRateLimitCounters.companyId, f.company.id));
+
+    expect((await change()).status).toBe("completed");
     expect(creates).toBe(1);
   });
 
