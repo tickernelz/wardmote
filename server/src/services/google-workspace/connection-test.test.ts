@@ -66,6 +66,49 @@ describe("testGoogleWorkspaceConnection", () => {
     expect(result.services[1]).toMatchObject({ service: "tasks", ok: true });
   });
 
+  it("checks Contacts and Meet without the profile scope or a test ID", async () => {
+    const { google, runtime } = runtimeFor({ meet: "read", people: "read" });
+    google.override(/people\.googleapis\.com\/v1\/people\/me\?/, () =>
+      json({ error: { code: 403, message: "The caller does not have permission to request people/me. Requires one of the following scopes: [profile].", status: "PERMISSION_DENIED" } }, 403),
+    );
+    google.override(/meet\.googleapis\.com\/v2\/spaces\//, () => json({ error: { code: 400, message: "Request contains an invalid argument.", status: "INVALID_ARGUMENT" } }, 400));
+    const result = await testGoogleWorkspaceConnection(runtime);
+    expect(result.services).toMatchObject([{ service: "meet", ok: true }, { service: "people", ok: true }]);
+  });
+
+  const invalidArgument = () => json({ error: { code: 400, message: "Request contains an invalid argument.", status: "INVALID_ARGUMENT" } }, 400);
+
+  it.each([
+    ["400 INVALID_ARGUMENT for the test ID", invalidArgument, { ok: true, code: null, enableUrl: null }],
+    ["403 PERMISSION_DENIED", () => json({ error: { code: 403, message: "The caller does not have permission", status: "PERMISSION_DENIED" } }, 403), { ok: false, code: "google_error" }],
+    ["401", () => json({ error: { code: 401, message: "Request had invalid authentication credentials.", status: "UNAUTHENTICATED" } }, 401), { ok: false, code: "auth_expired" }],
+    [
+      "a disabled API",
+      () => json({
+        error: {
+          code: 403,
+          message: "Apps Script API has not been used in project 1 before or it is disabled.",
+          status: "PERMISSION_DENIED",
+          details: [{ reason: "SERVICE_DISABLED", metadata: { activationUrl: "https://console.developers.google.com/apis/api/script.googleapis.com/overview?project=1" } }],
+        },
+      }, 403),
+      { ok: false, code: "api_not_enabled", enableUrl: "https://console.developers.google.com/apis/api/script.googleapis.com/overview?project=1" },
+    ],
+  ])("judges Apps Script answering %s", async (_label, respond, expected) => {
+    const { google, runtime } = runtimeFor({ script: "read" });
+    google.override(/script\.googleapis\.com/, respond);
+    const result = await testGoogleWorkspaceConnection(runtime);
+    expect(result.services[0]).toMatchObject({ service: "script", method: "script.projects.get", ...expected });
+    expect(result.ok).toBe(expected.ok);
+  });
+
+  it("fails a 400 INVALID_ARGUMENT from a service whose test ID Google accepts as well formed", async () => {
+    const { google, runtime } = runtimeFor({ sheets: "read" });
+    google.override(/sheets\.googleapis\.com/, invalidArgument);
+    const result = await testGoogleWorkspaceConnection(runtime);
+    expect(result.services[0]).toMatchObject({ service: "sheets", ok: false, code: "google_error" });
+  });
+
   it("fails a probe whose 404 means the account is missing, not the test item", async () => {
     const { google, runtime } = runtimeFor({ gmail: "read" });
     google.override(/gmail\.googleapis\.com/, () => json({ error: { code: 404, message: "not found", errors: [{ reason: "notFound" }] } }, 404));
