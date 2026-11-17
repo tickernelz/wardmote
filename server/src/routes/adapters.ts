@@ -397,9 +397,9 @@ export function adapterRoutes(options: {
 
       // Distinguish npm errors from load errors
       if (message.includes("npm") || message.includes("ERR!")) {
-        res.status(500).json({ error: `npm install failed: ${message}` });
+        res.status(500).json({ error: "npm install failed" });
       } else {
-        res.status(500).json({ error: `Failed to install adapter: ${message}` });
+        res.status(500).json({ error: "Failed to install adapter" });
       }
     }
   });
@@ -612,9 +612,8 @@ export function adapterRoutes(options: {
 
       res.json({ type, version: newVersion, reloaded: true });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, type }, "Failed to reload external adapter");
-      res.status(500).json({ error: `Failed to reload adapter: ${message}` });
+      res.status(500).json({ error: "Failed to reload adapter" });
     }
   });
 
@@ -681,9 +680,8 @@ export function adapterRoutes(options: {
 
       res.json({ type, version: newVersion, reinstalled: true });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, type }, "Failed to reinstall adapter");
-      res.status(500).json({ error: `Reinstall failed: ${message}` });
+      res.status(500).json({ error: "Reinstall failed" });
     }
   });
 
@@ -709,9 +707,8 @@ export function adapterRoutes(options: {
       }
       res.json(resolved.schema);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, type }, "Failed to resolve config schema");
-      res.status(500).json({ error: `Failed to resolve config schema: ${message}` });
+      res.status(500).json({ error: "Failed to resolve config schema" });
     }
   });
 

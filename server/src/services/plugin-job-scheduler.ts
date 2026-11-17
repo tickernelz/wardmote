@@ -41,6 +41,7 @@ import type { PluginJobStore } from "./plugin-job-store.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { parseCron, nextCronTick, validateCron } from "./cron.js";
 import { logger } from "../middleware/logger.js";
+import { badRequest, notFound } from "../errors.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -445,18 +446,18 @@ export function createPluginJobScheduler(
   ): Promise<TriggerJobResult> {
     const job = await jobStore.getJobById(jobId);
     if (!job) {
-      throw new Error(`Job not found: ${jobId}`);
+      throw notFound(`Job not found: ${jobId}`);
     }
 
     if (job.status !== "active") {
-      throw new Error(
+      throw badRequest(
         `Job "${job.jobKey}" is not active (status: ${job.status})`,
       );
     }
 
     // Overlap prevention
     if (activeJobs.has(jobId)) {
-      throw new Error(
+      throw badRequest(
         `Job "${job.jobKey}" is already running — cannot trigger while in progress`,
       );
     }
@@ -473,14 +474,14 @@ export function createPluginJobScheduler(
       );
 
     if (existingRuns.length > 0) {
-      throw new Error(
+      throw badRequest(
         `Job "${job.jobKey}" already has a running execution — cannot trigger while in progress`,
       );
     }
 
     // Check worker availability
     if (!workerManager.isRunning(job.pluginId)) {
-      throw new Error(
+      throw badRequest(
         `Worker for plugin "${job.pluginId}" is not running — cannot trigger job`,
       );
     }

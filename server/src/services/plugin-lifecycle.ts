@@ -45,7 +45,7 @@ import type {
 import { pluginRegistryService } from "./plugin-registry.js";
 import { pluginLoader, type PluginLoader } from "./plugin-loader.js";
 import type { PluginWorkerManager, WorkerStartOptions } from "./plugin-worker-manager.js";
-import { badRequest, notFound } from "../errors.js";
+import { badRequest, notFound, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -424,10 +424,12 @@ export function pluginLifecycleManager(
 
     const loadResult = await pluginLoaderInstance.loadSingle(pluginId);
     if (!loadResult.success) {
-      throw new Error(
-        loadResult.error
-        ?? `Failed to activate plugin ${loadResult.plugin.pluginKey}`,
+      const pluginKey = loadResult.plugin.pluginKey;
+      log.warn(
+        { pluginId, pluginKey, err: loadResult.error },
+        "plugin lifecycle: plugin activation failed",
       );
+      throw unprocessable(`Plugin ${pluginKey} failed to start; check the server logs for details`);
     }
   }
 

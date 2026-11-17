@@ -1359,9 +1359,8 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
           markCleanupFailed: true,
         });
         if (marked) workspace = marked;
-        res.status(500).json({
-          error: `Failed to archive execution workspace: ${failureReason}`,
-        });
+        logger.error({ err: error, executionWorkspaceId: id }, "Failed to archive execution workspace");
+        res.status(500).json({ error: "Failed to archive execution workspace" });
         return;
       }
     } else {
