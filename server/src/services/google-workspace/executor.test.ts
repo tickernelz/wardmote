@@ -239,6 +239,86 @@ describe("executeGoogleCall credentials and errors", () => {
     await expect(executeGoogleCall(context, { method: "drive.files.list" })).rejects.toMatchObject({ code: "rate_limited", details: { retryAfter: 7 } });
   });
 
+  it("never sends a non-idempotent call twice after a timeout or a server error", async () => {
+    const { google, context } = setup();
+    const fetchImpl = context.fetch!;
+    let calls = 0;
+    context.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("/gmail/v1/users/me/messages/send")) {
+        calls += 1;
+        if (calls === 1) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }
+      return fetchImpl(url, init);
+    }) as typeof fetch;
+    const raw = Buffer.from("To: a@corp.example\r\nSubject: hi\r\n\r\nbody").toString("base64url");
+    await expect(executeGoogleCall(context, { method: "gmail.users.messages.send", params: { userId: "me" }, body: { raw } })).rejects.toMatchObject({
+      code: "google_error",
+      details: { outcomeUnknown: true },
+    });
+    expect(calls).toBe(1);
+    google.queue(googleError(503, "backendError"));
+    await expect(executeGoogleCall(context, { method: "gmail.users.messages.send", params: { userId: "me" }, body: { raw } })).rejects.toMatchObject({
+      code: "google_error",
+      details: { status: 503, outcomeUnknown: true },
+    });
+    google.queue(googleError(429, "rateLimitExceeded"), json({ id: "m1" }));
+    expect((await executeGoogleCall(context, { method: "gmail.users.messages.send", params: { userId: "me" }, body: { raw } })).quota.requests).toBe(2);
+  });
+
+  it("retries a POST that failed before reaching Google", async () => {
+    const { context } = setup();
+    const fetchImpl = context.fetch!;
+    let calls = 0;
+    context.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        calls += 1;
+        if (calls === 1) throw new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) });
+      }
+      return fetchImpl(url, init);
+    }) as typeof fetch;
+    const created = await executeGoogleCall(context, { method: "sheets.spreadsheets.create", body: { properties: { title: "Budget" } } });
+    expect(created.quota.requests).toBe(2);
+  });
+
+  it("rejects dot segments in a reserved path parameter", async () => {
+    const { context } = setup();
+    await expect(
+      executeGoogleCall(context, { method: "chat.spaces.messages.get", params: { name: "spaces/A/../../v1/spaces/B/messages/C" }, dryRun: true }),
+    ).rejects.toMatchObject({ code: "validation", details: { pointer: "/params/name" } });
+  });
+
+  it("rejects body fields that only exist on the object prototype", async () => {
+    const { google, context } = setup();
+    const spreadsheetId = await newSpreadsheet(google, context);
+    await expect(
+      executeGoogleCall(context, { method: "sheets.spreadsheets.values.update", params: { spreadsheetId, range: "A1", valueInputOption: "RAW" }, body: { constructor: {} }, dryRun: true }),
+    ).rejects.toMatchObject({ code: "validation", details: { pointer: "/body/constructor" } });
+  });
+
+  it("stops reading a download without content-length at the limit", async () => {
+    const { google, context } = setup();
+    const file = google.addFile("big.bin", "application/octet-stream", Buffer.alloc(64));
+    context.limits = { ...context.limits, downloadMaxBytes: 16 };
+    const fetchImpl = context.fetch!;
+    let pulled = 0;
+    context.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (!String(url).includes("alt=media")) return fetchImpl(url, init);
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += 1;
+          if (pulled > 100) controller.close();
+          else controller.enqueue(new Uint8Array(8));
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "application/octet-stream" } });
+    }) as typeof fetch;
+    await expect(executeGoogleCall(context, { method: "drive.files.get", params: { fileId: file.id }, download: "attachment" })).rejects.toMatchObject({
+      code: "validation",
+      details: { limit: 16 },
+    });
+    expect(pulled).toBeLessThan(10);
+  });
+
   it("retries a server error once and reports google_error after that", async () => {
     const { google, context } = setup();
     google.queue(googleError(503, "backendError"), json({ files: [] }));
