@@ -176,6 +176,29 @@ const TRASH_LABEL_METHODS = new Set([
   "gmail.users.messages.batchModify",
   "gmail.users.threads.modify",
 ]);
+const BODY_CLASS_RULES: ReadonlyArray<{
+  methods: ReadonlySet<string>;
+  class: GoogleMethodClassification;
+  matches: (body: Record<string, unknown>) => boolean;
+}> = [
+  { methods: new Set(["drive.files.update"]), class: "destructive", matches: (body) => body.trashed === true },
+  {
+    methods: TRASH_LABEL_METHODS,
+    class: "destructive",
+    matches: (body) => Array.isArray(body.addLabelIds) && body.addLabelIds.includes("TRASH"),
+  },
+  {
+    methods: new Set(["calendar.events.patch", "calendar.events.update"]),
+    class: "destructive",
+    matches: (body) => body.status === "cancelled",
+  },
+  { methods: new Set(["tasks.tasks.patch", "tasks.tasks.update"]), class: "destructive", matches: (body) => body.deleted === true },
+  {
+    methods: new Set(["gmail.users.settings.filters.create"]),
+    class: "external",
+    matches: (body) => isRecord(body.action) && body.action.forward !== undefined && body.action.forward !== null && body.action.forward !== "",
+  },
+];
 
 export function isGoogleWorkspaceService(value: string): value is GoogleWorkspaceService {
   return Object.prototype.hasOwnProperty.call(GOOGLE_WORKSPACE_SERVICES, value);
@@ -341,15 +364,16 @@ export function classifyGoogleCall(index: GoogleServiceIndex, methodId: string, 
       const kinds = isRecord(request) ? Object.keys(request) : [];
       if (kinds.length === 0) kinds.push("");
       for (const kind of kinds) {
-        const kindClass = entry.batchRequestKinds[kind] ?? "unreviewed";
+        const kindClass = Object.hasOwn(entry.batchRequestKinds, kind) ? entry.batchRequestKinds[kind] : "unreviewed";
         batchRequestKinds.push({ kind, class: kindClass });
         classes.add(kindClass);
       }
     }
   }
-  if (methodId === "drive.files.update" && isRecord(body) && body.trashed === true) classes.add("destructive");
-  if (TRASH_LABEL_METHODS.has(methodId) && isRecord(body) && Array.isArray(body.addLabelIds) && body.addLabelIds.includes("TRASH")) {
-    classes.add("destructive");
+  if (isRecord(body)) {
+    for (const rule of BODY_CLASS_RULES) {
+      if (rule.methods.has(methodId) && rule.matches(body)) classes.add(rule.class);
+    }
   }
   const ordered = [...classes].sort((a, b) => CLASS_RANK[a] - CLASS_RANK[b]);
   return { methodClass: highestGoogleMethodClass(ordered), classes: ordered, batchRequestKinds };
@@ -464,7 +488,8 @@ function schemaAtPath(index: GoogleServiceIndex, root: DiscoverySchema | undefin
   for (const segment of path.split(".").filter(Boolean)) {
     const array = segment.endsWith("[]");
     const name = array ? segment.slice(0, -2) : segment;
-    current = resolveRef(index, resolveRef(index, current)?.properties?.[name]);
+    const properties = resolveRef(index, current)?.properties;
+    current = resolveRef(index, properties && Object.hasOwn(properties, name) ? properties[name] : undefined);
     if (current && array) current = resolveRef(index, current.items);
     if (!current) {
       throw new GoogleWorkspaceError("validation", `Path "${path}" does not exist in the request body`, "Describe the method without path to list its top-level fields.", { pointer: "/path" });
@@ -475,7 +500,7 @@ function schemaAtPath(index: GoogleServiceIndex, root: DiscoverySchema | undefin
 
 function kindFromPath(entry: GoogleMethodEntry, path: string | undefined): string | null {
   const match = /^requests\[\]\.([A-Za-z]+)$/.exec(path ?? "");
-  return match && entry.batchRequestKinds && match[1] in entry.batchRequestKinds ? match[1] : null;
+  return match && entry.batchRequestKinds && Object.hasOwn(entry.batchRequestKinds, match[1]) ? match[1] : null;
 }
 
 export function describeGoogleMethod(
@@ -504,7 +529,7 @@ export function describeGoogleMethod(
   return {
     id: entry.id,
     kind,
-    class: kind ? (entry.batchRequestKinds?.[kind] ?? "unreviewed") : entry.class,
+    class: kind && entry.batchRequestKinds ? entry.batchRequestKinds[kind] : entry.class,
     httpMethod: entry.httpMethod,
     url: `${index.baseUrl}${entry.path}`,
     scopes: entry.scopes,
@@ -591,7 +616,8 @@ export function createGoogleDiscoveryIndex(options: GoogleDiscoveryIndexOptions 
       const settled = await Promise.allSettled(names.map(service));
       const loaded = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
       if (loaded.length === 0) throw (settled[0] as PromiseRejectedResult).reason;
-      return searchGoogleMethods(loaded, input);
+      const unavailableServices = names.filter((_, position) => settled[position].status === "rejected");
+      return { methods: searchGoogleMethods(loaded, input), unavailableServices };
     },
     async describe(methodId: string, describeOptions: { path?: string; depth?: number } = {}) {
       return describeGoogleMethod(await service(googleMethodService(methodId)), methodId, describeOptions);
