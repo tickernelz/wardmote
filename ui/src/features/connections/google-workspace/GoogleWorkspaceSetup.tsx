@@ -61,7 +61,7 @@ export function googleWorkspaceGcloudCommand(): string {
 
 function Stepper({ current }: { current: number }) {
   return (
-    <ol className="flex flex-wrap gap-x-4 gap-y-1 text-sm" aria-label="Setup steps">
+    <ol className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm @lg/gws:gap-x-4" aria-label="Setup steps">
       {GOOGLE_WORKSPACE_SETUP_STEPS.map((label, index) => (
         <li
           key={label}
@@ -71,7 +71,7 @@ function Stepper({ current }: { current: number }) {
           <span className={cn("flex size-5 items-center justify-center rounded-full border text-xs", index < current ? "border-accent bg-accent text-bg" : index === current ? "border-ink" : "border-line-strong")}>
             {index < current ? <Check className="size-3" aria-hidden="true" /> : index + 1}
           </span>
-          {label}
+          <span className={index === current ? undefined : "sr-only @lg/gws:not-sr-only"}>{label}</span>
         </li>
       ))}
     </ol>
@@ -105,26 +105,28 @@ function CloudStep({ callbackUrl }: { callbackUrl: string }) {
     { title: "Create an OAuth client: Web application", detail: "Paste the redirect URI below under Authorized redirect URIs.", href: "https://console.cloud.google.com/auth/clients/create", action: "Create client" },
   ];
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <ol className="space-y-3 rounded-lg border border-line p-4">
+    <div className="grid gap-4 @4xl/gws:grid-cols-2">
+      <ol className="space-y-4 rounded-lg border border-line p-4">
         {items.map((item, index) => (
-          <li key={item.title} className="flex flex-col gap-2 sm:flex-row sm:items-start">
+          <li key={item.title} className="flex items-start gap-3">
             <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-line-strong text-xs">{index + 1}</span>
-            <div className="min-w-0 flex-1">
-              <p className="font-medium">{item.title}</p>
-              <p className="text-sm text-ink-3">{item.detail}</p>
+            <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              <div className="min-w-0 flex-1 basis-64">
+                <p className="font-medium">{item.title}</p>
+                <p className="text-sm text-ink-3">{item.detail}</p>
+              </div>
+              <ConsoleLink href={item.href}>{item.action}</ConsoleLink>
             </div>
-            <ConsoleLink href={item.href}>{item.action}</ConsoleLink>
           </li>
         ))}
       </ol>
       <div className="space-y-4">
         <div className="space-y-2 rounded-lg border border-line p-4">
-          <Label htmlFor="gws-callback">Redirect URI</Label>
-          <div className="flex gap-2">
-            <Input id="gws-callback" readOnly value={callbackUrl} className="font-mono text-xs" />
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium">Redirect URI</p>
             <CopyButton value={callbackUrl} label="Copy redirect URI" />
           </div>
+          <code id="gws-callback" className="block break-all rounded-md bg-bg-2 p-3 font-mono text-xs">{callbackUrl}</code>
           <p className="text-sm text-ink-3">It must match exactly in Google Cloud &gt; Clients &gt; Authorized redirect URIs.</p>
         </div>
         <div role="note" className="rounded-lg border border-warn bg-warn-soft p-4 text-sm">
@@ -132,8 +134,11 @@ function CloudStep({ callbackUrl }: { callbackUrl: string }) {
           <p className="text-ink-2">Google ends a test user's authorization, refresh token included, seven days after consent. Publish the app (In production) to avoid reconnecting every week.</p>
         </div>
         <div className="space-y-2 rounded-lg border border-line p-4">
-          <p className="text-sm font-medium">Prefer a terminal?</p>
-          <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-bg-2 p-3 font-mono text-xs">{googleWorkspaceGcloudCommand()}</pre>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium">Prefer a terminal?</p>
+            <CopyButton value={googleWorkspaceGcloudCommand()} label="Copy gcloud command" />
+          </div>
+          <pre className="whitespace-pre-wrap break-words rounded-md bg-bg-2 p-3 font-mono text-xs">{googleWorkspaceGcloudCommand()}</pre>
         </div>
       </div>
     </div>
@@ -165,7 +170,7 @@ function CredentialsStep({
   };
   const idValid = CLIENT_ID_PATTERN.test(clientId.trim());
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="grid gap-4 @2xl/gws:grid-cols-2">
       <div className="space-y-4 rounded-lg border border-line p-4">
         <div className="space-y-2">
           <Label htmlFor="gws-client-id">Client ID</Label>
@@ -243,12 +248,12 @@ export function GoogleWorkspaceSetup({
   const setTier = (service: GoogleWorkspaceService, tier: GoogleWorkspaceTier) =>
     onDraftChange({ ...draft, capabilities: { ...draft.capabilities, [service]: tier } });
   return (
-    <section className="mx-auto max-w-4xl space-y-6" aria-labelledby="gws-setup-title">
+    <section className="@container/gws mx-auto max-w-4xl space-y-6" aria-labelledby="gws-setup-title">
       <h2 id="gws-setup-title" className="sr-only">Connect Google Workspace</h2>
       <Stepper current={step} />
       {step === 0 && (
         <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="How do you connect?">
+          <div className="grid gap-3 @xl/gws:grid-cols-2" role="radiogroup" aria-label="How do you connect?">
             {[{ file: false, title: "Your own Google OAuth app", detail: "Wardmote links the right Google Cloud pages and fills in the redirect URI; you paste the Client ID and secret." },
               { file: true, title: "I already have client_secret.json", detail: "Upload the OAuth client file from Google Cloud; Wardmote reads it and checks the redirect URI." }].map((option) => (
               <button

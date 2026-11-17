@@ -25,25 +25,27 @@ export function GoogleWorkspaceTestResults({ result }: { result: GoogleWorkspace
       </div>
       <ul className="divide-y divide-line rounded-lg border border-line">
         {result.services.map((service) => (
-          <li key={service.service} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-start">
+          <li key={service.service} className="flex items-start gap-3 p-3">
             <span aria-hidden="true" className={cn("flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", service.ok ? "bg-ok-soft text-ok" : "bg-bad-soft text-bad")}>
               {service.ok ? "✓" : "!"}
             </span>
-            <div className="min-w-0 flex-1 text-sm">
-              <p>
-                <span className="font-medium">{GOOGLE_WORKSPACE_SERVICE_LABELS[service.service]}</span>{" "}
-                <span className="text-ink-3">· {GOOGLE_WORKSPACE_TIER_LABELS[service.tier]} · {service.method}</span>
-              </p>
-              {service.ok
-                ? service.write && <p className="text-ink-3">Dry-run {service.write.method}: {ACTION_LABELS[service.write.action]}</p>
-                : <p className="break-words text-bad">{service.code ? `${service.code}: ` : ""}{service.message}{service.hint ? ` ${service.hint}` : ""}</p>}
+            <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              <div className="min-w-0 flex-1 basis-64 text-sm">
+                <p>
+                  <span className="font-medium">{GOOGLE_WORKSPACE_SERVICE_LABELS[service.service]}</span>{" "}
+                  <span className="text-ink-3">· {GOOGLE_WORKSPACE_TIER_LABELS[service.tier]} · {service.method}</span>
+                </p>
+                {service.ok
+                  ? service.write && <p className="text-ink-3">Dry-run {service.write.method}: {ACTION_LABELS[service.write.action]}</p>
+                  : <p className="break-words text-bad">{service.code ? `${service.code}: ` : ""}{service.message}{service.hint ? ` ${service.hint}` : ""}</p>}
+              </div>
+              {service.enableUrl && (
+                <a className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line-strong px-2.5 py-1 text-sm font-medium hover:bg-bg-3" href={service.enableUrl} target="_blank" rel="noreferrer">
+                  Enable {GOOGLE_WORKSPACE_SERVICE_LABELS[service.service]} API
+                  <ExternalLink className="size-3.5" aria-hidden="true" />
+                </a>
+              )}
             </div>
-            {service.enableUrl && (
-              <a className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line-strong px-2.5 py-1 text-sm font-medium hover:bg-bg-3" href={service.enableUrl} target="_blank" rel="noreferrer">
-                Enable {GOOGLE_WORKSPACE_SERVICE_LABELS[service.service]} API
-                <ExternalLink className="size-3.5" aria-hidden="true" />
-              </a>
-            )}
           </li>
         ))}
       </ul>
