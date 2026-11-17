@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { pluginManifestV1Schema, type WardmotePluginManifestV1 } from "@tickernelz/wardmote-shared";
+import { conflict } from "../errors.js";
 
 const mockRegistry = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -361,9 +362,7 @@ describe("plugin scoped API routes", () => {
       status: "in_progress",
       assigneeAgentId: agentId,
     });
-    const conflict = new Error("Issue run ownership conflict") as Error & { status?: number };
-    conflict.status = 409;
-    mockIssueService.assertCheckoutOwner.mockRejectedValue(conflict);
+    mockIssueService.assertCheckoutOwner.mockRejectedValue(conflict("Issue run ownership conflict"));
     const { app, workerManager } = await createApp({
       actor: {
         type: "agent",

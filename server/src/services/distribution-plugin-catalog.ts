@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { WardmotePluginManifestV1 } from "@tickernelz/wardmote-shared";
 import { pluginCapabilityValidator } from "./plugin-capability-validator.js";
+import { badRequest } from "../errors.js";
 
 const segment = z.string().regex(/^[a-z][a-z0-9.-]{0,99}$/);
 export const distributionPluginCatalogSchema = z.object({
@@ -26,7 +27,7 @@ export type DistributionPlugin = z.infer<typeof distributionPluginCatalogSchema>
 function bundleEntrypoint(declared: unknown): string {
   const relative = typeof declared === "string" ? declared.replace(/^\.\//, "").replace(/\/$/, "") : "";
   if (!relative || path.posix.isAbsolute(relative) || path.win32.isAbsolute(relative) || relative.includes("\\") || relative.split("/").some((part) => !part || part === "." || part === "..")) {
-    throw new Error("Distribution entrypoint must stay inside its bundle");
+    throw badRequest("Distribution entrypoint must stay inside its bundle");
   }
   return relative;
 }
@@ -34,7 +35,7 @@ function bundleEntrypoint(declared: unknown): string {
 export function assertDistributionManifestCapabilities(manifest: WardmotePluginManifestV1): void {
   const result = pluginCapabilityValidator().validateManifestCapabilities(manifest);
   if (!result.allowed) {
-    throw new Error(`Distribution manifest is missing required capabilities: ${result.missing.join(", ")}`);
+    throw badRequest(`Distribution manifest is missing required capabilities: ${result.missing.join(", ")}`);
   }
 }
 
@@ -72,22 +73,22 @@ export function distributionPluginActivationGuard(
     const installedInside = installedRelative !== null && (installedRelative === "" || (!installedRelative.startsWith("..") && !path.isAbsolute(installedRelative)));
     if (!inside && !installedInside && !entry) return;
     if (!entry || (selectedKeys !== null && !selectedKeys.includes(entry.key)) || packageRoot !== entry.localPath) {
-      throw new Error("Distribution plugin is absent or not selected in this deployment");
+      throw badRequest("Distribution plugin is absent or not selected in this deployment");
     }
     if (input.manifest && (input.manifest.id !== entry.pluginKey || input.manifest.version !== entry.version)) {
-      throw new Error("Distribution manifest does not match its catalog identity/version");
+      throw badRequest("Distribution manifest does not match its catalog identity/version");
     }
     if (input.manifest) {
       assertDistributionManifestCapabilities(input.manifest);
       if (input.previousManifest) {
         const approved = new Set(input.previousManifest.capabilities);
         const added = input.manifest.capabilities.filter((capability) => !approved.has(capability));
-        if (added.length) throw new Error(`Distribution plugin capabilities require approval: ${added.join(", ")}`);
+        if (added.length) throw badRequest(`Distribution plugin capabilities require approval: ${added.join(", ")}`);
       }
       const worker = bundleEntrypoint(input.manifest.entrypoints.worker);
       const ui = input.manifest.entrypoints.ui === undefined ? undefined : bundleEntrypoint(input.manifest.entrypoints.ui);
       if (worker !== entry.entrypoints.worker || ui !== entry.entrypoints.ui) {
-        throw new Error("Distribution manifest entrypoints do not match the verified package");
+        throw badRequest("Distribution manifest entrypoints do not match the verified package");
       }
     }
   };

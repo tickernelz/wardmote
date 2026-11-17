@@ -54,6 +54,7 @@ import {
   REPO_ROOT,
 } from "../services/plugin-loader.js";
 import { logActivity } from "../services/activity-log.js";
+import { logger } from "../middleware/logger.js";
 import { publishGlobalLiveEvent } from "../services/live-events.js";
 import { issueService } from "../services/issues.js";
 import type { PluginJobScheduler } from "../services/plugin-job-scheduler.js";
@@ -168,6 +169,13 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const PLUGIN_API_BODY_LIMIT_BYTES = 1_000_000;
+const PLUGIN_WORKER_UNAVAILABLE_MESSAGE = "Plugin worker is not available";
+
+function isPluginWorkerUnavailable(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("not running") || message.includes("worker");
+}
+
 const PLUGIN_SCOPED_API_RESPONSE_HEADER_ALLOWLIST = new Set([
   "cache-control",
   "etag",
@@ -1029,12 +1037,9 @@ export function pluginRoutes(
           res.status(err.status).json({ error: err.message, reasonCode: err.reasonCode, ...err.details });
           return;
         }
-        const message = err instanceof Error ? err.message : String(err);
-        if (message.includes("not running") || message.includes("worker")) {
-          res.status(502).json({ error: message });
-        } else {
-          res.status(500).json({ error: message });
-        }
+        if (!isPluginWorkerUnavailable(err)) throw err;
+        logger.warn({ err, tool }, "Plugin tool worker unavailable");
+        res.status(502).json({ error: PLUGIN_WORKER_UNAVAILABLE_MESSAGE });
       }
       return;
     }
@@ -1054,14 +1059,9 @@ export function pluginRoutes(
       );
       res.json(result);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-
-      // Distinguish between "worker not running" (502) and other errors (500)
-      if (message.includes("not running") || message.includes("worker")) {
-        res.status(502).json({ error: message });
-      } else {
-        res.status(500).json({ error: message });
-      }
+      if (!isPluginWorkerUnavailable(err)) throw err;
+      logger.warn({ err, tool }, "Plugin tool worker unavailable");
+      res.status(502).json({ error: PLUGIN_WORKER_UNAVAILABLE_MESSAGE });
     }
   });
 
@@ -1144,39 +1144,34 @@ export function pluginRoutes(
       canonicalLocalPath = validated.canonicalPath;
     }
 
-    try {
-      const installOptions = canonicalLocalPath !== undefined
-        ? { localPath: canonicalLocalPath }
-        : { packageName: trimmedPackage, version: version?.trim() };
+    const installOptions = canonicalLocalPath !== undefined
+      ? { localPath: canonicalLocalPath }
+      : { packageName: trimmedPackage, version: version?.trim() };
 
-      const discovered = await loader.installPlugin(installOptions);
+    const discovered = await loader.installPlugin(installOptions);
 
-      if (!discovered.manifest) {
-        res.status(500).json({ error: "Plugin installed but manifest is missing" });
-        return;
-      }
+    if (!discovered.manifest) {
+      res.status(500).json({ error: "Plugin installed but manifest is missing" });
+      return;
+    }
 
-      // Transition to ready state
-      const existingPlugin = await registry.getByKey(discovered.manifest.id);
-      if (existingPlugin) {
-        await lifecycle.load(existingPlugin.id);
-        const updated = await registry.getById(existingPlugin.id);
-        await logPluginMutationActivity(req, "plugin.installed", existingPlugin.id, {
-          pluginId: existingPlugin.id,
-          pluginKey: existingPlugin.pluginKey,
-          packageName: updated?.packageName ?? existingPlugin.packageName,
-          version: updated?.version ?? existingPlugin.version,
-          source: isLocalPath ? "local_path" : "npm",
-        });
-        publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: existingPlugin.id, action: "installed" } });
-        res.json(updated);
-      } else {
-        // This shouldn't happen since installPlugin already registers in the DB
-        res.status(500).json({ error: "Plugin installed but not found in registry" });
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(400).json({ error: message });
+    // Transition to ready state
+    const existingPlugin = await registry.getByKey(discovered.manifest.id);
+    if (existingPlugin) {
+      await lifecycle.load(existingPlugin.id);
+      const updated = await registry.getById(existingPlugin.id);
+      await logPluginMutationActivity(req, "plugin.installed", existingPlugin.id, {
+        pluginId: existingPlugin.id,
+        pluginKey: existingPlugin.pluginKey,
+        packageName: updated?.packageName ?? existingPlugin.packageName,
+        version: updated?.version ?? existingPlugin.version,
+        source: isLocalPath ? "local_path" : "npm",
+      });
+      publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: existingPlugin.id, action: "installed" } });
+      res.json(updated);
+    } else {
+      // This shouldn't happen since installPlugin already registers in the DB
+      res.status(500).json({ error: "Plugin installed but not found in registry" });
     }
   });
 
@@ -1271,13 +1266,13 @@ export function pluginRoutes(
     if (message.includes("not running") || message.includes("not registered")) {
       return {
         code: "WORKER_UNAVAILABLE",
-        message,
+        message: PLUGIN_WORKER_UNAVAILABLE_MESSAGE,
       };
     }
 
     return {
       code: "UNKNOWN",
-      message,
+      message: "Plugin bridge request failed",
     };
   }
 
@@ -1291,7 +1286,7 @@ export function pluginRoutes(
     const rootError = err instanceof Error ? err : new Error(String(err));
     (res as any).__errorContext = {
       error: {
-        message: bridgeError.message,
+        message: rootError.message,
         stack: rootError.stack,
         name: rootError.name,
         details: {
@@ -1864,21 +1859,20 @@ export function pluginRoutes(
         res.status(status).json(result.body ?? null);
       }
     } catch (err) {
-      const status = typeof (err as { status?: unknown }).status === "number"
-        ? (err as { status: number }).status
-        : err instanceof JsonRpcCallError && (
-          err.code === PLUGIN_RPC_ERROR_CODES.CAPABILITY_DENIED ||
-          err.code === PLUGIN_RPC_ERROR_CODES.INVOCATION_SCOPE_DENIED
-        )
-          ? 403
-          : err instanceof JsonRpcCallError && err.code === PLUGIN_RPC_ERROR_CODES.METHOD_NOT_IMPLEMENTED
-            ? 501
-            : err instanceof JsonRpcCallError
-              ? 502
-              : 500;
-      res.status(status).json({
-        error: err instanceof Error ? err.message : String(err),
-      });
+      if (!(err instanceof JsonRpcCallError)) throw err;
+      if (
+        err.code === PLUGIN_RPC_ERROR_CODES.CAPABILITY_DENIED ||
+        err.code === PLUGIN_RPC_ERROR_CODES.INVOCATION_SCOPE_DENIED
+      ) {
+        res.status(403).json({ error: err.message });
+        return;
+      }
+      if (err.code === PLUGIN_RPC_ERROR_CODES.METHOD_NOT_IMPLEMENTED) {
+        res.status(501).json({ error: err.message });
+        return;
+      }
+      logger.warn({ err, pluginId: plugin.id, routeKey: match.route.routeKey }, "Plugin scoped API request failed");
+      res.status(502).json({ error: "Plugin API request failed" });
     }
   });
 
@@ -1936,19 +1930,14 @@ export function pluginRoutes(
       return;
     }
 
-    try {
-      const result = await lifecycle.unload(plugin.id, purge);
-      await logPluginMutationActivity(req, "plugin.uninstalled", plugin.id, {
-        pluginId: plugin.id,
-        pluginKey: plugin.pluginKey,
-        purge,
-      });
-      publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "uninstalled" } });
-      res.json(result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(400).json({ error: message });
-    }
+    const result = await lifecycle.unload(plugin.id, purge);
+    await logPluginMutationActivity(req, "plugin.uninstalled", plugin.id, {
+      pluginId: plugin.id,
+      pluginKey: plugin.pluginKey,
+      purge,
+    });
+    publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "uninstalled" } });
+    res.json(result);
   });
 
   /**
@@ -1972,19 +1961,14 @@ export function pluginRoutes(
       return;
     }
 
-    try {
-      const result = await lifecycle.enable(plugin.id);
-      await logPluginMutationActivity(req, "plugin.enabled", plugin.id, {
-        pluginId: plugin.id,
-        pluginKey: plugin.pluginKey,
-        version: result?.version ?? plugin.version,
-      });
-      publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "enabled" } });
-      res.json(result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(400).json({ error: message });
-    }
+    const result = await lifecycle.enable(plugin.id);
+    await logPluginMutationActivity(req, "plugin.enabled", plugin.id, {
+      pluginId: plugin.id,
+      pluginKey: plugin.pluginKey,
+      version: result?.version ?? plugin.version,
+    });
+    publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "enabled" } });
+    res.json(result);
   });
 
   /**
@@ -2013,19 +1997,14 @@ export function pluginRoutes(
       return;
     }
 
-    try {
-      const result = await lifecycle.disable(plugin.id, reason);
-      await logPluginMutationActivity(req, "plugin.disabled", plugin.id, {
-        pluginId: plugin.id,
-        pluginKey: plugin.pluginKey,
-        reason: reason ?? null,
-      });
-      publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "disabled" } });
-      res.json(result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(400).json({ error: message });
-    }
+    const result = await lifecycle.disable(plugin.id, reason);
+    await logPluginMutationActivity(req, "plugin.disabled", plugin.id, {
+      pluginId: plugin.id,
+      pluginKey: plugin.pluginKey,
+      reason: reason ?? null,
+    });
+    publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "disabled" } });
+    res.json(result);
   });
 
   /**
@@ -2188,26 +2167,21 @@ export function pluginRoutes(
       return;
     }
 
-    try {
-      // Upgrade the plugin - this would typically:
-      // 1. Download the new version
-      // 2. Compare capabilities
-      // 3. If new capabilities, mark as upgrade_pending
-      // 4. Otherwise, transition to ready
-      const result = await lifecycle.upgrade(plugin.id, version);
-      await logPluginMutationActivity(req, "plugin.upgraded", plugin.id, {
-        pluginId: plugin.id,
-        pluginKey: plugin.pluginKey,
-        previousVersion: plugin.version,
-        version: result?.version ?? plugin.version,
-        targetVersion: version ?? null,
-      });
-      publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "upgraded" } });
-      res.json(result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(400).json({ error: message });
-    }
+    // Upgrade the plugin - this would typically:
+    // 1. Download the new version
+    // 2. Compare capabilities
+    // 3. If new capabilities, mark as upgrade_pending
+    // 4. Otherwise, transition to ready
+    const result = await lifecycle.upgrade(plugin.id, version);
+    await logPluginMutationActivity(req, "plugin.upgraded", plugin.id, {
+      pluginId: plugin.id,
+      pluginKey: plugin.pluginKey,
+      previousVersion: plugin.version,
+      version: result?.version ?? plugin.version,
+      targetVersion: version ?? null,
+    });
+    publishGlobalLiveEvent({ type: "plugin.ui.updated", payload: { pluginId: plugin.id, action: "upgraded" } });
+    res.json(result);
   });
 
   // ===========================================================================
@@ -2299,75 +2273,70 @@ export function pluginRoutes(
       }
     }
 
-    try {
-      const secretRefs = extractSecretRefBindingsFromConfig(body.configJson, schema);
-      await validatePluginSecretRefsForCompany(companyId, secretRefs);
-      await secretService(db).syncSecretRefsForTarget(
-        companyId,
-        { targetType: "plugin", targetId: plugin.id },
-        secretRefs,
-        { replaceAll: true },
-      );
+    const secretRefs = extractSecretRefBindingsFromConfig(body.configJson, schema);
+    await validatePluginSecretRefsForCompany(companyId, secretRefs);
+    await secretService(db).syncSecretRefsForTarget(
+      companyId,
+      { targetType: "plugin", targetId: plugin.id },
+      secretRefs,
+      { replaceAll: true },
+    );
 
-      const result = await registry.upsertConfig(plugin.id, companyId, {
-        companyId,
-        configJson: body.configJson,
-      });
-      await logPluginMutationActivity(req, "plugin.config.updated", plugin.id, {
-        pluginId: plugin.id,
-        pluginKey: plugin.pluginKey,
-        companyId,
-        secretRefCount: secretRefs.length,
-        configKeyCount: Object.keys(body.configJson).length,
-      });
+    const result = await registry.upsertConfig(plugin.id, companyId, {
+      companyId,
+      configJson: body.configJson,
+    });
+    await logPluginMutationActivity(req, "plugin.config.updated", plugin.id, {
+      pluginId: plugin.id,
+      pluginKey: plugin.pluginKey,
+      companyId,
+      secretRefCount: secretRefs.length,
+      configKeyCount: Object.keys(body.configJson).length,
+    });
 
-      // Notify the running worker about the config change (PLUGIN_SPEC §25.4.4).
-      // If the worker implements onConfigChanged, send the new config via RPC.
-      // If it doesn't (METHOD_NOT_IMPLEMENTED), restart the worker so it picks
-      // up the new config on re-initialize. If no worker is running, skip.
-      if (bridgeDeps?.workerManager.isRunning(plugin.id)) {
-        // Refresh the worker's authorized proactive company scopes so the
-        // just-configured company can be acted on from proactive loops (e.g.
-        // the chat gateway's notifier drain) without requiring a restart
-        // (LOOA-629). The set is exactly the plugin's configured companies.
-        try {
-          const configRows = await registry.listConfigs(plugin.id);
-          bridgeDeps.workerManager.setProactiveCompanyScopes(
-            plugin.id,
-            configRows.map((row) => row.companyId),
-          );
-        } catch {
-          // Non-fatal: the set is rebuilt from the DB on the next worker start.
-        }
-
-        try {
-          await bridgeDeps.workerManager.call(
-            plugin.id,
-            "configChanged",
-            { config: body.configJson, companyId },
-          );
-        } catch (rpcErr) {
-          if (
-            rpcErr instanceof JsonRpcCallError &&
-            rpcErr.code === PLUGIN_RPC_ERROR_CODES.METHOD_NOT_IMPLEMENTED
-          ) {
-            // Worker doesn't handle live config — restart it.
-            try {
-              await lifecycle.restartWorker(plugin.id);
-            } catch {
-              // Restart failure is non-fatal for the config save response.
-            }
-          }
-          // Other RPC errors (timeout, unavailable) are non-fatal — config is
-          // already persisted and will take effect on next worker restart.
-        }
+    // Notify the running worker about the config change (PLUGIN_SPEC §25.4.4).
+    // If the worker implements onConfigChanged, send the new config via RPC.
+    // If it doesn't (METHOD_NOT_IMPLEMENTED), restart the worker so it picks
+    // up the new config on re-initialize. If no worker is running, skip.
+    if (bridgeDeps?.workerManager.isRunning(plugin.id)) {
+      // Refresh the worker's authorized proactive company scopes so the
+      // just-configured company can be acted on from proactive loops (e.g.
+      // the chat gateway's notifier drain) without requiring a restart
+      // (LOOA-629). The set is exactly the plugin's configured companies.
+      try {
+        const configRows = await registry.listConfigs(plugin.id);
+        bridgeDeps.workerManager.setProactiveCompanyScopes(
+          plugin.id,
+          configRows.map((row) => row.companyId),
+        );
+      } catch {
+        // Non-fatal: the set is rebuilt from the DB on the next worker start.
       }
 
-      res.json(result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(400).json({ error: message });
+      try {
+        await bridgeDeps.workerManager.call(
+          plugin.id,
+          "configChanged",
+          { config: body.configJson, companyId },
+        );
+      } catch (rpcErr) {
+        if (
+          rpcErr instanceof JsonRpcCallError &&
+          rpcErr.code === PLUGIN_RPC_ERROR_CODES.METHOD_NOT_IMPLEMENTED
+        ) {
+          // Worker doesn't handle live config — restart it.
+          try {
+            await lifecycle.restartWorker(plugin.id);
+          } catch {
+            // Restart failure is non-fatal for the config save response.
+          }
+        }
+        // Other RPC errors (timeout, unavailable) are non-fatal — config is
+        // already persisted and will take effect on next worker restart.
+      }
     }
+
+    res.json(result);
   });
 
   /**
@@ -2515,16 +2484,11 @@ export function pluginRoutes(
       return;
     }
 
-    try {
-      const jobs = await jobDeps.jobStore.listJobs(
-        plugin.id,
-        rawStatus as "active" | "paused" | "failed" | undefined,
-      );
-      res.json(jobs);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: message });
-    }
+    const jobs = await jobDeps.jobStore.listJobs(
+      plugin.id,
+      rawStatus as "active" | "paused" | "failed" | undefined,
+    );
+    res.json(jobs);
   });
 
   /**
@@ -2564,13 +2528,8 @@ export function pluginRoutes(
       return;
     }
 
-    try {
-      const runs = await jobDeps.jobStore.listRunsByJob(jobId, limit);
-      res.json(runs);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: message });
-    }
+    const runs = await jobDeps.jobStore.listRunsByJob(jobId, limit);
+    res.json(runs);
   });
 
   /**
@@ -2606,13 +2565,8 @@ export function pluginRoutes(
       return;
     }
 
-    try {
-      const result = await jobDeps.scheduler.triggerJob(jobId, "manual");
-      res.json(result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(400).json({ error: message });
-    }
+    const result = await jobDeps.scheduler.triggerJob(jobId, "manual");
+    res.json(result);
   });
 
   // ===========================================================================
@@ -2768,10 +2722,11 @@ export function pluginRoutes(
         })
         .where(eq(pluginWebhookDeliveries.id, delivery.id));
 
+      logger.warn({ err, pluginId: plugin.id, deliveryId: delivery.id }, "Plugin webhook delivery failed");
       res.status(502).json({
         deliveryId: delivery.id,
         status: "failed",
-        error: errorMessage,
+        error: "Plugin webhook delivery failed",
       });
     }
   });
