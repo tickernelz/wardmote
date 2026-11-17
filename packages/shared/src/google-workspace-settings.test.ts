@@ -5,8 +5,10 @@ import {
   GOOGLE_WORKSPACE_SERVICE_IDS,
   GOOGLE_WORKSPACE_TIERS,
   GOOGLE_WORKSPACE_TIER_SCOPES,
+  googleWorkspaceScopeClass,
   googleWorkspaceScopesFor,
   normalizeGoogleWorkspaceSettings,
+  parseGoogleClientSecretJson,
 } from "./google-workspace-settings.js";
 
 const DRIVE = "https://www.googleapis.com/auth/drive";
@@ -46,5 +48,39 @@ describe("Google Workspace settings", () => {
     expect(all.length).toBeLessThanOrEqual(25);
     expect(all).toContain("openid");
     expect(googleWorkspaceScopesFor({ sheets: "read" })).toEqual(["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/spreadsheets.readonly"]);
+  });
+});
+
+describe("parseGoogleClientSecretJson", () => {
+  const redirect = "https://wardmote.example.com/api/tools/oauth/callback";
+  const web = (redirectUris: string[], secret = "s3cret") =>
+    JSON.stringify({ web: { client_id: "1-abc.apps.googleusercontent.com", project_id: "proj", client_secret: secret, redirect_uris: redirectUris } });
+
+  it("reads a web client whose redirect URI matches this instance", () => {
+    expect(parseGoogleClientSecretJson(web([redirect]), redirect)).toEqual({
+      clientId: "1-abc.apps.googleusercontent.com",
+      clientSecret: "s3cret",
+      projectId: "proj",
+      redirectUris: [redirect],
+      problems: [],
+    });
+  });
+
+  it("names what is wrong with the file", () => {
+    expect(parseGoogleClientSecretJson("{", redirect).problems).toEqual(["not_json"]);
+    expect(parseGoogleClientSecretJson("{}", redirect).problems).toEqual(["no_client"]);
+    expect(parseGoogleClientSecretJson(web(["https://other.example/cb"]), redirect).problems).toEqual(["redirect_uri_missing"]);
+    expect(parseGoogleClientSecretJson(web([redirect], ""), redirect).problems).toEqual(["missing_secret"]);
+    expect(parseGoogleClientSecretJson(JSON.stringify({ installed: { client_id: "x", client_secret: "y" } }), redirect).problems).toEqual(["installed_client"]);
+  });
+});
+
+describe("googleWorkspaceScopeClass", () => {
+  it("marks the restricted Drive and Gmail scopes", () => {
+    expect(googleWorkspaceScopeClass(DRIVE)).toBe("restricted");
+    expect(googleWorkspaceScopeClass(`${DRIVE}.readonly`)).toBe("restricted");
+    expect(googleWorkspaceScopeClass(`${DRIVE}.file`)).toBe("sensitive");
+    expect(googleWorkspaceScopeClass("https://www.googleapis.com/auth/gmail.send")).toBe("sensitive");
+    expect(googleWorkspaceScopeClass("openid")).toBe("basic");
   });
 });

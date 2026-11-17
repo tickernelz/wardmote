@@ -129,8 +129,8 @@ export function googleWorkspaceScopesFor(capabilities: Partial<Record<GoogleWork
 const googleWorkspaceIdListSchema = z.array(z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)).max(200);
 
 export const googleWorkspaceSettingsSchema = z.object({
-  capabilities: z.record(z.enum(GOOGLE_WORKSPACE_SERVICE_IDS as [GoogleWorkspaceService, ...GoogleWorkspaceService[]]), z.enum(GOOGLE_WORKSPACE_TIERS)),
-  classPolicy: z.record(z.enum(GOOGLE_WORKSPACE_POLICY_CLASSES), z.enum(GOOGLE_WORKSPACE_POLICY_ACTIONS)).optional(),
+  capabilities: z.partialRecord(z.enum(GOOGLE_WORKSPACE_SERVICE_IDS as [GoogleWorkspaceService, ...GoogleWorkspaceService[]]), z.enum(GOOGLE_WORKSPACE_TIERS)),
+  classPolicy: z.partialRecord(z.enum(GOOGLE_WORKSPACE_POLICY_CLASSES), z.enum(GOOGLE_WORKSPACE_POLICY_ACTIONS)).optional(),
   methodOverrides: z.record(z.string().regex(/^[a-z]+(\.[A-Za-z0-9]+)+(#[A-Za-z]+)?$/), z.enum(GOOGLE_WORKSPACE_POLICY_ACTIONS)).optional(),
   scope: z
     .object({
@@ -155,6 +155,23 @@ export interface GoogleWorkspaceConnectionSettings {
   settings: GoogleWorkspaceSettings;
   requiredScopes: string[];
   grants: GoogleWorkspaceGrantScopes[];
+}
+
+export interface GoogleWorkspaceServiceTestResult {
+  service: GoogleWorkspaceService;
+  tier: GoogleWorkspaceTier;
+  ok: boolean;
+  method: string;
+  code: string | null;
+  message: string | null;
+  hint: string | null;
+  enableUrl: string | null;
+  write: { method: string; action: GoogleWorkspacePolicyAction; reason: string | null } | null;
+}
+
+export interface GoogleWorkspaceConnectionTest {
+  ok: boolean;
+  services: GoogleWorkspaceServiceTestResult[];
 }
 
 export const GOOGLE_WORKSPACE_RESTRICTED_SCOPES: ReadonlySet<string> = new Set([
