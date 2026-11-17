@@ -355,8 +355,11 @@ function extensionFor(contentType: string): string {
   return known[contentType.split(";")[0].trim()] ?? "bin";
 }
 
+const NAME_LOOKUP_TIMEOUT_MS = 5000;
+
 function downloadFilename(name: string | null, fallback: string, extension: string, exported: boolean): string {
-  const base = (name ?? "").replace(/[\u0000-\u001f\u007f/\\]+/g, "_").trim().slice(0, 200) || fallback;
+  const cleaned = (name ?? "").replace(/[\u0000-\u001f\u007f/\\\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g, "_").trim();
+  const base = Array.from(cleaned).slice(0, 200).join("") || fallback;
   if (base.toLowerCase().endsWith(`.${extension}`)) return base;
   if (!exported && base !== fallback && /\.[a-z0-9]{1,8}$/i.test(base)) return base;
   return `${base}.${extension}`;
@@ -528,10 +531,11 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
 
   async function driveFileName(fileId: string): Promise<string | null> {
     try {
-      const metadata = await send(urlWithQuery(joinRoot(serviceIndex.baseUrl, `files/${encodeURIComponent(fileId)}`), [["fields", "name"], ["supportsAllDrives", "true"]]), {
-        method: "GET",
-        headers: { accept: "application/json" },
-      });
+      const url = urlWithQuery(joinRoot(serviceIndex.baseUrl, `files/${encodeURIComponent(fileId)}`), [["fields", "name"], ["supportsAllDrives", "true"]]);
+      const headers = { ...(await authHeaders()), accept: "application/json" };
+      requests += 1;
+      const metadata = await fetchImpl(url, { method: "GET", headers, signal: AbortSignal.timeout(NAME_LOOKUP_TIMEOUT_MS) });
+      if (!metadata.ok) return null;
       const body = (await metadata.json()) as { name?: unknown };
       return typeof body.name === "string" ? body.name : null;
     } catch {

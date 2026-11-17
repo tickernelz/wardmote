@@ -183,9 +183,14 @@ describe("executeGoogleCall files", () => {
     const photo = google.addFile("holiday.jpeg", "image/jpeg", Buffer.from("jpeg"));
     const image = await executeGoogleCall(context, { method: "drive.files.get", params: { fileId: photo.id }, download: "attachment" });
     expect(image.attachment?.filename).toBe("holiday.jpeg");
-    google.override(new RegExp(`/drive/v3/files/${doc.id}\\?fields=name`), () => googleError(403, "insufficientPermissions"));
+    google.override(new RegExp(`/drive/v3/files/${doc.id}\\?fields=name`), () => googleError(429, "rateLimitExceeded"));
+    google.requests.length = 0;
     const unnamed = await executeGoogleCall(context, { method: "drive.files.export", params: { fileId: doc.id, mimeType: "application/pdf" } });
     expect(unnamed.attachment?.filename).toBe(`${doc.id}.pdf`);
+    expect(google.requests.filter((request) => request.url.includes("fields=name"))).toHaveLength(1);
+    const spoofed = google.addFile(`invoice\u202Efdp.exe${"\u{1F600}".repeat(200)}`, "application/vnd.google-apps.document");
+    const named = await executeGoogleCall(context, { method: "drive.files.export", params: { fileId: spoofed.id, mimeType: "application/pdf" } });
+    expect(named.attachment?.filename).toBe(`invoice_fdp.exe${"\u{1F600}".repeat(185)}.pdf`);
   });
 
   it("refuses download on a method without file content", async () => {
