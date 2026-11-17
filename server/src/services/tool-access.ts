@@ -300,6 +300,7 @@ type ActorInfo = {
 const ACTIVE_BROKER_RUN_STATUSES = new Set(["running"]);
 const REMOTE_HTTP_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REMOTE_HTTP_REDIRECTS = 5;
+const GOOGLE_OAUTH_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const MAX_OAUTH_DCR_CLIENT_ID_LENGTH = 4_096;
 const MAX_OAUTH_DCR_CLIENT_SECRET_LENGTH = 16_384;
 const OAUTH_REFRESH_LEASE_MS = 120_000;
@@ -11042,6 +11043,29 @@ export function toolAccessService(
     return grant;
   }
 
+  async function revokeGoogleGrantToken(
+    connection: typeof toolConnections.$inferSelect,
+    grant: typeof connectionGrants.$inferSelect,
+    actor: ActorInfo | undefined,
+  ): Promise<"success" | "already_revoked" | "failed" | "not_applicable"> {
+    const ref =
+      grant.credentialSecretRefs.find((candidate) => candidate.configPath === "oauth.refresh_token")
+      ?? grant.credentialSecretRefs.find((candidate) => candidate.configPath === "oauth.access_token");
+    if (!ref) return "not_applicable";
+    try {
+      const { value } = await resolveOAuthGrantSecret(connection, grant, ref, actor, undefined);
+      const response = await requestRemoteHttpEndpoint(new URL(GOOGLE_OAUTH_REVOKE_URL), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token: value }).toString(),
+      });
+      if (response.ok) return "success";
+      return response.status === 400 ? "already_revoked" : "failed";
+    } catch {
+      return "failed";
+    }
+  }
+
   async function resolveOAuthGrantSecret(
     connection: typeof toolConnections.$inferSelect,
     grant: typeof connectionGrants.$inferSelect,
@@ -17641,6 +17665,8 @@ export function toolAccessService(
             providerRevocation = "failed";
           }
         }
+      } else if (isGoogleWorkspaceConnection(connection) && currentGrant.status === "active") {
+        providerRevocation = await revokeGoogleGrantToken(connection, currentGrant, actor);
       }
       const grant = await db.transaction(async (tx) => {
         const removedDelegations = await tx

@@ -9,6 +9,7 @@ import {
   createDb,
   heartbeatRuns,
   issues,
+  toolAccessAuditEvents,
   toolActionRequests,
   toolInvocations,
   toolPolicies,
@@ -47,6 +48,8 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     await db.insert(companyMemberships).values({ companyId: company.id, principalType: "user", principalId: actor.actorId, membershipRole: "admin", status: "active" });
     const google = createFakeGoogle();
     const scopes = googleWorkspaceScopesFor({ gmail: "delete_share" });
+    const revoked: string[] = [];
+    let revokeStatus = 200;
     const handle = async (url: string, init: RequestInit = {}): Promise<Response> => {
       const href = String(url);
       if (href.startsWith("https://accounts.google.com/.well-known/openid-configuration")) {
@@ -58,6 +61,10 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
           code_challenge_methods_supported: ["S256"],
           token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
         });
+      }
+      if (href === "https://oauth2.googleapis.com/revoke") {
+        revoked.push(String(init.body ?? ""));
+        return new Response("", { status: revokeStatus });
       }
       if (href === "https://oauth2.googleapis.com/token") {
         return Response.json({ access_token: google.token, refresh_token: "refresh-fixture", expires_in: 3600, token_type: "Bearer", scope: scopes.join(" ") });
@@ -92,7 +99,11 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
     const tools = await gateway.listToolsForSession(session.token);
     const call = tools.find((tool) => tool.upstreamToolName === "google_call");
-    return { company, google, gateway, session, call, tools, binding: { companyId: company.id, agentId: agent.id, runId: run.id, issueId: issue.id } };
+    return {
+      company, google, gateway, session, call, tools, access, connectionId: connected.connectionId, revoked,
+      failRevoke: (status: number) => { revokeStatus = status; },
+      binding: { companyId: company.id, agentId: agent.id, runId: run.id, issueId: issue.id },
+    };
   }
 
   async function approvePending(f: Awaited<ReturnType<typeof fixture>>) {
@@ -120,6 +131,22 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     expect(card.policyExplanation).toMatchObject({ google: { externalRecipients: ["g@other.org"], recipientsUnknown: false } });
     await approvePending(f);
     expect(sent).toBe(1);
+  });
+
+  it("revokes the Google token when the authorization is removed, even if Google refuses", async () => {
+    const f = await fixture();
+    const [grant] = (await f.access.listConnectionGrants(f.connectionId, f.company.id)).grants.filter((entry) => entry.status === "active");
+    const removed = await f.access.revokeConnectionGrant(f.connectionId, grant.id, actor);
+    expect(removed.status).toBe("revoked");
+    expect(f.revoked).toEqual(["token=refresh-fixture"]);
+    const [event] = (await db.select().from(toolAccessAuditEvents).where(eq(toolAccessAuditEvents.connectionId, f.connectionId)))
+      .filter((row) => (row.details as { providerRevocation?: string } | null)?.providerRevocation);
+    expect((event.details as { providerRevocation: string }).providerRevocation).toBe("success");
+
+    const g = await fixture();
+    g.failRevoke(503);
+    const [other] = (await g.access.listConnectionGrants(g.connectionId, g.company.id)).grants.filter((entry) => entry.status === "active");
+    expect((await g.access.revokeConnectionGrant(g.connectionId, other.id, actor)).status).toBe("revoked");
   });
 
   it("delivers the Google Workspace connector skill to a run that may use the connection", async () => {
