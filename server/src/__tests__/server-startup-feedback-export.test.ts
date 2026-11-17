@@ -382,6 +382,9 @@ vi.mock("../services/wardmote-update-runtime.js", () => ({
 
 vi.mock("../services/chat-completion-delivery.js", () => ({ chatCompletionDeliveryService: () => ({ hasPending: vi.fn(async () => false), sweepPending: completionSweepMock }) }));
 
+vi.mock("../services/model-cooldown-prober.js", () => ({
+  modelCooldownProber: () => ({ start: vi.fn(async () => 0), stop: vi.fn() }),
+}));
 vi.mock("../services/notifications/dispatcher.js", () => ({
   startNotificationDispatcher: vi.fn(() => () => {}),
 }));

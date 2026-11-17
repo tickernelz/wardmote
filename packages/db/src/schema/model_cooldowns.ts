@@ -10,6 +10,8 @@ export const modelCooldowns = pgTable(
     cooldownUntil: timestamp("cooldown_until", { withTimezone: true }).notNull(),
     reason: text("reason").notNull(),
     sourceRunId: uuid("source_run_id"),
+    probeAfter: timestamp("probe_after", { withTimezone: true }),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

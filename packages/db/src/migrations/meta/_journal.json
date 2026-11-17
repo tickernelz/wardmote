@@ -2745,6 +2745,13 @@
       "when": 1794808988056,
       "tag": "0393_wardmote_openwa_autonomous_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 394,
+      "version": "7",
+      "when": 1794899587795,
+      "tag": "0394_wardmote_model_cooldown_probe",
+      "breakpoints": true
     }
   ]
 }

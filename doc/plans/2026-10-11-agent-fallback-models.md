@@ -60,7 +60,30 @@ user chain keyed by the same selector is replaced by the agent's list.
 OMP's restore-to-primary only applies after a switch OMP made inside the same process; there is no setting or flag to
 seed a suppression or an active fallback at startup. A run that Wardmote starts on a fallback because the primary is
 cooling stays on that fallback (or moves further down the chain) for the rest of that run; the next run starts on the
-primary once its cooldown has expired.
+primary once its cooldown has expired or a probe released it.
+
+## Cooldown prober (2026-11-17, ZHA-6645)
+
+Since 2026-10-15 (148b81832e) a fresh wake ignored cooldowns and always started on the primary. Measured on the
+production instance for 2026-11-10..17: 118 in-run switches, all with OMP's 5 min default (no provider retry-after);
+36 runs started on a primary that had switched away less than 5 min earlier and spent 6,510 s in total (p50 53 s,
+p90 545 s) on it before OMP moved on. A fresh wake again starts on the first chain selector that is not cooling (the
+primary when all are cooling; the overlay keeps the configured order), and a prober keeps a recovered model from
+waiting out the rest of its cooldown:
+
+- `model_cooldowns.probe_after` is the write time for a default cooldown and null when the provider named its wait;
+  only rows with a `probe_after` before `cooldown_until` are probed, never before `probe_after`.
+- The probe is `omp bench <selector> --runs 1 --par 1 --max-tokens 1 --prompt ping --json` through the adapter's
+  `probeModel`, with the source run's agent config resolved like a run (secrets included), so endpoint and
+  credentials match the run. Measured: 2.1 s and $0.0000123 on `sub2api-deepseek/deepseek-flash`, 2.1 s and $0.0028
+  on `sub2api-claude/claude-opus-5-5`; `omp -p` took 88.9 s and was rejected. Later runs of the same deepseek-flash
+  probe measured 17-88 s TTFT and 28-51 output tokens (a reasoning model ignores the one-token cap for its thinking),
+  so the probe timeout is 60 s, the same as the probation first-event limit. A failing provider costs about 32 s
+  (OMP's HTTP client retries 503s). One probe process: 315-385 MB RSS, 1.2-1.5 s CPU; at most 2 run at once.
+- Schedule, success rule, hourly limit, release compare-and-set on `updated_at`, events and the 10 min probation with a
+  60 s first-event limit are described in `docs/fork/OPERATIONS.md` (Fallback models).
+- The prober is in-process (`server/src/services/model-cooldown-prober.ts`), one per database; streak and hourly
+  counts restart from zero after a server restart, the schedule itself is rebuilt from the table.
 
 ## Events and visibility
 
@@ -73,3 +96,6 @@ primary once its cooldown has expired.
 - The Live now card shows `Fallback: <name> · <provider> (primary: rate limit)`; the run transcript shows a line per
   switch.
 - Activity `issue.run_model_fallback` on the issue per switch, details `{ runId, agentId, from, to, reason, phase }`.
+- `model.cooldown_released` run event and `issue.run_model_cooldown_released` activity when probes end a cooldown;
+  `model.primary_probation` run event on a run that starts on a model released within 10 min.
+- The in-run `model.fallback` payload carries `retryAfterSource: "provider" | "default"`.

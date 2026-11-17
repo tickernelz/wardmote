@@ -843,7 +843,33 @@ single-agent and batch writes both validate it. Design notes:
   selector. One is written when OMP reports a switch (its retry-after, else 5 min)
   and when a run fails with quota or upstream errors. A new run starts on the
   first model that is not cooling down; a task model override counts as the
-  primary and the agent list follows it.
+  primary and the agent list follows it. A retry keeps the model its lineage chose.
+- A cooldown without a provider retry-after (the 5 min default) is probed: one
+  prober per company and selector sends `omp bench <model> --runs 1 --max-tokens 1`
+  under the agent's OMP command, profile, agent dir and config files, with the run's
+  env sanitizing (no server `WARDMOTE_*`, no agent identity keys). Probes run
+  15 s after the cooldown is written, then 30 s, 60 s, 2 min and every 5 min (±20 %
+  jitter) after a failed probe, and 15 s after a successful one. Two successes in a
+  row end the cooldown (`cooldown_until = released_at = now`) unless a run failure
+  wrote the row in between. At most 20 probes per hour per company and selector,
+  2 at once on the host: one probe process holds 315-385 MB RSS and about 1.2-1.5 s
+  CPU, so two fit integron's ~2 GB of free memory. A probe that has not finished
+  within 60 s (the probation first-event limit below) fails. Reasoning models answer
+  the one-token cap with 28-51 output tokens (deepseek-flash: $0.00005-0.00007 per
+  probe, 2-88 s TTFT measured on 2026-11-17). A cooldown with a provider retry-after is never probed. The
+  schedule is rebuilt from the table at server start. Agents on an AI connection or a
+  non-local environment are not probed; their cooldowns expire on their own, and for
+  those 5 min a fresh wake in the company starts on the next model.
+- A release writes run event `model.cooldown_released` on the run that wrote the
+  cooldown and activity `issue.run_model_cooldown_released` on its issue, with
+  `pings`, `costUsd` and `retriesPulledForward`. A scheduled retry that waited only
+  for that cooldown is moved to now. A run that starts on the released model within
+  10 min gets `providers.streamFirstEventTimeoutSeconds: 60` in its overlay (OMP's
+  default is 300 s; an agent's own value wins) and a `model.primary_probation` run
+  event, so a model that is still slow hands the turn to the next one after 60 s.
+- Check from the instance database:
+  `select selector, reason, cooldown_until, probe_after, released_at from model_cooldowns where company_id = '<id>';`
+  and the `model.cooldown_released` events.
 - A refusal is retried by Wardmote on the next model, without a cooldown. A quota
   or upstream failure is retried on the next free model at the normal backoff; if
   every model is cooling down the existing retry timing applies.

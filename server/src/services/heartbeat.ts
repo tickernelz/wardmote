@@ -565,6 +565,7 @@ import {
   planModelFallbackRetry,
 } from "./model-fallback.js";
 import { createRunModelFallback } from "./heartbeat/run-model-fallback.js";
+import { modelCooldownProber } from "./model-cooldown-prober.js";
 import {
   clearLocalCliRunStarting,
   countLocalCliRunsStarting,
@@ -1075,6 +1076,7 @@ export function heartbeatService(
   const runModelFallback = createRunModelFallback({
     db,
     appendRunEvent,
+    armModelCooldownProbe: (companyId, selector) => modelCooldownProber(db).arm(companyId, selector),
   });
   const instanceSettings = instanceSettingsService(db);
   const getCurrentUserRedactionOptions = async () => ({

@@ -13,6 +13,7 @@ import {
 import { detectModel, getConfigSchema, resolveOmpCommand } from "./config.js";
 import { execute } from "./execute.js";
 import { listOmpModels, refreshOmpModels } from "./models.js";
+import { probeOmpModel } from "./model-probe.js";
 import { isOmpStartupComplete } from "./parse.js";
 import { getOmpQuotaWindows } from "./quota.js";
 import { listOmpSkills, syncOmpSkills } from "./skills.js";
@@ -108,6 +109,7 @@ export function createServerAdapter(): ServerAdapterModule {
     supportsLiveSteering: true,
     runtimeToolDelivery: "environment",
     getQuotaWindows: getOmpQuotaWindows,
+    probeModel: probeOmpModel,
     supportsInstructionsBundle: true,
     instructionsPathKey: "instructionsFilePath",
     requiresMaterializedRuntimeSkills: false,

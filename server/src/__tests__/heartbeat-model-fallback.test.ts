@@ -174,7 +174,7 @@ describeEmbeddedPostgres("per-agent fallback models", () => {
     return db.select().from(modelCooldowns).where(eq(modelCooldowns.companyId, companyId));
   }
 
-  it("stays on the primary for the next wake after OMP reports an in-run fallback, whatever cooldown it left", async () => {
+  it("starts the next wake on the first fallback while the primary cools down after an in-run fallback", async () => {
     const target = await seed({ model: PRIMARY, thinking: "high", fallbackModels: [BACKUP, SECOND], modelEfforts: { [BACKUP]: "low" } });
     behaviors.set(target.agentId, [
       async (ctx) => {
@@ -195,6 +195,7 @@ describeEmbeddedPostgres("per-agent fallback models", () => {
     const [cooldown] = await cooldownRows(target.companyId);
     expect(cooldown?.selector).toBe(PRIMARY);
     expect(cooldown!.cooldownUntil.getTime()).toBeGreaterThan(Date.now() + 500_000);
+    expect(cooldown!.probeAfter).toBeNull();
     const activity = await db.select().from(activityLog).where(and(
       eq(activityLog.companyId, target.companyId),
       eq(activityLog.action, "issue.run_model_fallback"),
@@ -205,15 +206,16 @@ describeEmbeddedPostgres("per-agent fallback models", () => {
 
     const second = await runOnce(target);
     expect(second.run.status).toBe("succeeded");
-    expect(second.seen.config.model).toBe(PRIMARY);
-    expect(second.seen.config.fallbackModels).toEqual([BACKUP, SECOND]);
-    expect(second.seen.config.modelEfforts).toEqual({ [BACKUP]: "low" });
-    expect(second.seen.context.wardmoteModelFallback ?? null).toBeNull();
+    expect(second.seen.config.model).toBe(BACKUP);
+    expect(second.seen.config.fallbackModels).toEqual([PRIMARY, SECOND]);
+    expect(second.seen.config.modelEfforts).toEqual({ [BACKUP]: "low", [PRIMARY]: "high" });
+    expect(second.seen.context.wardmoteModelFallback).toMatchObject({ primaryModel: PRIMARY, activeModel: BACKUP, reason: "rate_limit" });
     const startEvents = await db.select().from(heartbeatRunEvents).where(and(
       eq(heartbeatRunEvents.runId, second.run.id),
       eq(heartbeatRunEvents.eventType, "model.fallback"),
     ));
-    expect(startEvents).toHaveLength(0);
+    expect(startEvents).toHaveLength(1);
+    expect(startEvents[0]!.payload).toMatchObject({ phase: "run_start", from: PRIMARY, to: BACKUP, reason: "rate_limit" });
     const [stillCooling] = await cooldownRows(target.companyId);
     expect(stillCooling!.selector).toBe(PRIMARY);
     expect(stillCooling!.cooldownUntil.getTime()).toBeGreaterThan(Date.now());
@@ -221,7 +223,7 @@ describeEmbeddedPostgres("per-agent fallback models", () => {
       eq(activityLog.companyId, target.companyId),
       eq(activityLog.action, "issue.run_model_fallback"),
     ));
-    expect(activityAfterSecond).toHaveLength(1);
+    expect(activityAfterSecond).toHaveLength(2);
   }, 60_000);
 
   it("retries a quota failure on the same primary at the fast delay, then advances to the fallback at the step delay", async () => {
@@ -233,6 +235,7 @@ describeEmbeddedPostgres("per-agent fallback models", () => {
     await expect.poll(() => cooldownRows(target.companyId).then((rows) => rows.length), { timeout: 5_000 }).toBe(1);
     const [cooldown] = await cooldownRows(target.companyId);
     expect(cooldown).toMatchObject({ selector: PRIMARY, reason: "rate_limit" });
+    expect(cooldown!.probeAfter).not.toBeNull();
     await expect.poll(() => retryOf(failed.run.id).then((row) => row?.status ?? null), { timeout: 5_000 }).toBe("scheduled_retry");
     const primaryRetry = await retryOf(failed.run.id);
     const primaryRetryContext = primaryRetry!.contextSnapshot as Record<string, unknown>;
