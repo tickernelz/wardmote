@@ -480,7 +480,7 @@ export interface ChatSdkRuntimeCallbacks {
   onOpenwaBeforeCatchUp?(gateway: OpenwaGatewayClient): Promise<void>;
   onOpenwaLive?(): Promise<void>;
   onOpenwaFailure?(error: unknown): Promise<void>;
-  onOpenwaSessionStatus?(status: string, source: OpenwaSessionStatusSource): Promise<void>;
+  onOpenwaSessionStatus?(status: string, source: OpenwaSessionStatusSource, phone: string | null): Promise<void>;
   onMessage(event: ChatSdkMessageCallbackEvent): Promise<void> | void;
   onTelegramGenerationStopped?(
     event: ChatSdkCallbackEvent<TelegramGenerationStoppedProof>,

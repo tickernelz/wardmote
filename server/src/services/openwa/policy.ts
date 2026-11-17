@@ -96,6 +96,8 @@ export interface OpenwaPolicySnapshot {
   readonly agentDigits: string;
   readonly agentJid: string;
   readonly agentLids: Set<string>;
+  readonly formerAgentDigits: ReadonlySet<string>;
+  readonly formerAgentLids: Map<string, string>;
   readonly owners: readonly OpenwaSnapshotOwner[];
   readonly ownerByJid: Map<string, OpenwaSnapshotOwner>;
   readonly allow: ReadonlySet<string>;
@@ -385,8 +387,21 @@ export function openwaTriggerCandidate(event: OpenwaInboundEvent, snapshot: Open
   return matchedRules(snapshot, event, triggers, facts).length > 0 || openwaControlCommand(event.body) !== null;
 }
 
+/** True when this id is a number (or its LID) the agent used before its current number. */
+export function openwaFormerAgentId(snapshot: Pick<OpenwaPolicySnapshot, "agentDigits" | "formerAgentDigits" | "formerAgentLids">, id: string): boolean {
+  const lower = id.trim().toLowerCase();
+  if (snapshot.formerAgentLids.has(lower)) return true;
+  if (lower.endsWith("@lid")) return false;
+  const digits = openwaDigits(lower);
+  return digits !== null && digits !== snapshot.agentDigits && snapshot.formerAgentDigits.has(digits);
+}
+
 export function openwaQuoteMayAddressAgent(event: OpenwaInboundEvent, snapshot: OpenwaPolicySnapshot): boolean {
-  if (!event.quoted || event.quoted.id.startsWith("false_")) return false;
+  if (!event.quoted) return false;
+  if (event.quoted.id.startsWith("false_")) {
+    const author = openwaQuotedAuthor(event);
+    if (!author || !openwaFormerAgentId(snapshot, author)) return false;
+  }
   const triggers = openwaEffectiveTriggers(snapshot.policy.triggers, openwaChatSettings(snapshot, event.chatKey).triggers);
   return triggers.replyToAgent && openwaChatActive(snapshot, event.chatKey, event.chatKind === "group", event.phoneTyped);
 }
@@ -486,6 +501,7 @@ export async function loadOpenwaPolicySnapshot(db: Reader, companyId: string, en
       policy: chatEndpoints.policy,
       revision: chatEndpoints.policyRevision,
       botExternalId: chatEndpoints.botExternalId,
+      setup: chatEndpoints.setup,
       providerAccountId: chatEndpoints.providerAccountId,
       provider: chatEndpoints.provider,
     })
@@ -552,6 +568,13 @@ export async function loadOpenwaPolicySnapshot(db: Reader, companyId: string, en
     .limit(OPENWA_DISCOVERED_GROUP_CAP);
   const policy = openwaEndpointPolicySchema.parse(endpoint.policy ?? {});
   const agentDigits = (endpoint.botExternalId ?? "").replace(/\D/g, "");
+  const formerAgentDigits = new Set<string>();
+  const formerAgentLids = new Map<string, string>();
+  for (const former of endpoint.setup.openwaNumber?.previous ?? []) {
+    if (former.number === agentDigits) continue;
+    formerAgentDigits.add(former.number);
+    for (const lid of former.lids) formerAgentLids.set(lid, former.number);
+  }
   const account = endpoint.providerAccountId ?? "";
   const owners: OpenwaSnapshotOwner[] = [];
   const ownerByJid = new Map<string, OpenwaSnapshotOwner>();
@@ -587,6 +610,8 @@ export async function loadOpenwaPolicySnapshot(db: Reader, companyId: string, en
     agentDigits,
     agentJid: agentDigits + "@c.us",
     agentLids: new Set(),
+    formerAgentDigits,
+    formerAgentLids,
     owners,
     ownerByJid,
     allow,

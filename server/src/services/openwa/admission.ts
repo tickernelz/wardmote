@@ -220,6 +220,13 @@ export interface OpenwaAdmissionRuntime {
   sessionId: string;
   adapter(): OpenwaChatAdapter | null;
   admit(input: OpenwaAdmitInput): Promise<void>;
+  /** Digits of the number the gateway session is linked to now, adopting it when it differs; null when unreadable. */
+  linkedNumber?(): Promise<string | null>;
+}
+
+export interface OpenwaGroupRecount {
+  active: number;
+  notInvited: string[];
 }
 
 export interface OpenwaAdmissionDeps {
@@ -577,11 +584,13 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
   /** Learns which of these WhatsApp LIDs belong to the agent or an owner, so LID-addressed groups recognise their mentions and joins. */
   async function ensureLids(runtime: OpenwaAdmissionRuntime, snapshot: OpenwaPolicySnapshot, ids: Iterable<string>): Promise<void> {
     const ownersWithoutLid = snapshot.owners.filter((owner) => !owner.lids.size && owner.digits);
-    if (snapshot.agentLids.size && !ownersWithoutLid.length) return;
+    const learnedFormer = new Set(snapshot.formerAgentLids.values());
+    const formerWithoutLid = [...snapshot.formerAgentDigits].some((digits) => !learnedFormer.has(digits));
+    if (snapshot.agentLids.size && !ownersWithoutLid.length && !formerWithoutLid) return;
     const unknown = new Set<string>();
     for (const id of ids) {
       const lid = id.trim().toLowerCase();
-      if (lid.endsWith("@lid") && !snapshot.agentLids.has(lid) && !snapshot.ownerByJid.has(lid)) unknown.add(lid);
+      if (lid.endsWith("@lid") && !snapshot.agentLids.has(lid) && !snapshot.formerAgentLids.has(lid) && !snapshot.ownerByJid.has(lid)) unknown.add(lid);
     }
     if (!unknown.size) return;
     await Promise.all(
@@ -589,6 +598,7 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
         const digits = await lidPhone(runtime, snapshot, lid);
         if (!digits) return;
         if (digits === snapshot.agentDigits) snapshot.agentLids.add(lid);
+        else if (snapshot.formerAgentDigits.has(digits)) snapshot.formerAgentLids.set(lid, digits);
         for (const owner of ownersWithoutLid) if (owner.digits === digits) openwaLearnOwnerLid(snapshot, owner, lid);
       }),
     );
@@ -617,7 +627,7 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
     if (!gateway) return false;
     const promise = (async () => {
       try {
-        await upsertGroup(runtime, snapshot, gateway, chatKey);
+        await upsertGroup(runtime, snapshot, gateway, chatKey, true);
         discoveryFailures.delete(key);
         stats.discoveries++;
         return true;
@@ -642,14 +652,22 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
     snapshot: OpenwaPolicySnapshot,
     gateway: OpenwaGatewayClient,
     chatKey: string,
+    joined = false,
   ) {
     const group = await gateway.getGroup(chatKey);
     const participants = openwaParticipantJids(group.participants ?? []);
+    if (!joined) {
+      await ensureLids(runtime, snapshot, participants);
+      if (!participants.some((id) => isAgentJid(snapshot, id))) {
+        await markNumberNotInvited(runtime, snapshot, chatKey);
+        return null;
+      }
+    }
     const ownerPresent = openwaOwnerAmong(snapshot, participants);
     const label = (group.name || chatKey).slice(0, 512);
     const autoEnabled = openwaGroupEnabled(snapshot.policy, { activation: "auto" }, ownerPresent);
     const providerResourceId = openwaThreadId({ sessionId: runtime.sessionId, chatId: chatKey, isGroup: true });
-    const metadata = { chatKey, groupName: group.name ?? null, participants, ownerPresent, participantCount: group.participants?.length ?? participants.length };
+    const metadata = { chatKey, groupName: group.name ?? null, participants, ownerPresent, participantCount: group.participants?.length ?? participants.length, numberNotInvited: false };
     const [row] = await db
       .insert(chatEndpointResources)
       .values({
@@ -996,13 +1014,15 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
     await ensureLids(runtime, snapshot, event.participantIds);
     const self = event.participantIds.some((id) => isAgentJid(snapshot, id));
     if (event.event === "group.leave" && self) {
+      const linked = runtime.linkedNumber ? await runtime.linkedNumber().catch(() => null) : null;
+      if (linked !== null && linked !== snapshot.agentDigits) return;
       await markGroupLeft(runtime, snapshot, event);
       return;
     }
     const added = event.event === "group.join" && self;
     const gateway = runtime.adapter()?.gateway ?? null;
     if (!gateway) return;
-    const discovered = await upsertGroup(runtime, snapshot, gateway, chatKey).catch(() => null);
+    const discovered = await upsertGroup(runtime, snapshot, gateway, chatKey, added).catch(() => null);
     if (!discovered) return;
     const access = openwaChatSettings(snapshot, chatKey).ownerGroupAccess ?? "auto";
     await openwaRecordOwnerGroupStatus(
@@ -1035,14 +1055,66 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
     let refreshed = 0;
     for (const [chatKey, chat] of [...snapshot.chats]) {
       if (!chat.isGroup || !chat.available) continue;
-      if (await upsertGroup(runtime, snapshot, gateway, chatKey).then(() => true, () => false)) refreshed++;
+      if (await upsertGroup(runtime, snapshot, gateway, chatKey).then(Boolean, () => false)) refreshed++;
     }
     return refreshed;
+  }
+
+  async function markNumberNotInvited(runtime: OpenwaAdmissionRuntime, snapshot: OpenwaPolicySnapshot, chatKey: string) {
+    const providerResourceId = openwaThreadId({ sessionId: runtime.sessionId, chatId: chatKey, isGroup: true });
+    await db
+      .update(chatEndpointResources)
+      .set({
+        availability: "unavailable",
+        metadata: sql`${chatEndpointResources.metadata} || '{"numberNotInvited":true}'::jsonb`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(chatEndpointResources.companyId, runtime.companyId),
+          eq(chatEndpointResources.endpointId, runtime.endpointId),
+          eq(chatEndpointResources.type, "group_chat"),
+          eq(chatEndpointResources.providerResourceId, providerResourceId),
+        ),
+      );
+    const existing = snapshot.chats.get(chatKey);
+    if (existing) existing.available = false;
+  }
+
+  /** Rechecks every known group against the live participant list after the session's number changed: groups holding the current number become active, the rest are marked as waiting for the new number to be invited. */
+  async function recountGroupsAfterNumberChange(runtime: OpenwaAdmissionRuntime): Promise<OpenwaGroupRecount | null> {
+    const snapshot = await snapshotFor(runtime);
+    const gateway = runtime.adapter()?.gateway ?? null;
+    if (!snapshot || !gateway) return null;
+    const recount: OpenwaGroupRecount = { active: 0, notInvited: [] };
+    for (const [chatKey, chat] of [...snapshot.chats]) {
+      if (!chat.isGroup) continue;
+      const discovered = await upsertGroup(runtime, snapshot, gateway, chatKey).catch(() => undefined);
+      if (discovered === undefined) continue;
+      if (discovered === null) {
+        recount.notInvited.push(chat.label || chatKey);
+        continue;
+      }
+      const access = openwaChatSettings(snapshot, chatKey).ownerGroupAccess ?? "auto";
+      await openwaRecordOwnerGroupStatus(
+        db,
+        { companyId: runtime.companyId, endpointId: runtime.endpointId, providerResourceId: discovered.providerResourceId, chatKey },
+        {
+          ownerOnly: access === "auto" && discovered.ownerOnly,
+          reason: access === "off" ? "disabled" : discovered.ownerOnly ? "owner_only" : "non_owner",
+          participantCount: discovered.participantCount,
+        },
+        { source: "number_changed" },
+      );
+      recount.active++;
+    }
+    return recount;
   }
 
   return {
     stats,
     refreshGroups,
+    recountGroupsAfterNumberChange,
     hooks(runtime: OpenwaAdmissionRuntime): OpenwaIngressHooks {
       return {
         onInbound: (event, ctx) => onInbound(runtime, event, ctx),

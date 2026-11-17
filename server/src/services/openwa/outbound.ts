@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, like, or } from "drizzle-orm";
 import { chatOutboundMessages, type Db } from "@tickernelz/wardmote-db";
 import type {
   ChatOutboundMessageSource,
@@ -260,7 +260,21 @@ export function openwaOutboundRegistry(
           ),
         )
         .limit(1);
-      return row ? toRecord(row) : null;
+      if (row) return toRecord(row);
+      const keyId = openwaMessageKeyId(waMessageId);
+      if (keyId === waMessageId) return null;
+      const [sameKey] = await db
+        .select()
+        .from(chatOutboundMessages)
+        .where(
+          and(
+            eq(chatOutboundMessages.companyId, companyId),
+            eq(chatOutboundMessages.endpointId, endpointId),
+            like(chatOutboundMessages.providerMessageId, "%\\_" + keyId.replace(/[\\%_]/g, "\\$&") + "%"),
+          ),
+        )
+        .limit(1);
+      return sameKey && sameKey.providerMessageId && openwaMessageKeyId(sameKey.providerMessageId) === keyId ? toRecord(sameKey) : null;
     },
 
     async matchEcho(endpointId, candidate) {

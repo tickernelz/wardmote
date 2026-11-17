@@ -219,6 +219,7 @@ export interface OpenwaChat {
   settings: OpenwaChatSettings;
   ownerPresent: boolean | null;
   participantCount: number | null;
+  numberNotInvited?: boolean;
 }
 
 export interface OpenwaGatewayChat {
