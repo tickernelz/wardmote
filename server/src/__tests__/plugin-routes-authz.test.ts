@@ -1,6 +1,8 @@
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { JsonRpcCallError, PLUGIN_RPC_ERROR_CODES } from "@tickernelz/wardmote-plugin-sdk";
+import { badRequest } from "../errors.js";
 
 const mockRegistry = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -395,8 +397,8 @@ describe("plugin install and upgrade authz", () => {
         },
       });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/outside the selected company/i);
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: "Plugin config references a secret outside the selected company" });
     expect(mockSecretService.syncSecretRefsForTarget).not.toHaveBeenCalled();
     expect(mockRegistry.upsertConfig).not.toHaveBeenCalled();
   }, 20_000);
@@ -669,6 +671,136 @@ describe("plugin routes hide unexpected error text", () => {
     expectNoSqlText(res);
     expect(set).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", error: sqlError().message }));
   });
+
+  const instanceAdmin = () => boardActor({ isInstanceAdmin: true, userId: "instance-admin" });
+
+  it("answers 500 with a generic message when a plugin lifecycle action throws", async () => {
+    readyPlugin();
+    mockLifecycle.unload.mockRejectedValue(sqlError());
+    mockLifecycle.enable.mockRejectedValue(sqlError());
+    mockLifecycle.disable.mockRejectedValue(sqlError());
+    mockLifecycle.upgrade.mockRejectedValue(sqlError());
+    mockRegistry.upsertConfig.mockRejectedValue(sqlError());
+    mockSecretService.syncSecretRefsForTarget.mockResolvedValue(undefined);
+    const installPlugin = vi.fn().mockRejectedValue(sqlError());
+    const triggerJob = vi.fn().mockRejectedValue(sqlError());
+    const { app } = await createApp(instanceAdmin(), { installPlugin }, {
+      jobDeps: {
+        scheduler: { triggerJob },
+        jobStore: { getJobByIdForPlugin: vi.fn().mockResolvedValue({ id: "job-1" }) },
+      },
+    });
+
+    const attempts: Array<[string, request.Test]> = [
+      ["install", request(app).post("/api/plugins/install").send({ packageName: "@tickernelz/wardmote-plugin-example" })],
+      ["uninstall", request(app).delete(`/api/plugins/${pluginId}`)],
+      ["enable", request(app).post(`/api/plugins/${pluginId}/enable`)],
+      ["disable", request(app).post(`/api/plugins/${pluginId}/disable`).send({})],
+      ["upgrade", request(app).post(`/api/plugins/${pluginId}/upgrade`).send({})],
+      ["config", request(app).post(`/api/plugins/${pluginId}/config`).send({ companyId: companyA, configJson: { region: "eu" } })],
+      ["job trigger", request(app).post(`/api/plugins/${pluginId}/jobs/job-1/trigger`)],
+    ];
+    for (const [name, attempt] of attempts) {
+      const res = await attempt;
+      expect(res.status, name).toBe(500);
+      expect(res.body, name).toEqual({ error: "Internal server error" });
+      expectNoSqlText(res);
+    }
+    expect(installPlugin).toHaveBeenCalled();
+    expect(mockLifecycle.unload).toHaveBeenCalled();
+    expect(mockLifecycle.enable).toHaveBeenCalled();
+    expect(mockLifecycle.disable).toHaveBeenCalled();
+    expect(mockLifecycle.upgrade).toHaveBeenCalled();
+    expect(mockRegistry.upsertConfig).toHaveBeenCalled();
+    expect(triggerJob).toHaveBeenCalledWith("job-1", "manual");
+  });
+
+  it("keeps the authored 400 answer for expected plugin lifecycle errors", async () => {
+    readyPlugin();
+    mockLifecycle.enable.mockRejectedValue(badRequest("Invalid lifecycle transition: ready → ready"));
+    const { app } = await createApp(instanceAdmin());
+
+    const res = await request(app).post(`/api/plugins/${pluginId}/enable`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Invalid lifecycle transition: ready → ready" });
+  });
+
+  it("answers 400 with the scheduler's message when a manual trigger targets an inactive job", async () => {
+    readyPlugin();
+    const { createPluginJobScheduler } = await import("../services/plugin-job-scheduler.js");
+    const jobStore = {
+      getJobByIdForPlugin: vi.fn().mockResolvedValue({ id: "job-1" }),
+      getJobById: vi.fn().mockResolvedValue({ id: "job-1", pluginId, jobKey: "sync", status: "paused" }),
+    };
+    const scheduler = createPluginJobScheduler({
+      db: {} as never,
+      jobStore: jobStore as never,
+      workerManager: { isRunning: vi.fn(() => true) } as never,
+    });
+    const { app } = await createApp(instanceAdmin(), {}, { jobDeps: { scheduler, jobStore } });
+
+    const res = await request(app).post(`/api/plugins/${pluginId}/jobs/job-1/trigger`);
+
+    expect(jobStore.getJobById).toHaveBeenCalledWith("job-1");
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Job "sync" is not active (status: paused)' });
+  });
+
+  function scopedSmokePlugin() {
+    mockRegistry.getById.mockResolvedValue(null);
+    mockRegistry.getByKey.mockResolvedValue({
+      id: pluginId,
+      pluginKey: "wardmote.example",
+      version: "1.0.0",
+      status: "ready",
+      manifestJson: {
+        id: "wardmote.example",
+        capabilities: ["api.routes.register"],
+        apiRoutes: [{
+          routeKey: "smoke",
+          method: "GET",
+          path: "/smoke",
+          auth: "board-or-agent",
+          capability: "api.routes.register",
+          companyResolution: { from: "query", key: "companyId" },
+        }],
+      },
+    });
+  }
+
+  it("answers 500 with a generic message when a scoped plugin API host error carries a non-500 status", async () => {
+    scopedSmokePlugin();
+    const call = vi.fn().mockRejectedValue(Object.assign(sqlError(), { status: 503 }));
+    const { app } = await createApp(boardActor(), {}, { bridgeDeps: { workerManager: { call } } });
+
+    const res = await request(app)
+      .get("/api/plugins/wardmote.example/api/smoke")
+      .query({ companyId: companyA });
+
+    expect(call).toHaveBeenCalled();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Internal server error" });
+    expectNoSqlText(res);
+  }, 20_000);
+
+  it("answers 502 with a fixed message when the plugin worker fails a scoped API call", async () => {
+    scopedSmokePlugin();
+    const call = vi.fn().mockRejectedValue(new JsonRpcCallError({
+      code: PLUGIN_RPC_ERROR_CODES.WORKER_ERROR,
+      message: sqlError().message,
+    }));
+    const { app } = await createApp(boardActor(), {}, { bridgeDeps: { workerManager: { call } } });
+
+    const res = await request(app)
+      .get("/api/plugins/wardmote.example/api/smoke")
+      .query({ companyId: companyA });
+
+    expect(call).toHaveBeenCalled();
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Plugin API request failed" });
+    expectNoSqlText(res);
+  }, 20_000);
 });
 
 describe("plugin local folder routes", () => {

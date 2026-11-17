@@ -15,6 +15,7 @@ import type {
   PluginUiSlotDeclaration,
 } from "@tickernelz/wardmote-shared";
 import { logger } from "../middleware/logger.js";
+import { badRequest } from "../errors.js";
 import { pluginManifestValidator } from "./plugin-manifest-validator.js";
 import { pluginCapabilityValidator } from "./plugin-capability-validator.js";
 import { pluginRegistryService } from "./plugin-registry.js";
@@ -654,7 +655,7 @@ export function isStandaloneBundledPluginPath(
 
 export function readWardmotePluginPackageField(pkgJson: Record<string, unknown>): unknown {
   if (pkgJson["wardmotePlugin"] === undefined && pkgJson["paperclipPlugin"] !== undefined) {
-    throw new Error('package.json declares the retired "paperclipPlugin" field; rename it to "wardmotePlugin"');
+    throw badRequest('package.json declares the retired "paperclipPlugin" field; rename it to "wardmotePlugin"');
   }
   return pkgJson["wardmotePlugin"];
 }
@@ -852,10 +853,10 @@ export async function ensureLocalPluginBuilt(
     const timeoutMessage = (error as { killed?: unknown }).killed === true
       ? ` after timing out at ${LOCAL_PLUGIN_AUTOBUILD_TIMEOUT_MS}ms`
       : "";
-    const stderrMessage = stderr.length > 0 ? ` stderr: ${stderr}` : "";
-    throw new Error(
+    logger.warn({ packageName, stderr }, "plugin-loader: bundled local plugin auto-build failed");
+    throw badRequest(
       `Failed to auto-build bundled local plugin ${packageName}${timeoutMessage}. ` +
-        `Run \`${manualBuildCommand}\` from the repo root and retry.${stderrMessage}`,
+        `Run \`${manualBuildCommand}\` from the repo root and retry.`,
     );
   }
 
@@ -871,7 +872,7 @@ export async function ensureLocalPluginBuilt(
     if (stillMissingStandaloneRuntimeDeps.length > 0) {
       missingDetails.push(`runtime dependencies: ${stillMissingStandaloneRuntimeDeps.join(", ")}`);
     }
-    throw new Error(
+    throw badRequest(
       `Bundled local plugin ${packageName} is still missing ${missingDetails.join("; ")} after auto-build. ` +
         `Run \`${manualBuildCommand}\` from the repo root and retry.`,
     );
@@ -1044,7 +1045,7 @@ export function pluginLoader(
 
     const uniqueRequested = new Set(requestedRoutePaths);
     if (uniqueRequested.size !== requestedRoutePaths.length) {
-      throw new Error(`Plugin ${manifest.id} declares duplicate page routePath values`);
+      throw badRequest(`Plugin ${manifest.id} declares duplicate page routePath values`);
     }
 
     const installedPlugins = await registry.listInstalled();
@@ -1055,7 +1056,7 @@ export function pluginLoader(
       const installedRoutePaths = new Set(getDeclaredPageRoutePaths(installedManifest));
       const conflictingRoute = requestedRoutePaths.find((routePath) => installedRoutePaths.has(routePath));
       if (conflictingRoute) {
-        throw new Error(
+        throw badRequest(
           `Plugin ${manifest.id} routePath "${conflictingRoute}" conflicts with installed plugin ${plugin.pluginKey}`,
         );
       }
@@ -1086,7 +1087,7 @@ export function pluginLoader(
     const { packageName, localPath, version, installDir } = installOptions;
 
     if (!packageName && !localPath) {
-      throw new Error("Either packageName or localPath must be provided");
+      throw badRequest("Either packageName or localPath must be provided");
     }
 
     const targetInstallDir = installDir ?? localPluginDir;
@@ -1099,7 +1100,7 @@ export function pluginLoader(
       // Local path install — validate the directory exists
       const absLocalPath = path.resolve(localPath);
       if (!existsSync(absLocalPath)) {
-        throw new Error(`Local plugin path does not exist: ${absLocalPath}`);
+        throw badRequest("Local plugin path does not exist");
       }
       resolvedPackagePath = absLocalPath;
       const pkgJson = await readPackageJson(absLocalPath);
@@ -1131,7 +1132,8 @@ export function pluginLoader(
           { timeout: 120_000 }, // 2 minute timeout for npm install
         );
       } catch (err) {
-        throw new Error(`npm install failed for ${spec}: ${String(err)}`);
+        log.warn({ err, spec }, "plugin-loader: npm install failed");
+        throw badRequest(`npm install failed for ${spec}`);
       }
 
       // Resolve the package path after installation
@@ -1147,9 +1149,7 @@ export function pluginLoader(
       }
 
       if (!existsSync(resolvedPackagePath)) {
-        throw new Error(
-          `Package directory not found after installation: ${resolvedPackagePath}`,
-        );
+        throw badRequest(`Package directory not found after installing ${resolvedPackageName}`);
       }
     }
 
@@ -1157,7 +1157,7 @@ export function pluginLoader(
     // Note: this.loadManifest (used via current context)
     assertPackageActivation?.({ packageRoot: resolvedPackagePath });
     const pkgJson = await readPackageJson(resolvedPackagePath);
-    if (!pkgJson) throw new Error(`Missing package.json at ${resolvedPackagePath}`);
+    if (!pkgJson) throw badRequest(`Package ${resolvedPackageName} has no package.json`);
 
     if (localPath) {
       await ensureLocalPluginBuilt(resolvedPackagePath, pkgJson);
@@ -1168,8 +1168,8 @@ export function pluginLoader(
       const manualBuildHint = localPath
         ? formatLocalPluginManualBuildHint(resolvedPackagePath, pkgJson)
         : "";
-      throw new Error(
-        `Package ${resolvedPackageName} at ${resolvedPackagePath} does not appear to be a Wardmote plugin (no manifest found).${manualBuildHint}`,
+      throw badRequest(
+        `Package ${resolvedPackageName} does not appear to be a Wardmote plugin (no manifest found).${manualBuildHint}`,
       );
     }
 
@@ -1178,7 +1178,7 @@ export function pluginLoader(
 
     // Step 4: Reject incompatible plugin API versions
     if (!manifestValidator.getSupportedVersions().includes(manifest.apiVersion)) {
-      throw new Error(
+      throw badRequest(
         `Plugin ${manifest.id} declares apiVersion ${manifest.apiVersion} which is not supported by this host. ` +
           `Supported versions: ${manifestValidator.getSupportedVersions().join(", ")}`,
       );
@@ -1187,7 +1187,7 @@ export function pluginLoader(
     // Step 5: Validate manifest capabilities are consistent
     const capResult = capabilityValidator.validateManifestCapabilities(manifest);
     if (!capResult.allowed) {
-      throw new Error(
+      throw badRequest(
         `Plugin ${manifest.id} manifest has inconsistent capabilities. ` +
           `Missing required capabilities for declared features: ${capResult.missing.join(", ")}`,
       );
@@ -1199,7 +1199,7 @@ export function pluginLoader(
     const minimumHostVersion = getMinimumHostVersion(manifest);
     if (minimumHostVersion && hostVersion) {
       if (compareSemver(hostVersion, minimumHostVersion) < 0) {
-        throw new Error(
+        throw badRequest(
           `Plugin ${manifest.id} requires host version ${minimumHostVersion} or newer, ` +
             `but this server is running ${hostVersion}`,
         );
@@ -1236,9 +1236,8 @@ export function pluginLoader(
       // The manifest may be the default export or the module itself
       raw = mod["default"] ?? mod;
     } catch (err) {
-      throw new Error(
-        `Failed to load manifest module at ${manifestPath}: ${String(err)}`,
-      );
+      log.warn({ err, manifestPath }, "plugin-loader: failed to load manifest module");
+      throw badRequest("Failed to load the plugin manifest module");
     }
 
     return manifestValidator.parseOrThrow(raw);
@@ -1262,10 +1261,10 @@ export function pluginLoader(
   ): Promise<PluginRecord> {
     const manifest = await loadManifestFromPackageRoot(packageRoot);
     if (!manifest) {
-      throw new Error(`Plugin package ${plugin.packageName} no longer exposes a Wardmote manifest`);
+      throw badRequest(`Plugin package ${plugin.packageName} no longer exposes a Wardmote manifest`);
     }
     if (manifest.id !== plugin.pluginKey) {
-      throw new Error(
+      throw badRequest(
         `Plugin manifest ID '${manifest.id}' does not match installed plugin '${plugin.pluginKey}'`,
       );
     }
@@ -1707,7 +1706,7 @@ export function pluginLoader(
 
       // 2. Validate it's the same plugin ID
       if (newManifest.id !== oldManifest.id) {
-        throw new Error(
+        throw badRequest(
           `Upgrade failed: new manifest ID '${newManifest.id}' does not match existing plugin ID '${oldManifest.id}'`,
         );
       }
@@ -1722,7 +1721,7 @@ export function pluginLoader(
           { pluginId, escalated, oldVersion: oldManifest.version, newVersion: newManifest.version },
           "plugin-loader: upgrade introduces new capabilities — requires admin approval",
         );
-        throw new Error(
+        throw badRequest(
           `Upgrade for "${pluginId}" introduces new capabilities that require approval: ${escalated.join(", ")}. ` +
             `The previous version declared [${[...oldCaps].join(", ")}]. ` +
             `Please review and approve the capability escalation before upgrading.`,

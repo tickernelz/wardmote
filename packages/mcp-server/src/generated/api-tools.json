@@ -1876,7 +1876,7 @@
       "requirePluginConfigCompanyId"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@plugins.ts:2261",
+    "boardGuard": "assertInstanceAdmin@plugins.ts:2235",
     "authorityCapability": null,
     "parameters": [
       {
@@ -13107,7 +13107,7 @@
       "assertPluginBridgeScope"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:1528",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:1523",
     "authorityCapability": null,
     "parameters": [
       {
@@ -13166,7 +13166,7 @@
       "assertPluginBridgeScope"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:1341",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:1336",
     "authorityCapability": null,
     "parameters": [
       {
@@ -14803,7 +14803,7 @@
       "assertPluginManagementVisible"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@plugins.ts:1928",
+    "boardGuard": "assertInstanceAdmin@plugins.ts:1922",
     "authorityCapability": null,
     "parameters": [
       {
@@ -15862,7 +15862,7 @@
       "assertPluginManagementVisible"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@plugins.ts:2004",
+    "boardGuard": "assertInstanceAdmin@plugins.ts:1988",
     "authorityCapability": null,
     "parameters": [
       {
@@ -16232,7 +16232,7 @@
       "assertPluginManagementVisible"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@plugins.ts:1965",
+    "boardGuard": "assertInstanceAdmin@plugins.ts:1954",
     "authorityCapability": null,
     "parameters": [
       {
@@ -22682,7 +22682,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:1898",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:1892",
     "authorityCapability": null,
     "parameters": [
       {
@@ -22717,7 +22717,7 @@
       "requirePluginConfigCompanyId"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2229",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2203",
     "authorityCapability": null,
     "parameters": [
       {
@@ -22759,7 +22759,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2943",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2898",
     "authorityCapability": null,
     "parameters": [
       {
@@ -22793,7 +22793,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2046",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2025",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32095,7 +32095,7 @@
       "assertCompanyAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2784",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2739",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32139,7 +32139,7 @@
       "requireLocalFolderDeclaration"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2815",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2770",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32189,7 +32189,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:875",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:883",
     "authorityCapability": null,
     "parameters": []
   },
@@ -32214,7 +32214,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2542",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2506",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32264,7 +32264,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2496",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2465",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32311,7 +32311,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2114",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2093",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32377,7 +32377,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:851",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:859",
     "authorityCapability": null,
     "parameters": [
       {
@@ -32453,7 +32453,7 @@
       "assertBoardOrgAccess"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:883",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:891",
     "authorityCapability": null,
     "parameters": []
   },
@@ -36689,7 +36689,7 @@
       "assertInstanceAdmin"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@adapters.ts:628",
+    "boardGuard": "assertInstanceAdmin@adapters.ts:627",
     "authorityCapability": null,
     "parameters": [
       {
@@ -42196,7 +42196,7 @@
       "requireLocalFolderDeclaration"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2871",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2826",
     "authorityCapability": null,
     "parameters": [
       {
@@ -45280,7 +45280,7 @@
       "requirePluginConfigCompanyId"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2394",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2363",
     "authorityCapability": null,
     "parameters": [
       {
@@ -45623,7 +45623,7 @@
       "assertInstanceAdmin"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@plugins.ts:2590",
+    "boardGuard": "assertInstanceAdmin@plugins.ts:2549",
     "authorityCapability": null,
     "parameters": [
       {
@@ -51956,7 +51956,7 @@
       "assertPluginManagementVisible"
     ],
     "permissions": [],
-    "boardGuard": "assertInstanceAdmin@plugins.ts:2179",
+    "boardGuard": "assertInstanceAdmin@plugins.ts:2158",
     "authorityCapability": null,
     "parameters": [
       {
@@ -51992,7 +51992,7 @@
       "requireLocalFolderDeclaration"
     ],
     "permissions": [],
-    "boardGuard": "assertBoardOrgAccess@plugins.ts:2838",
+    "boardGuard": "assertBoardOrgAccess@plugins.ts:2793",
     "authorityCapability": null,
     "parameters": [
       {
