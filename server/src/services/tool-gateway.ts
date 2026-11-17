@@ -19,6 +19,7 @@ import {
   runGoogleWorkspaceTool,
   type GoogleWorkspaceToolRuntime,
 } from "./google-workspace/runtime.js";
+import { googleApprovalSnapshot } from "./google-workspace/policy.js";
 import { COGNEE_STDIO_TEMPLATE, cogneeCloudUrl, callCogneeCloud } from "./cognee-connection.js";
 import { HttpError } from "../errors.js";
 import { claimSlackRateLimitRetry } from "./connectors/slack-retry.js";
@@ -5758,7 +5759,7 @@ export function createToolGatewayService(
           decision: "require_approval",
           reasonCode: "requires_approval_policy",
           explanation: [verdict.error.message, ...verdict.reasons].join(". "),
-          policyExplanation: { google: { code: verdict.error.code, classes: verdict.classes, externalRecipients: verdict.externalRecipients, recipientsUnknown: verdict.recipientsUnknown } },
+          policyExplanation: { google: { code: verdict.error.code, ...googleApprovalSnapshot(verdict) } },
         };
       }
       return {
@@ -5777,6 +5778,15 @@ export function createToolGatewayService(
         policyExplanation: { google: { code: error.code } },
       };
     }
+  }
+
+  async function approvedGoogleSnapshot(session: ToolGatewaySession, invocationId: string): Promise<unknown> {
+    const [row] = await db
+      .select({ policyExplanation: toolInvocations.policyExplanation })
+      .from(toolInvocations)
+      .where(and(eq(toolInvocations.id, invocationId), eq(toolInvocations.companyId, session.companyId)))
+      .limit(1);
+    return row?.policyExplanation?.google;
   }
 
   async function executeRemoteHttpTool(
@@ -5806,7 +5816,8 @@ export function createToolGatewayService(
     }
     if (isGoogleWorkspaceConnection(connection)) {
       try {
-        const data = await runGoogleWorkspaceTool(googleRuntimeFor(session, connection, grant), entry.toolName, parameters, { approved });
+        const approvedSnapshot = approved ? await approvedGoogleSnapshot(session, invocationId) : undefined;
+        const data = await runGoogleWorkspaceTool(googleRuntimeFor(session, connection, grant), entry.toolName, parameters, { approved, approvedSnapshot });
         return { result: { content: JSON.stringify(data), data: { structuredContent: data, transport: "rest_api" } } };
       } catch (error) {
         throw googleToolError(error);
@@ -8976,6 +8987,16 @@ export function createToolGatewayService(
 
     async googleWorkspaceResources(binding: { companyId: string; agentId: string; runId?: string; issueId?: string }) {
       if (!binding.runId || !binding.issueId) return [];
+      const [candidate] = await db
+        .select({ id: toolConnections.id })
+        .from(toolConnections)
+        .where(and(
+          eq(toolConnections.companyId, binding.companyId),
+          eq(toolConnections.transport, "rest_api"),
+          sql`${toolConnections.config}->>'sourceTemplateKey' = 'google-workspace'`,
+        ))
+        .limit(1);
+      if (!candidate) return [];
       const session: ToolGatewaySession = { ...binding, runId: binding.runId, issueId: binding.issueId, id: randomUUID(), token: "", projectId: null, createdAt: new Date(), expiresAt: new Date(Date.now() + 60000) };
       const tools = (await listToolsForContext(session)).filter((tool) => tool.providerType === "provider_rest");
       const resources: Array<{ id: string; label: string; connectionId: string }> = [];

@@ -95,54 +95,49 @@ function sharingTargets(plan: GoogleCallPlan): { recipients: string[]; public: b
   return null;
 }
 
-function mailSource(plan: GoogleCallPlan): GoogleMailSource | "raw" | null {
+const MAIL_SEND_METHODS = new Set(["gmail.users.messages.send", "gmail.users.drafts.send"]);
+
+function mailSources(plan: GoogleCallPlan): (GoogleMailSource | { raw: string })[] {
   const body = isRecord(plan.body) ? plan.body : {};
+  const sources: (GoogleMailSource | { raw: string })[] = [];
+  if (plan.upload) sources.push({ attachmentId: plan.upload.attachmentId });
   if (plan.method === "gmail.users.drafts.send") {
-    if (plan.upload) return { attachmentId: plan.upload.attachmentId };
     const message = isRecord(body.message) ? body.message : {};
-    if (typeof message.raw === "string") return "raw";
-    return typeof body.id === "string" ? { draftId: body.id } : null;
+    if (typeof message.raw === "string") sources.push({ raw: message.raw });
+    if (typeof body.id === "string") sources.push({ draftId: body.id });
+  } else if (typeof body.raw === "string") {
+    sources.push({ raw: body.raw });
   }
-  if (plan.method !== "gmail.users.messages.send") return null;
-  if (plan.upload) return { attachmentId: plan.upload.attachmentId };
-  return typeof body.raw === "string" ? "raw" : null;
+  return sources;
 }
 
 async function mailRecipients(plan: GoogleCallPlan, deps: GooglePolicyDependencies): Promise<string[] | null | undefined> {
-  const source = mailSource(plan);
-  if (source === null) return plan.method === "gmail.users.messages.send" || plan.method === "gmail.users.drafts.send" ? null : undefined;
-  const body = isRecord(plan.body) ? plan.body : {};
+  if (!MAIL_SEND_METHODS.has(plan.method)) return undefined;
+  const sources = mailSources(plan);
+  if (sources.length === 0) return null;
+  const recipients = new Set<string>();
   try {
-    if (source === "raw") {
-      const raw = plan.method === "gmail.users.drafts.send" ? (body.message as { raw: string }).raw : (body.raw as string);
-      return headerRecipients(decodeRaw(raw));
+    for (const source of sources) {
+      const headers = "raw" in source ? decodeRaw(source.raw) : await deps.mailHeaders(source);
+      if (headers === null) return null;
+      for (const recipient of headerRecipients(headers)) recipients.add(recipient);
     }
-    const headers = await deps.mailHeaders(source);
-    return headers === null ? null : headerRecipients(headers);
   } catch {
     return null;
   }
+  return [...recipients];
 }
 
-async function effectiveClasses(
+function effectiveClasses(
   plan: GoogleCallPlan,
   settings: GoogleWorkspaceSettings,
-  deps: GooglePolicyDependencies,
   reasons: string[],
   externalRecipients: string[],
-): Promise<{ entries: { key: string; value: GoogleMethodClassification; isKind: boolean }[]; recipientsUnknown: boolean }> {
+): { key: string; value: GoogleMethodClassification; isKind: boolean }[] {
   const kinds = plan.classification.batchRequestKinds;
   const entries = kinds.map((item) => ({ key: `${plan.method}#${item.kind}`, value: item.class, isKind: true }));
   let methodValue = kinds.length > 0 ? plan.classification.baseClass : plan.classification.methodClass;
-  let recipientsUnknown = false;
-  const mail = await mailRecipients(plan, deps);
-  let sharing = sharingTargets(plan);
-  if (mail === null) {
-    recipientsUnknown = true;
-    reasons.push("the recipients could not be read");
-  } else if (mail !== undefined) {
-    sharing = { recipients: mail, public: false };
-  }
+  const sharing = sharingTargets(plan);
   if (sharing && methodValue === "external") {
     const outside = sharing.recipients.filter((recipient) => emailDomain(recipient) !== settings.domain);
     externalRecipients.push(...outside);
@@ -154,7 +149,7 @@ async function effectiveClasses(
     }
   }
   entries.unshift({ key: plan.method, value: methodValue, isKind: false });
-  return { entries, recipientsUnknown };
+  return entries;
 }
 
 function actionFor(settings: GoogleWorkspaceSettings, key: string, value: GoogleMethodClassification): GoogleWorkspacePolicyAction {
@@ -298,7 +293,8 @@ async function scopeViolation(plan: GoogleCallPlan, settings: GoogleWorkspaceSet
 export async function decideGoogleCall(plan: GoogleCallPlan, settings: GoogleWorkspaceSettings, deps: GooglePolicyDependencies): Promise<GooglePolicyDecision> {
   const reasons: string[] = [];
   const externalRecipients: string[] = [];
-  const { entries, recipientsUnknown } = await effectiveClasses(plan, settings, deps, reasons, externalRecipients);
+  const entries = effectiveClasses(plan, settings, reasons, externalRecipients);
+  let recipientsUnknown = false;
   const classes = [...new Set(entries.map((entry) => entry.value))];
   const block = (error: GoogleWorkspaceError): GooglePolicyDecision => ({
     action: "block",
@@ -324,6 +320,13 @@ export async function decideGoogleCall(plan: GoogleCallPlan, settings: GoogleWor
   }
   if (deps.grantedScopes.length > 0 && plan.scopes.length > 0 && !plan.scopes.some((scope) => deps.grantedScopes.includes(scope))) {
     return block(new GoogleWorkspaceError("scope_missing", `The Google grant has no scope that allows ${plan.method}`, "Ask the connection owner to grant additional access in the connection page.", { method: plan.method, acceptedScopes: plan.scopes }));
+  }
+  const mail = await mailRecipients(plan, deps);
+  if (mail === null) {
+    recipientsUnknown = true;
+    reasons.push("the recipients could not be read");
+  } else if (mail) {
+    externalRecipients.push(...mail.filter((recipient) => emailDomain(recipient) !== settings.domain));
   }
   let action: GoogleWorkspacePolicyAction = "allow";
   for (const entry of entries) {
@@ -356,6 +359,32 @@ export async function decideGoogleCall(plan: GoogleCallPlan, settings: GoogleWor
     };
   }
   return { action, classes, reasons, externalRecipients, recipientsUnknown, query, error: null };
+}
+
+export interface GoogleApprovalSnapshot {
+  classes: GoogleMethodClassification[];
+  externalRecipients: string[];
+  recipientsUnknown: boolean;
+}
+
+export function googleApprovalSnapshot(decision: GooglePolicyDecision): GoogleApprovalSnapshot {
+  return { classes: decision.classes, externalRecipients: decision.externalRecipients, recipientsUnknown: decision.recipientsUnknown };
+}
+
+function sameList(left: unknown, right: readonly string[]): boolean {
+  if (!Array.isArray(left) || left.length !== right.length) return false;
+  const sorted = [...right].sort();
+  return [...left].map(String).sort().every((value, position) => value === sorted[position]);
+}
+
+export function matchesGoogleApproval(snapshot: unknown, decision: GooglePolicyDecision): boolean {
+  if (typeof snapshot !== "object" || snapshot === null) return false;
+  const approved = snapshot as Record<string, unknown>;
+  return (
+    sameList(approved.classes, decision.classes)
+    && sameList(approved.externalRecipients, decision.externalRecipients)
+    && approved.recipientsUnknown === decision.recipientsUnknown
+  );
 }
 
 export function googlePolicyVerdict(decision: GooglePolicyDecision, options: { approved: boolean }): GooglePolicyVerdict {

@@ -86,9 +86,21 @@ describe("default policy (write runs, delete/share/send need approval)", () => {
     expect(draft).toMatchObject({ action: "require_approval", externalRecipients: ["g@other.org"], recipientsUnknown: false });
     const upload = await decide({ method: "gmail.users.messages.send", params: { userId: "me" }, upload: { attachmentId: "m1" } }, settings(), deps({}, [], mail));
     expect(upload).toMatchObject({ action: "require_approval", externalRecipients: ["x@third.net"], recipientsUnknown: false });
+    const both = await decide({ method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "d1", message: { raw: raw("To: a@example.com") } } }, settings(), deps({}, [], mail));
+    expect(both).toMatchObject({ action: "require_approval", externalRecipients: ["g@other.org"], recipientsUnknown: false });
     const unknown = await decide({ method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "gone" } }, settings(), deps({}, [], mail));
     expect(unknown).toMatchObject({ action: "require_approval", externalRecipients: [], recipientsUnknown: true, error: { details: { recipientsUnknown: true } } });
     expect(unknown.reasons).toContain("the recipients could not be read");
+  });
+
+  it("does not read a draft from Gmail when Gmail is off or the grant lacks the scope", async () => {
+    const mailHeaders = vi.fn(async () => "To: a@example.com");
+    const dependencies = { ...deps(), mailHeaders };
+    const off = await decide({ method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "d1" } }, settings({ capabilities: { gmail: "off" } }), dependencies);
+    expect(off).toMatchObject({ action: "block", error: { code: "capability_off" } });
+    const noScope = await decide({ method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "d1" } }, settings(), { ...dependencies, grantedScopes: ["https://www.googleapis.com/auth/drive"] });
+    expect(noScope).toMatchObject({ action: "block", error: { code: "scope_missing" } });
+    expect(mailHeaders).not.toHaveBeenCalled();
   });
 
   it("blocks emptying the trash and running Apps Script", async () => {
@@ -182,7 +194,7 @@ describe("folder and file scope", () => {
       {
         discovery: createGoogleDiscoveryIndex({ fetch: fake.fetch }),
         credentials: { headers: async () => ({ authorization: `Bearer ${fake.token}` }) },
-        attachments: { read: async () => ({ bytes: new Uint8Array(), contentType: "text/plain", filename: "x" }), store: async () => ({ attachmentId: "a", byteSize: 0, contentType: "", filename: "" }) },
+        attachments: { read: async () => ({ bytes: new Uint8Array(), contentType: "text/plain", filename: "x" }), head: async () => new Uint8Array(), store: async () => ({ attachmentId: "a", byteSize: 0, contentType: "", filename: "" }) },
         policy: async (plan) => googlePolicyVerdict(await decideGoogleCall(plan, limited, deps(tree)), { approved: false }),
         fetch: fake.fetch,
         sleep: async () => undefined,
@@ -248,7 +260,7 @@ describe("policy enforced by executeGoogleCall (negative tests)", () => {
       {
         discovery: createGoogleDiscoveryIndex({ fetch: fake.fetch }),
         credentials: { headers: async () => ({ authorization: `Bearer ${fake.token}` }) },
-        attachments: { read: async () => ({ bytes: new Uint8Array(), contentType: "text/plain", filename: "x" }), store: async () => ({ attachmentId: "a", byteSize: 0, contentType: "", filename: "" }) },
+        attachments: { read: async () => ({ bytes: new Uint8Array(), contentType: "text/plain", filename: "x" }), head: async () => new Uint8Array(), store: async () => ({ attachmentId: "a", byteSize: 0, contentType: "", filename: "" }) },
         policy: async (plan) => googlePolicyVerdict(await decideGoogleCall(plan, config, deps()), { approved }),
         fetch: fake.fetch,
         sleep: async () => undefined,

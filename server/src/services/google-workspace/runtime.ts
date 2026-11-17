@@ -18,7 +18,9 @@ import { executeGoogleCall, planGoogleCall, type GoogleCallContext, type GoogleC
 import {
   createGoogleLocationCache,
   decideGoogleCall,
+  googleApprovalSnapshot,
   googlePolicyVerdict,
+  matchesGoogleApproval,
   type GoogleFileLocation,
   type GoogleMailSource,
   type GooglePolicyDecision,
@@ -61,7 +63,6 @@ const EMAIL = /^[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const TIER_RANK: Record<GoogleWorkspaceTier, number> = { off: 0, read: 1, edit: 2, create: 3, delete_share: 4 };
 const LOCATION_CACHE_CONNECTIONS = 200;
 const MAIL_HEADER_BYTES = 64 * 1024;
-const UPLOADED_MAIL_MAX_BYTES = 36 * 1024 * 1024;
 
 export function isGoogleWorkspaceToolName(name: string): boolean {
   return TOOL_NAMES.has(name);
@@ -156,7 +157,10 @@ export function googleToolCallInput(toolName: string, rawArgs: unknown): GoogleC
     }
     case "google_drive_share": {
       const emailAddress = text(args, "emailAddress", false);
-      const type = text(args, "type", false) ?? (emailAddress ? "user" : "anyone");
+      const type = text(args, "type", false) ?? (emailAddress ? "user" : undefined);
+      if (!type) {
+        throw new GoogleWorkspaceError("validation", "type is required when no emailAddress is given", "Pass type \"domain\" or \"anyone\" explicitly, or an emailAddress.", { pointer: "/type" });
+      }
       if ((type === "user" || type === "group") && (!emailAddress || !EMAIL.test(emailAddress))) {
         throw new GoogleWorkspaceError("validation", "emailAddress is required for user and group sharing", "Pass the person's email address.", { pointer: "/emailAddress" });
       }
@@ -243,8 +247,7 @@ function locationCache(runtime: GoogleWorkspaceToolRuntime): GoogleLocationCache
 function mailHeaders(runtime: GoogleWorkspaceToolRuntime) {
   return async (source: GoogleMailSource): Promise<string | null> => {
     if ("attachmentId" in source) {
-      const file = await runtime.attachments.read(source.attachmentId, UPLOADED_MAIL_MAX_BYTES);
-      return new TextDecoder().decode(file.bytes.subarray(0, MAIL_HEADER_BYTES));
+      return new TextDecoder().decode(await runtime.attachments.head(source.attachmentId, MAIL_HEADER_BYTES));
     }
     const result = await executeGoogleCall(
       { ...runtime, policy: async () => ({ allowed: true }) },
@@ -272,7 +275,12 @@ export async function decideGoogleWorkspaceTool(runtime: GoogleWorkspaceToolRunt
   return decideGoogleCall(plan, runtime.settings, policyDependencies(runtime, locationCache(runtime)));
 }
 
-export async function runGoogleWorkspaceTool(runtime: GoogleWorkspaceToolRuntime, toolName: string, rawArgs: unknown, options: { approved: boolean }): Promise<unknown> {
+export async function runGoogleWorkspaceTool(
+  runtime: GoogleWorkspaceToolRuntime,
+  toolName: string,
+  rawArgs: unknown,
+  options: { approved: boolean; approvedSnapshot?: unknown },
+): Promise<unknown> {
   const args = record(rawArgs);
   if (toolName === "google_search_methods") {
     const service = text(args, "service", false);
@@ -304,7 +312,19 @@ export async function runGoogleWorkspaceTool(runtime: GoogleWorkspaceToolRuntime
       ...runtime,
       policy: async (plan) => {
         planned = plan;
-        return googlePolicyVerdict(await decideGoogleCall(plan, runtime.settings, dependencies), options);
+        const decision = await decideGoogleCall(plan, runtime.settings, dependencies);
+        if (options.approved && decision.action === "require_approval" && !matchesGoogleApproval(options.approvedSnapshot, decision)) {
+          return {
+            allowed: false,
+            error: new GoogleWorkspaceError(
+              "approval_required",
+              `${plan.method} changed after it was approved (classes or recipients differ)`,
+              "Call it again to create a new approval card for what will actually run.",
+              { approved: options.approvedSnapshot ?? null, current: googleApprovalSnapshot(decision) },
+            ),
+          };
+        }
+        return googlePolicyVerdict(decision, { approved: options.approved });
       },
     },
     googleToolCallInput(toolName, args),
