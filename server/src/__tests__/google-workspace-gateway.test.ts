@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
+import express from "express";
+import supertest from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   agents,
@@ -19,9 +21,11 @@ import {
 import { googleWorkspaceScopesFor, type GoogleWorkspaceService, type GoogleWorkspaceTier } from "@tickernelz/wardmote-shared";
 import { toolAccessService } from "../services/tool-access.js";
 import { createToolGatewayService } from "../services/tool-gateway.js";
+import { mcpGatewayProtocolRoutes } from "../routes/tool-gateway.js";
+import { buildWardmoteRuntimeMcpServers } from "../services/heartbeat/run-preparation.js";
 import { registerAssignedMcpGateway } from "../services/native-runtime/assigned-mcp-tools.js";
 import { resolveConnectorAssignments } from "../services/connector-runtime.js";
-import { createFakeGoogle } from "./helpers/fake-google.js";
+import { createFakeGoogle, googleError } from "./helpers/fake-google.js";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 
 const support = await getEmbeddedPostgresTestSupport();
@@ -100,7 +104,7 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     const tools = await gateway.listToolsForSession(session.token);
     const call = tools.find((tool) => tool.upstreamToolName === "google_call");
     return {
-      company, google, gateway, session, call, tools, access, connectionId: connected.connectionId, revoked,
+      company, agent, google, gateway, session, call, tools, access, connectionId: connected.connectionId, revoked,
       failRevoke: (status: number) => { revokeStatus = status; },
       binding: { companyId: company.id, agentId: agent.id, runId: run.id, issueId: issue.id },
     };
@@ -160,6 +164,30 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
       parameters: { method: "calendar.colors.get" },
       idempotencyKey: randomUUID(),
     })).rejects.toMatchObject({ details: { code: "scope_missing" } });
+  });
+
+  it("answers a Google failure on the run's MCP gateway as a tool error, also when the same call repeats", async () => {
+    const f = await fixture();
+    f.google.override(/\/gmail\/v1\/users\/me\/messages\/bad-id/, () => googleError(400, "badRequest", "Request contains an invalid argument."));
+    const [server] = await buildWardmoteRuntimeMcpServers({ db, agent: f.agent, runId: f.binding.runId });
+    const app = express().use(express.json()).use(mcpGatewayProtocolRoutes(f.gateway));
+    const call = () => supertest(app)
+      .post(new URL(server!.url).pathname)
+      .set("authorization", `Bearer ${server!.token}`)
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: f.call!.name, arguments: { method: "gmail.users.messages.get", params: { userId: "me", id: "bad-id" } } } });
+
+    const first = await call();
+    expect(first.status).toBe(200);
+    expect(first.body.result).toMatchObject({
+      isError: true,
+      structuredContent: { code: "google_error", message: "Request contains an invalid argument.", hint: expect.any(String), status: 400, reason: "badRequest" },
+    });
+    expect(JSON.parse(first.body.result.content[0].text)).toEqual(first.body.result.structuredContent);
+
+    const repeated = await call();
+    expect(repeated.status).toBe(200);
+    expect(repeated.body.result).toMatchObject({ isError: true, structuredContent: { code: "google_error", replayed: true } });
+    expect(repeated.body.result.structuredContent.message).toContain("Request contains an invalid argument.");
   });
 
   it("revokes the Google token when the authorization is removed, even if Google refuses", async () => {

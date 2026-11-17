@@ -371,6 +371,20 @@ export class ToolGatewayHttpError extends Error {
   }
 }
 
+const FAILED_INVOCATION_STATUSES: ReadonlySet<string> = new Set(["failed", "timed_out", "rate_limited", "denied", "cancelled"]);
+
+function replayedInvocationFailure(invocation: typeof toolInvocations.$inferSelect): ToolGatewayHttpError | null {
+  if (!FAILED_INVOCATION_STATUSES.has(invocation.status)) return null;
+  const reasonCode = invocation.errorCode ?? "tool_execution_failed";
+  const message = `${invocation.errorMessage ?? "The call failed"} (Not sent again: this exact call already failed in this run.)`;
+  return new ToolGatewayHttpError(409, message, reasonCode, {
+    invocationId: invocation.id,
+    invocationStatus: invocation.status,
+    replayed: true,
+    ...(reasonCode.startsWith("google_") ? { code: reasonCode.slice("google_".length), message } : {}),
+  });
+}
+
 interface ExecuteGatewayToolInput {
   sessionToken: string;
   gatewayId?: string | null;
@@ -5765,6 +5779,7 @@ export function createToolGatewayService(
     if (!(error instanceof GoogleWorkspaceError)) return error;
     return new ToolGatewayHttpError(GOOGLE_ERROR_STATUS[error.code], `${error.message}. ${error.hint}`, `google_${error.code}`, {
       code: error.code,
+      message: error.message,
       hint: error.hint,
       ...error.details,
     });
@@ -10476,6 +10491,8 @@ export function createToolGatewayService(
           ? await claimSlackRateLimitRetry(db, { companyId: session.companyId, agentId: session.agentId, runId: session.runId, issueId: session.issueId, endpointId: String(asRecord(tool.providerMetadata)?.endpointId ?? ""), identityContextId: session.identityContextId }, invocationId)
           : false;
         if (recorded.replayed && !retryingSlackRateLimit) {
+          const failure = replayedInvocationFailure(recorded.invocation);
+          if (failure) throw failure;
           await writeAudit({
             session,
             companyId: session.companyId,
@@ -10964,6 +10981,8 @@ export function createToolGatewayService(
       invocationId = recorded.invocation.id;
 
       if (recorded.replayed) {
+        const failure = replayedInvocationFailure(recorded.invocation);
+        if (failure) throw failure;
         return recorded.invocation.resultSummary;
       }
 
