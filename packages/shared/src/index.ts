@@ -369,6 +369,7 @@ export {
 export { APP_DEFINITIONS } from "./app-definitions.generated.js";
 export * from "./google-workspace-connectors.js";
 export * from "./google-workspace-settings.js";
+export * from "./google-workspace-tools.js";
 export * from "./github-connectors.js";
 export * from "./agent-authority.js";
 export * from "./autonomy-windows.js";

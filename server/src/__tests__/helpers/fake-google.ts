@@ -117,6 +117,14 @@ export function createFakeGoogle(options: { pageSize?: number } = {}) {
       spreadsheet.values[range] = body.values;
       return json({ spreadsheetId: spreadsheet.spreadsheetId, updatedRange: range, updatedCells: body.values.flat().length });
     }],
+    ["POST", /^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/([^/]+)\/values\/([^?]+):append$/, (request, m) => {
+      const spreadsheet = spreadsheets.get(m[1]);
+      if (!spreadsheet) return googleError(404, "notFound");
+      const body = JSON.parse(request.body.toString("utf8")) as { values: unknown[][] };
+      const range = decodeURIComponent(m[2]);
+      spreadsheet.values[range] = [...(spreadsheet.values[range] ?? []), ...body.values];
+      return json({ spreadsheetId: spreadsheet.spreadsheetId, updates: { updatedRange: range, updatedRows: body.values.length } });
+    }],
     ["POST", /^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/([^/:]+):batchUpdate$/, (request, m) => {
       const spreadsheet = spreadsheets.get(m[1]);
       if (!spreadsheet) return googleError(404, "notFound");

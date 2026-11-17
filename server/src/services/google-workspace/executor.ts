@@ -454,7 +454,9 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
   if (plan.upload) {
     const file = await context.attachments.read(plan.upload.attachmentId, Math.min(limits.uploadMaxBytes, entry.upload?.maxBytes ?? limits.uploadMaxBytes));
     const contentType = input.upload?.contentType ?? file.contentType ?? "application/octet-stream";
-    const metadata = JSON.stringify(plan.body ?? {});
+    const metadataBody: Record<string, unknown> = isRecord(plan.body) ? { ...plan.body } : {};
+    if (entry.id === "drive.files.create" && !("name" in metadataBody)) metadataBody.name = file.filename;
+    const metadata = JSON.stringify(metadataBody);
     if (plan.upload.protocol === "multipart" && file.bytes.byteLength <= MULTIPART_MAX_BYTES) {
       const boundary = `wardmote_${crypto.randomUUID()}`;
       const head = Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\ncontent-type: ${contentType}\r\n\r\n`);

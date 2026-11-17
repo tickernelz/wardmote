@@ -11,8 +11,10 @@ import { honchoManagedArguments } from "./honcho-connection.js";
 import { defaultConnectionAgentInstructions } from "@tickernelz/wardmote-shared";
 import { isInsufficientConnectionScope, INSUFFICIENT_CONNECTION_SCOPE_MESSAGE } from "./connection-permission-errors.js";
 import { mcpDiscoveryHttpFailure, retainMcpConnectionFailure, withMcpConnectionFailure } from "./mcp-connection-failure.js";
-import { BROWSER_USE_TOOLS } from "@tickernelz/wardmote-shared";
+import { BROWSER_USE_TOOLS, GOOGLE_WORKSPACE_TOOLS } from "@tickernelz/wardmote-shared";
 import { browserUseClient, isBrowserUseConnection } from "./browser-use-client.js";
+import { isGatewayRestConnection } from "./gateway-rest-connections.js";
+import { isGoogleWorkspaceConnection } from "./google-workspace/runtime.js";
 import { isLocalBrowserConnection } from "./connectors/local-browser/connection.js";
 import { LOCAL_BROWSER_CONNECTOR_TOOLS } from "./connectors/local-browser/tools.js";
 import { browserUseService } from "./browser-use.js";
@@ -7334,6 +7336,9 @@ export function toolAccessService(
       await browserUseClient(headers, (url, init) => requestRemoteHttpEndpoint(new URL(url), init), connection.id).probe();
       return BROWSER_USE_TOOLS;
     }
+    if (isGoogleWorkspaceConnection(connection)) {
+      return GOOGLE_WORKSPACE_TOOLS.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));
+    }
     if (isAgentMailConnection(connection)) {
       await validateAgentMailConnection(connection);
       return [];
@@ -7485,7 +7490,7 @@ export function toolAccessService(
           });
         for (const grant of grantsToCheck)
           await refreshManagedGitHubGrantAccess(connection, grant, actor);
-      } else if (isBrowserUseConnection(connection)) {
+      } else if (isGatewayRestConnection(connection)) {
         await discoverTools(connection, undefined, actor);
       } else if (isAgentMailConnection(connection)) {
         await validateAgentMailConnection(connection);
@@ -7523,6 +7528,8 @@ export function toolAccessService(
           ? "GitHub account, installation, and repository access are available."
           : isBrowserUseConnection(connection)
             ? "Browser Use API key is connected."
+          : isGoogleWorkspaceConnection(connection)
+            ? "Google Workspace is connected."
           : isAgentMailConnection(connection)
             ? "AgentMail API key is connected."
             : isLocalBrowserConnection(connection)
@@ -12672,7 +12679,7 @@ export function toolAccessService(
                 applicationKey: `app-gallery:${galleryEntry?.slug ?? "link"}:${randomUUID()}`,
                 name: applicationName,
                 description: safeApplicationDescription,
-                type: transport === "rest_api" && galleryEntry?.slug === "browser-use-cloud" ? "rest_api" : transport === "mcp_remote" ? "mcp_http" : "mcp_stdio",
+                type: transport === "rest_api" && (galleryEntry?.slug === "browser-use-cloud" || galleryEntry?.slug === "google-workspace") ? "rest_api" : transport === "mcp_remote" ? "mcp_http" : "mcp_stdio",
                 status: "draft",
                 metadata: galleryEntry
                   ? {
@@ -17046,7 +17053,7 @@ export function toolAccessService(
             companyId,
             applicationKey: normalizeKey(input.applicationName ?? input.name),
             name: input.applicationName ?? input.name,
-            type: isBrowserUseConnection({ transport, config }) ? "rest_api" : transport === "mcp_remote" ? "mcp_http" : "mcp_stdio",
+            type: isGatewayRestConnection({ transport, config }) ? "rest_api" : transport === "mcp_remote" ? "mcp_http" : "mcp_stdio",
             status: "active",
             metadata: {},
           })
@@ -19098,6 +19105,7 @@ export function toolAccessService(
         input.companyId,
       );
       if (isBrowserUseConnection(connection)) throw forbidden("Browser Use credentials stay in the governed tool gateway and cannot be exported.");
+      if (isGoogleWorkspaceConnection(connection)) throw forbidden("Google Workspace credentials stay in the governed tool gateway and cannot be exported.");
       if (connection.connectionPurpose === "ai") throw unprocessable("AI credentials are available only through the runtime resolver");
       const application = await getConnectionApplication(connection);
       const brokerEnabled = connectionTokenBrokerEnabled(connection);

@@ -5,7 +5,7 @@ import { CONFIGURED_ENVIRONMENT_KEYS } from "../../vendor/wardmote-runner/index.
 import { ASSIGNED_MCP_SERVER_NAME } from "../mcp-tool-names.js";
 import { externalConversationStateSql } from "../slack-conversation-state.js";
 import { githubBotConnectionIdsForRun } from "../chat-github-tools.js";
-import { isBrowserUseConnection } from "../browser-use-client.js";
+import { isGatewayRestConnection } from "../gateway-rest-connections.js";
 import { explicitOperatorRunIdentity } from "../run-identity.js";
 import {
   type DurableChatWakeupRequest,
@@ -909,7 +909,7 @@ export async function buildWardmoteRuntimeMcpServers(input: {
     .filter(
       (connection) =>
         (connection.transport === "mcp_remote" ||
-          connection.transport === "local_stdio" || isBrowserUseConnection(connection)) &&
+          connection.transport === "local_stdio" || isGatewayRestConnection(connection)) &&
         !allInstalledConnectionIds.has(connection.id),
     )
     .map(({ id, name }) => ({ id, name }))
@@ -935,7 +935,7 @@ export async function buildWardmoteRuntimeMcpServers(input: {
         connection.credentialPolicy === "per_user" ||
         !isToolConnectionAttentionHealth(connection.healthStatus)) &&
       (connection.transport === "mcp_remote" ||
-        connection.transport === "local_stdio" || isBrowserUseConnection(connection) || githubBotConnectionIds.has(connection.id) || spekoConnectionIds.has(connection.id)),
+        connection.transport === "local_stdio" || isGatewayRestConnection(connection) || githubBotConnectionIds.has(connection.id) || spekoConnectionIds.has(connection.id)),
   );
   const assignedConnectionIds = new Set(
     assignedConnections.map((connection) => connection.id),

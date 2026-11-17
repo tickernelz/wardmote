@@ -4,6 +4,20 @@ import { isInsufficientConnectionScope, INSUFFICIENT_CONNECTION_SCOPE_MESSAGE } 
 import { boundedMcpToolName } from "./mcp-tool-names.js";
 import { browserUseService } from "./browser-use.js";
 import { isBrowserUseConnection } from "./browser-use-client.js";
+import { isGatewayRestConnection } from "./gateway-rest-connections.js";
+import { createGoogleDiscoveryIndex, type GoogleDiscoveryIndex } from "./google-workspace/discovery.js";
+import { GoogleWorkspaceError } from "./google-workspace/errors.js";
+import { googleWorkspaceAttachments } from "./google-workspace/attachments.js";
+import {
+  decideGoogleWorkspaceTool,
+  googleDiscovery,
+  googleWorkspaceSettings,
+  grantedGoogleScopes,
+  isGoogleWorkspaceConnection,
+  isGoogleWorkspaceToolName,
+  runGoogleWorkspaceTool,
+  type GoogleWorkspaceToolRuntime,
+} from "./google-workspace/runtime.js";
 import { COGNEE_STDIO_TEMPLATE, cogneeCloudUrl, callCogneeCloud } from "./cognee-connection.js";
 import { HttpError } from "../errors.js";
 import { claimSlackRateLimitRetry } from "./connectors/slack-retry.js";
@@ -216,6 +230,17 @@ const ACTION_REQUEST_EXECUTION_WAIT_MS = APPROVED_EXECUTION_TIMEOUT_MS + 5_000;
 // grace must exceed the normal sign path (approval-snapshot fetch + interaction
 // create) so a live create keeps its own row.
 const MAX_REMOTE_MCP_RESPONSE_BYTES = 1_000_000;
+const GOOGLE_ERROR_STATUS: Record<GoogleWorkspaceError["code"], number> = {
+  validation: 400,
+  capability_off: 403,
+  out_of_scope: 403,
+  approval_required: 409,
+  scope_missing: 403,
+  api_not_enabled: 424,
+  auth_expired: 401,
+  rate_limited: 429,
+  google_error: 502,
+};
 const ACTIVE_GATEWAY_RUN_STATUSES = new Set(["running"]);
 // A tool listing decides access for every tool in the company. The decisions
 // of one listing share a read cache, so this cap only limits how many of them
@@ -1349,7 +1374,7 @@ export function createToolGatewayService(
       ({ catalogEntry, connection, application }) =>
         !isRetiredComposioConnection(connection) &&
         !(isRailwayEndpoint(connection.config.url) && (isRailwayToolBlocked(catalogEntry.toolName) || (normalizeRailwayToolName(catalogEntry.toolName).startsWith(RAILWAY_TOOL_PREFIX) && connection.config.railwayApiStatus !== "available"))) &&
-        ((isBrowserUseConnection(connection) && application.type === "rest_api") ||
+        ((isGatewayRestConnection(connection) && application.type === "rest_api") ||
         (connection.transport === "mcp_remote" &&
           application.type === "mcp_http") ||
         (connection.transport === "local_stdio" &&
@@ -1375,7 +1400,7 @@ export function createToolGatewayService(
       ({ catalogEntry, connection, application }, index) => {
         if (
           connection.transport !== "mcp_remote" &&
-          connection.transport !== "local_stdio" && !isBrowserUseConnection(connection)
+          connection.transport !== "local_stdio" && !isGatewayRestConnection(connection)
         ) {
           throw new Error(
             `Non-MCP connection ${connection.id} cannot be exposed through the MCP gateway`,
@@ -4551,7 +4576,7 @@ export function createToolGatewayService(
         ),
       )
       .limit(1);
-    if (!connection || (connection.transport !== "mcp_remote" && !isBrowserUseConnection(connection))) {
+    if (!connection || (connection.transport !== "mcp_remote" && !isGatewayRestConnection(connection))) {
       throw new ToolGatewayHttpError(
         404,
         `Tool "${tool.name}" not found`,
@@ -5676,6 +5701,62 @@ export function createToolGatewayService(
     };
   }
 
+  let gatewayGoogleDiscovery: GoogleDiscoveryIndex | null = null;
+
+  function googleRuntimeFor(
+    session: ToolGatewaySession,
+    connection: typeof toolConnections.$inferSelect,
+    grant: typeof connectionGrants.$inferSelect,
+  ): GoogleWorkspaceToolRuntime {
+    const remote = options.remoteHttpRequest;
+    const googleFetch = remote ? ((input: string | URL | Request, init?: RequestInit) => remote(String(input instanceof Request ? input.url : input), init ?? {})) as typeof fetch : undefined;
+    gatewayGoogleDiscovery ??= googleFetch ? createGoogleDiscoveryIndex({ fetch: googleFetch }) : googleDiscovery();
+    return {
+      discovery: gatewayGoogleDiscovery,
+      fetch: googleFetch,
+      settings: googleWorkspaceSettings(connection),
+      grantedScopes: grantedGoogleScopes(grant),
+      credentials: { headers: ({ forceRefresh }) => resolveCredentialHeaders(session, connection, grant, { forceRefresh }) },
+      attachments: googleWorkspaceAttachments(db, {
+        companyId: session.companyId,
+        issueId: session.issueId ?? null,
+        runId: session.runId ?? null,
+        agentId: session.agentId ?? null,
+      }),
+    };
+  }
+
+  function googleToolError(error: unknown): unknown {
+    if (!(error instanceof GoogleWorkspaceError)) return error;
+    return new ToolGatewayHttpError(GOOGLE_ERROR_STATUS[error.code], `${error.message}. ${error.hint}`, `google_${error.code}`, {
+      code: error.code,
+      hint: error.hint,
+      ...error.details,
+    });
+  }
+
+  async function googleCallDecision(
+    session: ToolGatewaySession,
+    tool: ToolGatewayDescriptor,
+    parameters: unknown,
+  ): Promise<{ decision: "require_approval" | "deny"; reasonCode: string; explanation: string } | null> {
+    const { connection } = await resolveConnectedRemoteTool(session, tool);
+    if (!isGoogleWorkspaceConnection(connection)) return null;
+    const grant = await resolveConnectionGrant(session, connection);
+    try {
+      const verdict = await decideGoogleWorkspaceTool(googleRuntimeFor(session, connection, grant), tool.upstreamToolName ?? "", parameters);
+      if (!verdict || verdict.action === "allow" || !verdict.error) return null;
+      if (verdict.action === "require_approval") {
+        return { decision: "require_approval", reasonCode: "google_approval_required", explanation: [verdict.error.message, ...verdict.reasons].join(". ") };
+      }
+      return { decision: "deny", reasonCode: `google_${verdict.error.code}`, explanation: `${verdict.error.message}. ${verdict.error.hint}` };
+    } catch (error) {
+      if (!(error instanceof GoogleWorkspaceError)) throw error;
+      const pointer = typeof error.details.pointer === "string" ? ` (${error.details.pointer})` : "";
+      return { decision: "deny", reasonCode: `google_${error.code}`, explanation: `${error.message}${pointer}. ${error.hint}` };
+    }
+  }
+
   async function executeRemoteHttpTool(
     session: ToolGatewaySession,
     tool: ToolGatewayDescriptor,
@@ -5684,6 +5765,7 @@ export function createToolGatewayService(
     invocationId: string,
     callerHeaders?: ExecuteGatewayToolInput["callerHeaders"],
     useDefaultTimeout = false,
+    approved = false,
   ): Promise<RemoteHttpExecutionResult> {
     const { entry, connection } = await resolveConnectedRemoteTool(
       session,
@@ -5699,6 +5781,14 @@ export function createToolGatewayService(
     if (isBrowserUseConnection(connection)) {
       const data = await browserUseService(db, options.remoteHttpRequest).execute(session, grant, invocationId!, entry.toolName, parameters);
       return { result: { content: JSON.stringify(data), data: { structuredContent: data, transport: "rest_api" } } };
+    }
+    if (isGoogleWorkspaceConnection(connection)) {
+      try {
+        const data = await runGoogleWorkspaceTool(googleRuntimeFor(session, connection, grant), entry.toolName, parameters, { approved });
+        return { result: { content: JSON.stringify(data), data: { structuredContent: data, transport: "rest_api" } } };
+      } catch (error) {
+        throw googleToolError(error);
+      }
     }
     const endpoint = await resolvedRemoteEndpoint(session, connection, grant);
     // Method-defined headers are trusted catalog configuration. Treat them as
@@ -7844,6 +7934,9 @@ export function createToolGatewayService(
                 parameters,
                 executionTimeoutMs,
                 invocation.id,
+                undefined,
+                false,
+                true,
               )
             ).result
           : tool.providerType === "mcp_local_stdio"
@@ -8829,6 +8922,24 @@ export function createToolGatewayService(
         const [connection] = await db.select().from(toolConnections).where(and(eq(toolConnections.companyId, binding.companyId), eq(toolConnections.id, connectionId)));
         if (!connection || !isBrowserUseConnection(connection)) continue;
         try { await resolveConnectionGrant(session, connection, false); resources.push({ id: connectionId, connectionId, label: "Browser Use Cloud" }); } catch { /* Unavailable grants do not contribute a runtime skill. */ }
+      }
+      return resources;
+    },
+
+    async googleWorkspaceResources(binding: { companyId: string; agentId: string; runId?: string; issueId?: string }) {
+      if (!binding.runId || !binding.issueId) return [];
+      const session: ToolGatewaySession = { ...binding, runId: binding.runId, issueId: binding.issueId, id: randomUUID(), token: "", projectId: null, createdAt: new Date(), expiresAt: new Date(Date.now() + 60000) };
+      const tools = (await listToolsForContext(session)).filter((tool) => tool.providerType === "provider_rest");
+      const resources: Array<{ id: string; label: string; connectionId: string }> = [];
+      for (const connectionId of new Set(tools.map((tool) => tool.connectionId!))) {
+        const [connection] = await db.select().from(toolConnections).where(and(eq(toolConnections.companyId, binding.companyId), eq(toolConnections.id, connectionId)));
+        if (!connection || !isGoogleWorkspaceConnection(connection)) continue;
+        try {
+          await resolveConnectionGrant(session, connection, false);
+          resources.push({ id: connectionId, connectionId, label: connection.name || "Google Workspace" });
+        } catch {
+          continue;
+        }
       }
       return resources;
     },
@@ -10223,6 +10334,10 @@ export function createToolGatewayService(
         if (accessDecision.allowed && tool.providerType === "wardmote_slack_chat" && SLACK_TOOLS.some(t => t.name === tool.upstreamToolName && t.risk === "approval")) {
           accessDecision = { ...accessDecision, allowed: false, decision: "require_approval", reasonCode: "requires_approval_policy", explanation: "Slack destructive actions, channel creation and invitations require approval." };
         }
+        if (accessDecision.allowed && tool.providerType === "provider_rest" && isGoogleWorkspaceToolName(tool.upstreamToolName ?? "")) {
+          const google = await googleCallDecision(session, tool, effectiveParameters);
+          if (google) accessDecision = { ...accessDecision, allowed: false, ...google };
+        }
         accessDecision = noteOpenwaToolCall(accessDecision, session, tool);
         const recorded = await policyService.recordInvocation(
           decisionInput,
@@ -10358,6 +10473,7 @@ export function createToolGatewayService(
                 invocationId,
                 input.callerHeaders,
                 input.timeoutMs === undefined,
+                Boolean(input.approvedActionRequestId),
               )
             : tool.providerType === "mcp_local_stdio"
               ? await executeLocalStdioTool(
