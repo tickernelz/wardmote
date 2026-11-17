@@ -23,6 +23,7 @@ import {
 } from "./connectors/agentmail.js";
 import { materializeAsset } from "./native-runtime/runtime-context.js";
 import { BROWSER_USE_CLOUD_SKILL } from "./connectors/browser-use-cloud/skill.js";
+import { GOOGLE_WORKSPACE_SKILL } from "./google-workspace/skill.js";
 import { LOCAL_BROWSER_SKILL } from "./connectors/local-browser/skill.js";
 import {
   LOCAL_BROWSER_CONNECTOR_TOOLS,
@@ -78,6 +79,13 @@ const connectors: ConnectorDefinition[] = [
       try { return await getAssignedMcpGateway(db).browserUseResources(binding); } catch { return []; }
     },
     async execute() { throw forbidden("Use Browser Use Cloud through the connection tool gateway."); },
+  },
+  { key: "google-workspace", label: "Google Workspace", skillName: "google-workspace", skillMarkdown: GOOGLE_WORKSPACE_SKILL, tools: [],
+    async resolve(db, binding) {
+      const { getAssignedMcpGateway } = await import("./native-runtime/assigned-mcp-tools.js");
+      try { return await getAssignedMcpGateway(db).googleWorkspaceResources(binding); } catch { return []; }
+    },
+    async execute() { throw forbidden("Use Google Workspace through the connection tool gateway."); },
   },
   { key: "local-browser", label: "Local Browser", skillName: "local-browser", skillMarkdown: LOCAL_BROWSER_SKILL,
     tools: LOCAL_BROWSER_CONNECTOR_TOOLS,

@@ -417,6 +417,11 @@ export interface ToolConnectionRemovalSummary {
     userSubjectFailures: number;
     appSubjectCleanup: "not_applicable" | "manage_in_vercel";
     manageUrl: string;
+  } | {
+    provider: "google";
+    tokensAttempted: number;
+    tokensRevoked: number;
+    tokenFailures: number;
   } | null;
 }
 

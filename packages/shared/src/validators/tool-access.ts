@@ -40,6 +40,7 @@ import {
 } from "../mcp-remote-headers.js";
 import { jsonSchemaSchema } from "./plugin.js";
 import { objectWithoutDefaults } from "./partial.js";
+import { googleWorkspaceSettingsSchema } from "../google-workspace-settings.js";
 
 export const toolApplicationTypeSchema = z.enum(TOOL_APPLICATION_TYPES);
 export const toolApplicationStatusSchema = z.enum(TOOL_APPLICATION_STATUSES);
@@ -219,10 +220,10 @@ export const connectionGrantSchema = z.object({
     oauth: z.object({
       strategy: z.string().trim().min(1).max(100).optional(),
       accessTokenExpiresAt: z.string().datetime().nullable().optional(),
-      scopes: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
+      scopes: z.array(z.string().trim().min(1).max(500)).max(40).optional(),
       scopeSource: z.enum(["provider", "requested_fallback"]).optional(),
-      unrequestedScopes: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
-      requestedScopes: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
+      unrequestedScopes: z.array(z.string().trim().min(1).max(500)).max(40).optional(),
+      requestedScopes: z.array(z.string().trim().min(1).max(500)).max(40).optional(),
       tokenType: z.string().trim().min(1).max(100).optional(),
       refreshTokenExpiresAt: z.string().datetime().optional(),
       refreshedAt: z.string().datetime().optional(),
@@ -422,8 +423,12 @@ export const connectToolAppSchema = z.object({
   grantKind: connectionGrantKindSchema.optional(),
   /** Same-company agent that owns a dedicated provider identity. */
   subjectAgentId: z.string().guid().optional(),
+  googleWorkspace: googleWorkspaceSettingsSchema.optional(),
 }).superRefine((value, ctx) => {
   if (value.configValues) rejectSensitiveConfigKeys(value.configValues, ctx, ["configValues"]);
+  if (value.googleWorkspace && value.galleryKey !== "google-workspace") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["googleWorkspace"], message: "Google Workspace settings apply only to the google-workspace app" });
+  }
   if (value.credentialValues) rejectUnsafeHeaderCredentials(value.credentialValues, ctx, ["credentialValues"]);
   if ((value.grantKind === "agent") !== Boolean(value.subjectAgentId)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["subjectAgentId"], message: "subjectAgentId is required exactly for an agent grant" });

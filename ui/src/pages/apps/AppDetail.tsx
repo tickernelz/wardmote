@@ -60,6 +60,8 @@ import { ConnectedAggregatorApps } from "./app-detail/ConnectedAggregatorApps";
 import { isAppAggregator } from "@tickernelz/wardmote-shared/aggregator-apps";
 import { actionPermissionMutation } from "./app-detail/action-permissions";
 import { RailwayAccessPanel } from "./app-detail/RailwayAccessPanel";
+import { GoogleWorkspaceTestPanel } from "./app-detail/GoogleWorkspaceTestPanel";
+import { GoogleWorkspaceSettingsPanel } from "./app-detail/GoogleWorkspaceSettingsPanel";
 import { ReviewPanel } from "./app-detail/ReviewPanel";
 import {
   ReconnectCard,
@@ -639,6 +641,8 @@ function StandardAppDetail({ renderActions, renderAgentSettings, renderConnectio
               {connection.config?.sourceTemplateKey === "browser-use-cloud" && <BrowserUseSettingsPanel connection={connection} grants={grantsQuery.data} />}
               {connection.config?.sourceTemplateKey === "local-browser" && <LocalBrowserSettingsPanel key={connection.id} connection={connection} />}
               {connection.config?.sourceTemplateKey === "railway" && <RailwayAccessPanel connection={connection} grants={grantsQuery.data} />}
+              {connection.config?.sourceTemplateKey === "google-workspace" && <GoogleWorkspaceSettingsPanel key={connection.id} connection={connection} canConfigure={grantsQuery.data?.capabilities?.canConfigure ?? false} />}
+              {connection.config?.sourceTemplateKey === "google-workspace" && <GoogleWorkspaceTestPanel connection={connection} />}
               {connection.config?.provider === "agentmail" && <EmailConnectionInboxes companyId={connection.companyId} connectionId={connection.id} canConfigure={grantsQuery.data?.capabilities?.canConfigure ?? false} />}
               {connection.config?.provider === "agentmail" ? <EmailConnectionAccess companyId={connection.companyId} connectionId={connection.id} agents={agents} /> : <>
               <IdentitiesSection

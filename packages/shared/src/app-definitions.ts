@@ -33,6 +33,7 @@ export const CONNECTABLE_APP_SLUGS = new Set([
   "google-chat",
   "google-people",
   "google-workspace-search",
+  "google-workspace",
   "github",
   "github-code-review-bot",
   "discord",
@@ -52,7 +53,19 @@ export const CONNECTABLE_APP_DEFINITIONS = APP_DEFINITIONS.filter((app) =>
  * separate from recognition avoids breaking saved connections when a provider
  * is pulled from Browse or reserved for a future first-party experience.
  */
-export const APP_STORE_HIDDEN_SLUGS = new Set([
+export const RETIRED_GOOGLE_SERVICE_SLUGS = [
+  "gmail",
+  "google-calendar",
+  "google-chat",
+  "google-docs",
+  "google-drive",
+  "google-people",
+  "google-sheets",
+  "google-slides",
+] as const;
+
+export const APP_STORE_HIDDEN_SLUGS = new Set<string>([
+  ...RETIRED_GOOGLE_SERVICE_SLUGS,
   "beehiiv",
   "brex",
   "candid",

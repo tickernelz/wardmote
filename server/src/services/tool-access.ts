@@ -11,8 +11,17 @@ import { honchoManagedArguments } from "./honcho-connection.js";
 import { defaultConnectionAgentInstructions } from "@tickernelz/wardmote-shared";
 import { isInsufficientConnectionScope, INSUFFICIENT_CONNECTION_SCOPE_MESSAGE } from "./connection-permission-errors.js";
 import { mcpDiscoveryHttpFailure, retainMcpConnectionFailure, withMcpConnectionFailure } from "./mcp-connection-failure.js";
-import { BROWSER_USE_TOOLS } from "@tickernelz/wardmote-shared";
+import {
+  BROWSER_USE_TOOLS,
+  GOOGLE_WORKSPACE_TOOLS,
+  googleWorkspaceScopesFor,
+  normalizeGoogleWorkspaceSettings,
+  type GoogleWorkspaceConnectionSettings,
+  type GoogleWorkspaceSettingsInput,
+} from "@tickernelz/wardmote-shared";
 import { browserUseClient, isBrowserUseConnection } from "./browser-use-client.js";
+import { isGatewayRestConnection } from "./gateway-rest-connections.js";
+import { googleWorkspaceSettings, grantedGoogleScopes, isGoogleWorkspaceConnection } from "./google-workspace/runtime.js";
 import { isLocalBrowserConnection } from "./connectors/local-browser/connection.js";
 import { LOCAL_BROWSER_CONNECTOR_TOOLS } from "./connectors/local-browser/tools.js";
 import { browserUseService } from "./browser-use.js";
@@ -291,6 +300,7 @@ type ActorInfo = {
 const ACTIVE_BROKER_RUN_STATUSES = new Set(["running"]);
 const REMOTE_HTTP_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REMOTE_HTTP_REDIRECTS = 5;
+const GOOGLE_OAUTH_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const MAX_OAUTH_DCR_CLIENT_ID_LENGTH = 4_096;
 const MAX_OAUTH_DCR_CLIENT_SECRET_LENGTH = 16_384;
 const OAUTH_REFRESH_LEASE_MS = 120_000;
@@ -3876,6 +3886,23 @@ export function toolAccessService(
     return aggregatorAppsResponse(await getConnectionRow(connectionId), actor);
   }
 
+  async function googleWorkspaceSettingsView(connection: typeof toolConnections.$inferSelect): Promise<GoogleWorkspaceConnectionSettings> {
+    const settings = googleWorkspaceSettings(connection);
+    const requiredScopes = googleWorkspaceScopesFor(settings.capabilities);
+    const grants = await db
+      .select({ id: connectionGrants.id, kind: connectionGrants.kind, providerTenant: connectionGrants.providerTenant })
+      .from(connectionGrants)
+      .where(and(eq(connectionGrants.connectionId, connection.id), eq(connectionGrants.companyId, connection.companyId), eq(connectionGrants.status, "active")));
+    return {
+      settings,
+      requiredScopes,
+      grants: grants.map((grant) => {
+        const grantedScopes = grantedGoogleScopes(grant);
+        return { grantId: grant.id, kind: grant.kind, grantedScopes, missingScopes: requiredScopes.filter((scope) => !grantedScopes.includes(scope)) };
+      }),
+    };
+  }
+
   async function configureArcadeDiscovery(connectionId: string, input: ArcadeDiscoverySetupInput, actor: ActorInfo) {
     assertDiscoveryActor(actor);
     const companyId = (await getConnectionRow(connectionId)).companyId;
@@ -6350,6 +6377,24 @@ export function toolAccessService(
         ),
       );
     const grantsToRevoke = grantRows.filter((row) => row.status !== "revoked");
+    let googleCleanup: ToolConnectionRemovalSummary["externalCredentialCleanup"] = null;
+    if (isGoogleWorkspaceConnection(connection) && grantsToRevoke.length > 0) {
+      const activeGrants = await db
+        .select()
+        .from(connectionGrants)
+        .where(and(
+          eq(connectionGrants.companyId, connection.companyId),
+          inArray(connectionGrants.id, grantsToRevoke.map((row) => row.id)),
+        ));
+      const outcomes = await Promise.all(activeGrants.map((grant) => revokeGoogleGrantToken(connection, grant, actor)));
+      const attempted = outcomes.filter((outcome) => outcome !== "not_applicable");
+      googleCleanup = {
+        provider: "google",
+        tokensAttempted: attempted.length,
+        tokensRevoked: attempted.filter((outcome) => outcome === "success" || outcome === "already_revoked").length,
+        tokenFailures: attempted.filter((outcome) => outcome === "failed").length,
+      };
+    }
     if (grantsToRevoke.length > 0) {
       await db
         .update(connectionGrants)
@@ -6371,7 +6416,7 @@ export function toolAccessService(
         );
     }
     let externalCredentialCleanup: ToolConnectionRemovalSummary["externalCredentialCleanup"] =
-      null;
+      googleCleanup;
     if (
       connection.credentialSource === "vercel_connect" &&
       connection.externalCredential
@@ -7334,6 +7379,9 @@ export function toolAccessService(
       await browserUseClient(headers, (url, init) => requestRemoteHttpEndpoint(new URL(url), init), connection.id).probe();
       return BROWSER_USE_TOOLS;
     }
+    if (isGoogleWorkspaceConnection(connection)) {
+      return GOOGLE_WORKSPACE_TOOLS.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations }));
+    }
     if (isAgentMailConnection(connection)) {
       await validateAgentMailConnection(connection);
       return [];
@@ -7485,7 +7533,7 @@ export function toolAccessService(
           });
         for (const grant of grantsToCheck)
           await refreshManagedGitHubGrantAccess(connection, grant, actor);
-      } else if (isBrowserUseConnection(connection)) {
+      } else if (isGatewayRestConnection(connection)) {
         await discoverTools(connection, undefined, actor);
       } else if (isAgentMailConnection(connection)) {
         await validateAgentMailConnection(connection);
@@ -7523,6 +7571,8 @@ export function toolAccessService(
           ? "GitHub account, installation, and repository access are available."
           : isBrowserUseConnection(connection)
             ? "Browser Use API key is connected."
+          : isGoogleWorkspaceConnection(connection)
+            ? "Google Workspace is connected."
           : isAgentMailConnection(connection)
             ? "AgentMail API key is connected."
             : isLocalBrowserConnection(connection)
@@ -9300,8 +9350,9 @@ export function toolAccessService(
         : ("authorization_code" as const);
     // The resource indicator is the MCP endpoint itself, independent of which
     // authorization server ends up serving it.
-    const configuredResource =
-      typeof oauth.resource === "string" && oauth.resource.trim()
+    const configuredResource = isGoogleWorkspaceConnection(connection)
+      ? null
+      : typeof oauth.resource === "string" && oauth.resource.trim()
         ? oauth.resource.trim()
         : canonicalResourceIndicator(remoteEndpoint(connection.config));
     if (configuredAuthorizationUrl && configuredTokenUrl) {
@@ -11010,6 +11061,29 @@ export function toolAccessService(
     return grant;
   }
 
+  async function revokeGoogleGrantToken(
+    connection: typeof toolConnections.$inferSelect,
+    grant: typeof connectionGrants.$inferSelect,
+    actor: ActorInfo | undefined,
+  ): Promise<"success" | "already_revoked" | "failed" | "not_applicable"> {
+    const ref =
+      grant.credentialSecretRefs.find((candidate) => candidate.configPath === "oauth.refresh_token")
+      ?? grant.credentialSecretRefs.find((candidate) => candidate.configPath === "oauth.access_token");
+    if (!ref) return "not_applicable";
+    try {
+      const { value } = await resolveOAuthGrantSecret(connection, grant, ref, actor, undefined);
+      const response = await requestRemoteHttpEndpoint(new URL(GOOGLE_OAUTH_REVOKE_URL), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token: value }).toString(),
+      });
+      if (response.ok) return "success";
+      return response.status === 400 ? "already_revoked" : "failed";
+    } catch {
+      return "failed";
+    }
+  }
+
   async function resolveOAuthGrantSecret(
     connection: typeof toolConnections.$inferSelect,
     grant: typeof connectionGrants.$inferSelect,
@@ -12376,6 +12450,9 @@ export function toolAccessService(
             mcpPreserveAccess: Boolean(retainedConnection && (retainedConnection.status === "active" || asRecord(retainedConnection.config).mcpPreserveAccess === true)),
           } : {}),
           ...(galleryEntry.slug === "posthog" ? { safeDefault: true } : {}),
+          ...(galleryEntry.slug === "google-workspace"
+            ? { googleWorkspace: normalizeGoogleWorkspaceSettings(input.googleWorkspace ?? asRecord(retainedConnection?.config).googleWorkspace) }
+            : {}),
           ...(galleryEntry.slug === "telem"
             ? {
                 headerPolicy: asRecord(retainedConnection?.config).headerPolicy ?? {
@@ -12672,7 +12749,7 @@ export function toolAccessService(
                 applicationKey: `app-gallery:${galleryEntry?.slug ?? "link"}:${randomUUID()}`,
                 name: applicationName,
                 description: safeApplicationDescription,
-                type: transport === "rest_api" && galleryEntry?.slug === "browser-use-cloud" ? "rest_api" : transport === "mcp_remote" ? "mcp_http" : "mcp_stdio",
+                type: transport === "rest_api" && (galleryEntry?.slug === "browser-use-cloud" || galleryEntry?.slug === "google-workspace") ? "rest_api" : transport === "mcp_remote" ? "mcp_http" : "mcp_stdio",
                 status: "draft",
                 metadata: galleryEntry
                   ? {
@@ -14140,7 +14217,13 @@ export function toolAccessService(
       : null;
     const requestedScopes = (() => {
       if (!galleryMethod) return input.scopes ?? null;
-      const allowed = normalizeOauthScopes(galleryMethod.defaults?.scopesHint);
+      const googleWorkspace = isGoogleWorkspaceConnection(connection);
+      if (googleWorkspace && !Object.values(googleWorkspaceSettings(connection).capabilities).some((tier) => tier !== "off")) {
+        throw badRequest("Turn on at least one Google service before signing in", { code: "google_workspace_no_services" });
+      }
+      const allowed = googleWorkspace
+        ? googleWorkspaceScopesFor(googleWorkspaceSettings(connection).capabilities)
+        : normalizeOauthScopes(galleryMethod.defaults?.scopesHint);
       if (!input.scopes) return allowed;
       const requested = normalizeOauthScopes(input.scopes);
       const widened = requested.filter((scope) => !allowed.includes(scope));
@@ -14408,6 +14491,8 @@ export function toolAccessService(
       // OIDC offline access requires consent unless the provider has another
       // established basis for granting it. A generic server has no reviewed override.
       authorizationUrl.searchParams.set("prompt", "consent");
+    if (reviewedAuthorizationParams?.include_granted_scopes)
+      authorizationUrl.searchParams.set("include_granted_scopes", reviewedAuthorizationParams.include_granted_scopes);
 
     if (
       authorizationSubjectUserId &&
@@ -17046,7 +17131,7 @@ export function toolAccessService(
             companyId,
             applicationKey: normalizeKey(input.applicationName ?? input.name),
             name: input.applicationName ?? input.name,
-            type: isBrowserUseConnection({ transport, config }) ? "rest_api" : transport === "mcp_remote" ? "mcp_http" : "mcp_stdio",
+            type: isGatewayRestConnection({ transport, config }) ? "rest_api" : transport === "mcp_remote" ? "mcp_http" : "mcp_stdio",
             status: "active",
             metadata: {},
           })
@@ -17598,6 +17683,8 @@ export function toolAccessService(
             providerRevocation = "failed";
           }
         }
+      } else if (isGoogleWorkspaceConnection(connection) && currentGrant.status === "active") {
+        providerRevocation = await revokeGoogleGrantToken(connection, currentGrant, actor);
       }
       const grant = await db.transaction(async (tx) => {
         const removedDelegations = await tx
@@ -18003,6 +18090,26 @@ export function toolAccessService(
     checkHealth: checkConnectionHealth,
 
     refreshCatalog,
+
+    googleWorkspaceSettings: async (connectionId: string, companyId: string): Promise<GoogleWorkspaceConnectionSettings> => {
+      const connection = await getConnectionRow(connectionId, companyId);
+      if (!isGoogleWorkspaceConnection(connection)) throw unprocessable("This connection is not Google Workspace.");
+      return googleWorkspaceSettingsView(connection);
+    },
+
+    configureGoogleWorkspace: async (connectionId: string, companyId: string, input: GoogleWorkspaceSettingsInput, actor: ActorInfo): Promise<GoogleWorkspaceConnectionSettings> => {
+      const updated = await db.transaction(async (tx) => {
+        const [connection] = await tx.select().from(toolConnections).where(and(eq(toolConnections.id, connectionId), eq(toolConnections.companyId, companyId))).for("update");
+        if (!connection || !isGoogleWorkspaceConnection(connection)) throw unprocessable("This connection is not Google Workspace.");
+        if (connection.status === "archived") throw conflict("Archived app connections cannot be changed");
+        const config = { ...connection.config, googleWorkspace: normalizeGoogleWorkspaceSettings(input) };
+        const [row] = await tx.update(toolConnections).set({ config, transportConfig: config, updatedAt: now() }).where(and(eq(toolConnections.id, connectionId), eq(toolConnections.companyId, companyId))).returning();
+        return row;
+      });
+      const view = await googleWorkspaceSettingsView(updated);
+      await audit({ companyId, connectionId, action: "tool_connection.google_workspace_updated", outcome: "success", actor, details: { capabilities: view.settings.capabilities, classPolicy: view.settings.classPolicy, scope: view.settings.scope, domain: view.settings.domain, methodOverrides: Object.keys(view.settings.methodOverrides).length } });
+      return view;
+    },
 
     configureRailwaySsh: async (connectionId: string, companyId: string, input: ConfigureRailwaySsh, actor: ActorInfo): Promise<RailwaySshSetup | null> => {
       const knownHosts = input.action === "enable" ? validateRailwayKnownHosts(input.knownHosts) : "";
@@ -19098,6 +19205,7 @@ export function toolAccessService(
         input.companyId,
       );
       if (isBrowserUseConnection(connection)) throw forbidden("Browser Use credentials stay in the governed tool gateway and cannot be exported.");
+      if (isGoogleWorkspaceConnection(connection)) throw forbidden("Google Workspace credentials stay in the governed tool gateway and cannot be exported.");
       if (connection.connectionPurpose === "ai") throw unprocessable("AI credentials are available only through the runtime resolver");
       const application = await getConnectionApplication(connection);
       const brokerEnabled = connectionTokenBrokerEnabled(connection);

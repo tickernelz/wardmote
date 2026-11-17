@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
+import { googleWorkspaceScopesFor } from "@tickernelz/wardmote-shared";
 import {
   afterAll,
   afterEach,
@@ -54,6 +55,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   APP_DEFINITIONS,
   APP_STORE_HIDDEN_SLUGS,
+  RETIRED_GOOGLE_SERVICE_SLUGS,
   getAvailableConnectionMethod,
   getConnectableAppDefinition,
 } from "@tickernelz/wardmote-shared";
@@ -2490,6 +2492,58 @@ describeEmbeddedPostgres("tool access service", () => {
       })).rejects.toMatchObject({ details: { code: "oauth_scope_widening_rejected" } });
     },
   );
+
+  it("asks Google only for the scopes of the chosen service levels, without a resource indicator", async () => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+    const actor = { actorType: "user" as const, actorId: "board" };
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "google-workspace",
+      connectionMethodKey: "customer-oauth",
+      name: "Google Workspace fixture",
+      grantKind: "organization",
+      oauthClient: { clientId: "gws-client.apps.googleusercontent.com", clientSecret: "gws-secret" },
+    }, actor);
+    const input = { redirectUri: "https://wardmote.example.test/api/tools/oauth/callback", actor };
+    await expect(service.startOAuth(company.id, connected.connectionId, input)).rejects.toMatchObject({ details: { code: "google_workspace_no_services" } });
+    const seeded = await service.connectGalleryApp(company.id, {
+      galleryKey: "google-workspace",
+      connectionMethodKey: "customer-oauth",
+      name: "Google Workspace seeded",
+      oauthClient: { clientId: "gws-client-2.apps.googleusercontent.com", clientSecret: "gws-secret" },
+      googleWorkspace: { capabilities: { tasks: "read" } },
+    }, actor);
+    const seededStart = await service.startOAuth(company.id, seeded.connectionId, input);
+    expect(new URL(seededStart.authorizationUrl).searchParams.get("scope")?.split(" ")).toEqual(googleWorkspaceScopesFor({ tasks: "read" }));
+    const resumed = await service.connectGalleryApp(company.id, {
+      galleryKey: "google-workspace",
+      connectionMethodKey: "customer-oauth",
+      name: "Google Workspace seeded",
+      oauthClient: { clientId: "gws-client-2.apps.googleusercontent.com", clientSecret: "gws-secret" },
+      resumeConnectionId: seeded.connectionId,
+    }, actor);
+    expect((await service.googleWorkspaceSettings(resumed.connectionId, company.id)).settings.capabilities.tasks).toBe("read");
+    const view = await service.configureGoogleWorkspace(connected.connectionId, company.id, {
+      capabilities: { sheets: "edit", drive: "delete_share", gmail: "read" },
+      scope: { driveFolderIds: ["folder_1"] },
+      domain: "Example.com",
+      methodOverrides: { "constructor.x": "allow" },
+    }, actor);
+    expect(view.settings).toMatchObject({ domain: "example.com", scope: { driveFolderIds: ["folder_1"] } });
+    expect(view.settings.capabilities).toMatchObject({ sheets: "edit", drive: "delete_share", gmail: "read", docs: "off" });
+    const expected = googleWorkspaceScopesFor({ sheets: "edit", drive: "delete_share", gmail: "read" });
+    expect(view.requiredScopes).toEqual(expected);
+    const started = await service.startOAuth(company.id, connected.connectionId, input);
+    const url = new URL(started.authorizationUrl);
+    expect(url.searchParams.get("scope")?.split(" ")).toEqual(expected);
+    expect(url.searchParams.get("include_granted_scopes")).toBe("true");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.has("resource")).toBe(false);
+    await expect(service.startOAuth(company.id, connected.connectionId, { ...input, scopes: [...expected, "https://www.googleapis.com/auth/script.projects"] }))
+      .rejects.toMatchObject({ details: { code: "oauth_scope_widening_rejected" } });
+    const [row] = await db.select().from(toolConnections).where(eq(toolConnections.id, connected.connectionId));
+    expect((row.config.googleWorkspace as { capabilities: Record<string, string> }).capabilities.sheets).toBe("edit");
+  });
 
   it("keeps tools outside a Google Workspace capability profile disabled", async () => {
     const company = await createCompany(db);
@@ -5158,14 +5212,7 @@ describeEmbeddedPostgres("tool access service", () => {
         "sentry",
         "zapier",
         "linear",
-        "gmail",
-        "google-drive",
-        "google-docs",
-        "google-sheets",
-        "google-slides",
-        "google-calendar",
-        "google-chat",
-        "google-people",
+        "google-workspace",
         "google-workspace-search",
         "github",
         "github-code-review-bot",
@@ -5197,14 +5244,9 @@ describeEmbeddedPostgres("tool access service", () => {
       expect(res.body.apps.find((app: { slug: string }) => app.slug === slug).tags).toContain("model-provider");
     }
     expect(
-      res.body.apps.find((app: { slug: string }) => app.slug === "gmail")
+      res.body.apps.find((app: { slug: string }) => app.slug === "google-workspace")
         .ownershipAvailability,
-    ).toEqual({
-      platform_shared: false,
-      platform_provisioned: false,
-      customer: true,
-      dcr: true,
-    });
+    ).toMatchObject({ customer: true });
     const gallerySlugs = new Set(
       res.body.apps.map((app: { slug: string }) => app.slug),
     );
@@ -5234,13 +5276,12 @@ describeEmbeddedPostgres("tool access service", () => {
           ]),
         }),
         expect.objectContaining({
-          slug: "google-sheets",
-          methods: expect.arrayContaining([
-            expect.objectContaining({ key: "local", transport: "local_stdio" }),
-          ]),
+          slug: "google-workspace",
+          methods: [expect.objectContaining({ key: "customer-oauth", transport: "rest_api", auth: "oauth" })],
         }),
       ]),
     );
+    expect(RETIRED_GOOGLE_SERVICE_SLUGS.filter((slug) => gallerySlugs.has(slug))).toEqual([]);
   });
 
   it("quarantines newly discovered Enterpret tools on later refreshes", async () => {

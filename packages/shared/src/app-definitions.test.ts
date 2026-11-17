@@ -880,6 +880,14 @@ describe("AppDefinition catalog", () => {
       "coda",
       "egnyte",
       "embat",
+      "gmail",
+      "google-calendar",
+      "google-chat",
+      "google-docs",
+      "google-drive",
+      "google-people",
+      "google-sheets",
+      "google-slides",
       "kernel",
       "klaviyo",
       "local-falcon",
@@ -894,7 +902,12 @@ describe("AppDefinition catalog", () => {
       "ticktick",
       "xero",
     ]);
-    expect(APP_STORE_DEFINITIONS).toHaveLength(81);
+    expect(APP_STORE_DEFINITIONS).toHaveLength(74);
+    expect(APP_STORE_DEFINITIONS.filter((entry) => /google|gmail/.test(entry.slug)).map((entry) => entry.slug).sort()).toEqual([
+      "google",
+      "google-workspace",
+      "google-workspace-search",
+    ]);
     const connectableSlugs = new Set(
       CONNECTABLE_APP_DEFINITIONS.map((entry) => entry.slug),
     );

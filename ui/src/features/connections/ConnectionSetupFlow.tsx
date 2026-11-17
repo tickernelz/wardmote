@@ -93,6 +93,12 @@ import {
 import { parseGoogleSheetIds } from "@/pages/apps/google-sheets";
 import { connectionNameForGrantKind } from "@/pages/apps/connection-identity";
 import {
+  GOOGLE_WORKSPACE_DEFAULT_CAPABILITIES,
+  GoogleWorkspaceSetup,
+  googleWorkspaceSettingsInput,
+  type GoogleWorkspaceSetupDraft,
+} from "./google-workspace/GoogleWorkspaceSetup";
+import {
   canSubmitGenericConnect,
   customHeaderError,
   defaultGenericMcpName,
@@ -1137,6 +1143,7 @@ function StandardConnectionSetupFlow({
   };
 
   const effectiveGrantKind = fixedGrantKind ?? grantKind;
+  const [googleWorkspaceDraft, setGoogleWorkspaceDraft] = useState<GoogleWorkspaceSetupDraft>({ capabilities: GOOGLE_WORKSPACE_DEFAULT_CAPABILITIES, domain: "" });
   const connectMutation = useMutation({
     mutationFn: async (entryOverride?: AppDefinition) => {
       const connectEntry = entryOverride ?? entry;
@@ -1184,6 +1191,7 @@ function StandardConnectionSetupFlow({
             : reconnectConnectionId ? { reconnectConnectionId } : {}),
           ...(requestedGrantKind !== "organization" ? { grantKind: requestedGrantKind } : {}),
           ...(requestedGrantKind === "agent" ? { subjectAgentId: [...installAgentIds][0] } : {}),
+          ...(connectEntry.slug === "google-workspace" ? { googleWorkspace: googleWorkspaceSettingsInput(googleWorkspaceDraft) } : {}),
         });
         customerClientResumeRef.current = null;
       } else {
@@ -2159,7 +2167,22 @@ function StandardConnectionSetupFlow({
         />
       )}
 
-      {step === "key" && entry && credentialStep !== undefined ? credentialStep : step === "key" && entry ? (
+      {step === "key" && entry && credentialStep !== undefined ? credentialStep : step === "key" && entry?.slug === "google-workspace" ? (
+        <GoogleWorkspaceSetup
+          defaults={renderConnectionDefaults?.()}
+          callbackUrl={callbackUrlForSetup}
+          clientId={curatedOAuthClientId}
+          clientSecret={curatedOAuthClientSecret}
+          onClientIdChange={setCuratedOAuthClientId}
+          onClientSecretChange={setCuratedOAuthClientSecret}
+          draft={googleWorkspaceDraft}
+          onDraftChange={setGoogleWorkspaceDraft}
+          submitting={connectMutation.isPending || oauthStartMutation.isPending}
+          error={connectMutation.isError ? (connectMutation.error instanceof Error ? connectMutation.error.message : "Wardmote couldn’t save the connection. Try again.") : oauthError}
+          onBack={backToGallery}
+          onConnect={() => connectMutation.mutate(undefined)}
+        />
+      ) : step === "key" && entry ? (
         <KeyStep
           settingsValid={additionalSettingsValid && instructionsValid}
           entry={entry}

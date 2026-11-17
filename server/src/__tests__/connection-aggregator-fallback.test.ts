@@ -313,8 +313,7 @@ const support = await getEmbeddedPostgresTestSupport();
       await resetQuestions();
       const result = await connectionIntentService(db).search(claims,
         "I need something that can search documents and spreadsheets for our quarterly planning discussion");
-      expect(result.results.some(item => item.service === "google-drive")).toBe(true);
-      expect(result.results.some(item => item.service === "google-sheets")).toBe(true);
+      expect(result.results.some(item => item.service === "google-workspace")).toBe(true);
       expect(result.instruction).not.toContain("search its exact name");
     });
     it("keeps installed capability matches when a generic query resembles an external app name", async () => {

@@ -336,6 +336,7 @@ export {
 export {
   APP_STORE_DEFINITIONS,
   APP_STORE_HIDDEN_SLUGS,
+  RETIRED_GOOGLE_SERVICE_SLUGS,
   CONNECTABLE_APP_DEFINITIONS,
   CONNECTABLE_APP_SLUGS,
   DEFAULT_OWNERSHIP_AVAILABILITY,
@@ -368,6 +369,8 @@ export {
 } from "./connection-setup-state.js";
 export { APP_DEFINITIONS } from "./app-definitions.generated.js";
 export * from "./google-workspace-connectors.js";
+export * from "./google-workspace-settings.js";
+export * from "./google-workspace-tools.js";
 export * from "./github-connectors.js";
 export * from "./agent-authority.js";
 export * from "./autonomy-windows.js";

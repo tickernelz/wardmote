@@ -19,6 +19,7 @@ import {
   type ToolConnectionCreateCapabilities,
   connectToolAppSchema,
   configureRailwaySshSchema,
+  googleWorkspaceSettingsSchema,
   createConnectionGrantDelegationSchema,
   createToolStdioCommandTemplateSchema,
   createToolApplicationSchema,
@@ -1389,6 +1390,40 @@ function connectorEnrollmentPrincipal(req: Request): string {
     );
     if (!connection) return;
     res.json(connection);
+  });
+
+  router.get("/tool-connections/:connectionId/google-workspace", async (req, res) => {
+    assertBoard(req);
+    const connection = await getAccessibleResource(req, res, svc.getConnection(req.params.connectionId as string), "Tool connection not found");
+    if (!connection) return;
+    await assertToolConnectionConfigureAccess(req, connection);
+    res.json(await svc.googleWorkspaceSettings(connection.id, connection.companyId));
+  });
+
+  router.put("/tool-connections/:connectionId/google-workspace", validate(googleWorkspaceSettingsSchema), async (req, res) => {
+    assertBoard(req);
+    const connection = await getAccessibleResource(req, res, svc.getConnection(req.params.connectionId as string), "Tool connection not found");
+    if (!connection) return;
+    await assertToolConnectionConfigureAccess(req, connection);
+    const view = await svc.configureGoogleWorkspace(connection.id, connection.companyId, req.body, getActorInfo(req));
+    await logActivity(db, { companyId: connection.companyId, actorType: "user", actorId: req.actor.userId ?? "board", action: "tool_connection.google_workspace_updated", entityType: "tool_connection", entityId: connection.id, details: { capabilities: view.settings.capabilities } });
+    res.json(view);
+  });
+
+  router.post("/tool-connections/:connectionId/google-workspace/test", async (req, res) => {
+    assertBoard(req);
+    if (!options.toolGateway) {
+      res.status(501).json({ error: "Tool gateway service is not configured" });
+      return;
+    }
+    const connection = await getAccessibleResource(req, res, svc.getConnection(req.params.connectionId as string), "Tool connection not found");
+    if (!connection) return;
+    await assertToolConnectionConfigureAccess(req, connection);
+    try {
+      res.json(await options.toolGateway.testGoogleWorkspaceConnection({ companyId: connection.companyId, connectionId: connection.id, userId: req.actor.userId ?? "board" }));
+    } catch (error) {
+      if (!sendToolGatewayError(res, error)) throw error;
+    }
   });
 
   router.post("/tool-connections/:connectionId/railway/ssh", validate(configureRailwaySshSchema), async (req, res) => {

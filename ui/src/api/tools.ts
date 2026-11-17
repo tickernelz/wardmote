@@ -4,6 +4,9 @@ import type {
   ToolApplication,
   ConfigureRailwaySsh,
   RailwaySshSetup,
+  GoogleWorkspaceConnectionSettings,
+  GoogleWorkspaceConnectionTest,
+  GoogleWorkspaceSettingsInput,
   ToolConnection,
   ToolConnectionInstall,
   ToolConnectionInstallSnapshot,
@@ -395,6 +398,12 @@ export const toolsApi = {
     api.patch<ToolConnection>(`/tool-connections/${connectionId}`, input),
   configureRailwaySsh: (connectionId: string, input: ConfigureRailwaySsh) =>
     api.post<RailwaySshSetup | null>(`/tool-connections/${connectionId}/railway/ssh`, input),
+  googleWorkspaceSettings: (connectionId: string) =>
+    api.get<GoogleWorkspaceConnectionSettings>(`/tool-connections/${connectionId}/google-workspace`),
+  configureGoogleWorkspace: (connectionId: string, input: GoogleWorkspaceSettingsInput) =>
+    api.put<GoogleWorkspaceConnectionSettings>(`/tool-connections/${connectionId}/google-workspace`, input),
+  testGoogleWorkspace: (connectionId: string) =>
+    api.post<GoogleWorkspaceConnectionTest>(`/tool-connections/${connectionId}/google-workspace/test`, {}),
   // Removal is a credential-revoking teardown (PAP-17119), so the response
   // carries the cleanup receipt alongside the archived connection.
   archiveConnection: (connectionId: string) =>
