@@ -110,6 +110,39 @@ describe("classifyGoogleCall", () => {
     expect(classifyGoogleCall(index("gmail"), "gmail.users.messages.modify", { addLabelIds: ["TRASH"] }).methodClass).toBe("destructive");
   });
 
+  it("classifies cancelling an event or deleting a task through update as destructive", () => {
+    for (const id of ["calendar.events.patch", "calendar.events.update"]) {
+      expect(classifyGoogleCall(index("calendar"), id, { status: "cancelled" }).methodClass).toBe("destructive");
+      expect(classifyGoogleCall(index("calendar"), id, { status: "confirmed" }).methodClass).toBe("write");
+    }
+    for (const id of ["tasks.tasks.patch", "tasks.tasks.update"]) {
+      expect(classifyGoogleCall(index("tasks"), id, { deleted: true }).methodClass).toBe("destructive");
+      expect(classifyGoogleCall(index("tasks"), id, { title: "x" }).methodClass).toBe("write");
+    }
+  });
+
+  it("classifies a Gmail filter that forwards mail as external", () => {
+    const gmail = index("gmail");
+    expect(classifyGoogleCall(gmail, "gmail.users.settings.filters.create", { action: { forward: "x@evil.example" } }).methodClass).toBe("external");
+    expect(classifyGoogleCall(gmail, "gmail.users.settings.filters.create", { action: { addLabelIds: ["L1"] } }).methodClass).toBe("write");
+  });
+
+  it("classifies notification channels to an agent-chosen address as external", () => {
+    for (const id of ["drive.files.watch", "drive.changes.watch", "calendar.events.watch", "gmail.users.watch", "forms.forms.watches.create"]) {
+      expect(classifyGoogleCall(index(id.split(".")[0] as GoogleWorkspaceService), id).methodClass).toBe("external");
+    }
+  });
+
+  it("never resolves request kinds or body paths through the object prototype", () => {
+    const sheets = index("sheets");
+    const verdict = classifyGoogleCall(sheets, "sheets.spreadsheets.batchUpdate", { requests: [{ constructor: {} }, { toString: {} }] });
+    expect(verdict.methodClass).toBe("unreviewed");
+    expect(verdict.classes).toEqual(["write", "unreviewed"]);
+    expect(JSON.parse(JSON.stringify(verdict))).toEqual(verdict);
+    expect(describeGoogleMethod(sheets, "sheets.spreadsheets.batchUpdate", { path: "requests[].deleteSheet" }).kind).toBe("deleteSheet");
+    expect(() => describeGoogleMethod(sheets, "sheets.spreadsheets.batchUpdate", { path: "requests[].constructor" })).toThrow(GoogleWorkspaceError);
+  });
+
   it("marks a method that appears in a newer Discovery revision as unreviewed", () => {
     const doc = recorded("tasks");
     doc.revision = "29990101";
@@ -244,7 +277,10 @@ describe("createGoogleDiscoveryIndex", () => {
   it("searches the services that loaded when another one is unavailable", async () => {
     const fetchMock = vi.fn(async (url: string) => (url.includes("/sheets/") ? jsonResponse(recorded("sheets")) : jsonResponse({}, 503)));
     const discovery = createGoogleDiscoveryIndex({ fetch: fetchMock as unknown as typeof fetch });
-    expect((await discovery.search({ query: "append values" }))[0]?.id).toBe("sheets.spreadsheets.values.append");
+    const result = await discovery.search({ query: "append values" });
+    expect(result.methods[0]?.id).toBe("sheets.spreadsheets.values.append");
+    expect(result.unavailableServices).toContain("drive");
+    expect(result.unavailableServices).not.toContain("sheets");
   });
 
   it("rejects a document for another service", async () => {
@@ -257,7 +293,7 @@ describe("createGoogleDiscoveryIndex", () => {
     const discovery = createGoogleDiscoveryIndex({ fetch: fetchMock as typeof fetch });
     const verdict = await discovery.classify("sheets.spreadsheets.batchUpdate", { requests: [{ deleteSheet: { sheetId: 1 } }] });
     expect(verdict.methodClass).toBe("destructive");
-    expect((await discovery.search({ query: "append values", service: "sheets" }))[0]?.id).toBe("sheets.spreadsheets.values.append");
+    expect((await discovery.search({ query: "append values", service: "sheets" })).methods[0]?.id).toBe("sheets.spreadsheets.values.append");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await expect(discovery.describe("keep.notes.list")).rejects.toMatchObject({ code: "validation" });
   });
