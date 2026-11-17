@@ -1,7 +1,8 @@
 import {
   GOOGLE_WORKSPACE_SERVICE_IDS,
-  type GoogleWorkspacePolicyAction,
+  type GoogleWorkspaceConnectionTest,
   type GoogleWorkspaceService,
+  type GoogleWorkspaceServiceTestResult,
   type GoogleWorkspaceTier,
 } from "@tickernelz/wardmote-shared";
 
@@ -36,19 +37,7 @@ const WRITE_PROBES: Partial<Record<GoogleWorkspaceService, GoogleCallInput>> = {
   tasks: { method: "tasks.tasks.insert", params: { tasklist: "@default" }, body: { title: "Wardmote test" } },
 };
 
-export interface GoogleServiceTestResult {
-  service: GoogleWorkspaceService;
-  tier: GoogleWorkspaceTier;
-  ok: boolean;
-  method: string;
-  code: GoogleWorkspaceError["code"] | null;
-  message: string | null;
-  hint: string | null;
-  enableUrl: string | null;
-  write: { method: string; action: GoogleWorkspacePolicyAction; reason: string | null } | null;
-}
-
-function failure(service: GoogleWorkspaceService, tier: GoogleWorkspaceTier, method: string, error: unknown): GoogleServiceTestResult {
+function failure(service: GoogleWorkspaceService, tier: GoogleWorkspaceTier, method: string, error: unknown): GoogleWorkspaceServiceTestResult {
   const typed = error instanceof GoogleWorkspaceError ? error : null;
   const enableUrl = typed && typeof typed.details.enableUrl === "string" ? typed.details.enableUrl : null;
   return {
@@ -64,7 +53,7 @@ function failure(service: GoogleWorkspaceService, tier: GoogleWorkspaceTier, met
   };
 }
 
-async function writeVerdict(runtime: GoogleWorkspaceToolRuntime, service: GoogleWorkspaceService): Promise<GoogleServiceTestResult["write"]> {
+async function writeVerdict(runtime: GoogleWorkspaceToolRuntime, service: GoogleWorkspaceService): Promise<GoogleWorkspaceServiceTestResult["write"]> {
   const input = WRITE_PROBES[service];
   if (!input) return null;
   const { plan } = await planGoogleCall(runtime.discovery, input);
@@ -76,7 +65,7 @@ async function writeVerdict(runtime: GoogleWorkspaceToolRuntime, service: Google
   return { method: input.method, action: decision.action, reason: decision.error?.message ?? null };
 }
 
-async function testService(runtime: GoogleWorkspaceToolRuntime, service: GoogleWorkspaceService, tier: GoogleWorkspaceTier): Promise<GoogleServiceTestResult> {
+async function testService(runtime: GoogleWorkspaceToolRuntime, service: GoogleWorkspaceService, tier: GoogleWorkspaceTier): Promise<GoogleWorkspaceServiceTestResult> {
   const probe = READ_PROBES[service];
   try {
     await executeGoogleCall({ ...runtime, policy: async () => ({ allowed: true }) }, probe.input);
@@ -88,7 +77,7 @@ async function testService(runtime: GoogleWorkspaceToolRuntime, service: GoogleW
   return { service, tier, ok: true, method: probe.input.method, code: null, message: null, hint: null, enableUrl: null, write };
 }
 
-export async function testGoogleWorkspaceConnection(runtime: GoogleWorkspaceToolRuntime): Promise<{ ok: boolean; services: GoogleServiceTestResult[] }> {
+export async function testGoogleWorkspaceConnection(runtime: GoogleWorkspaceToolRuntime): Promise<GoogleWorkspaceConnectionTest> {
   const active = GOOGLE_WORKSPACE_SERVICE_IDS.filter((service) => runtime.settings.capabilities[service] !== "off");
   const services = await Promise.all(active.map((service) => testService(runtime, service, runtime.settings.capabilities[service])));
   return { ok: services.length > 0 && services.every((result) => result.ok), services };

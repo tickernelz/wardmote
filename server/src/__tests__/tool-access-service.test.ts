@@ -2505,6 +2505,23 @@ describeEmbeddedPostgres("tool access service", () => {
     }, actor);
     const input = { redirectUri: "https://wardmote.example.test/api/tools/oauth/callback", actor };
     await expect(service.startOAuth(company.id, connected.connectionId, input)).rejects.toMatchObject({ details: { code: "google_workspace_no_services" } });
+    const seeded = await service.connectGalleryApp(company.id, {
+      galleryKey: "google-workspace",
+      connectionMethodKey: "customer-oauth",
+      name: "Google Workspace seeded",
+      oauthClient: { clientId: "gws-client-2.apps.googleusercontent.com", clientSecret: "gws-secret" },
+      googleWorkspace: { capabilities: { tasks: "read" } },
+    }, actor);
+    const seededStart = await service.startOAuth(company.id, seeded.connectionId, input);
+    expect(new URL(seededStart.authorizationUrl).searchParams.get("scope")?.split(" ")).toEqual(googleWorkspaceScopesFor({ tasks: "read" }));
+    const resumed = await service.connectGalleryApp(company.id, {
+      galleryKey: "google-workspace",
+      connectionMethodKey: "customer-oauth",
+      name: "Google Workspace seeded",
+      oauthClient: { clientId: "gws-client-2.apps.googleusercontent.com", clientSecret: "gws-secret" },
+      resumeConnectionId: seeded.connectionId,
+    }, actor);
+    expect((await service.googleWorkspaceSettings(resumed.connectionId, company.id)).settings.capabilities.tasks).toBe("read");
     const view = await service.configureGoogleWorkspace(connected.connectionId, company.id, {
       capabilities: { sheets: "edit", drive: "delete_share", gmail: "read" },
       scope: { driveFolderIds: ["folder_1"] },

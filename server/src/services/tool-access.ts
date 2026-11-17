@@ -12408,6 +12408,9 @@ export function toolAccessService(
             mcpPreserveAccess: Boolean(retainedConnection && (retainedConnection.status === "active" || asRecord(retainedConnection.config).mcpPreserveAccess === true)),
           } : {}),
           ...(galleryEntry.slug === "posthog" ? { safeDefault: true } : {}),
+          ...(galleryEntry.slug === "google-workspace"
+            ? { googleWorkspace: normalizeGoogleWorkspaceSettings(input.googleWorkspace ?? asRecord(retainedConnection?.config).googleWorkspace) }
+            : {}),
           ...(galleryEntry.slug === "telem"
             ? {
                 headerPolicy: asRecord(retainedConnection?.config).headerPolicy ?? {

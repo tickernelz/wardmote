@@ -1191,11 +1191,9 @@ function StandardConnectionSetupFlow({
             : reconnectConnectionId ? { reconnectConnectionId } : {}),
           ...(requestedGrantKind !== "organization" ? { grantKind: requestedGrantKind } : {}),
           ...(requestedGrantKind === "agent" ? { subjectAgentId: [...installAgentIds][0] } : {}),
+          ...(connectEntry.slug === "google-workspace" ? { googleWorkspace: googleWorkspaceSettingsInput(googleWorkspaceDraft) } : {}),
         });
         customerClientResumeRef.current = null;
-        if (connectEntry.slug === "google-workspace") {
-          await toolsApi.configureGoogleWorkspace(result.connectionId, googleWorkspaceSettingsInput(googleWorkspaceDraft));
-        }
       } else {
         const genericPayload = genericConnectPayload({
           link: linkUrl,

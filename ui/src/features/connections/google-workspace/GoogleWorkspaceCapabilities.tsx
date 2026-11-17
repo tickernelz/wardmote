@@ -70,7 +70,7 @@ export function GoogleWorkspaceCapabilities({
           const labelId = `gws-tier-${service}`;
           return (
             <li key={service} className="flex flex-col gap-2 p-3 lg:flex-row lg:items-center lg:gap-4">
-              <div className="flex min-w-32 items-center gap-2">
+              <div className="flex items-center gap-2 lg:w-44 lg:shrink-0">
                 <span id={labelId} className="font-medium">{GOOGLE_WORKSPACE_SERVICE_LABELS[service]}</span>
                 <ScopeClass scopes={serviceScopes} />
               </div>
