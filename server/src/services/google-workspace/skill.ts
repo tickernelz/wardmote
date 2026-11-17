@@ -16,7 +16,8 @@ connection's own Google grant; you never see a Google token.
    \`path: "requests[].<kind>"\`; the full body is too large to read.
 3. \`google_call\` with \`dryRun: true\` for anything that is not a read. The
    result shows the URL, classes and whether approval is needed.
-4. \`google_call\` for real. Follow \`nextPageToken\` or pass \`pageAll\`.
+4. \`google_call\` for real. For more than one page pass \`pageAll\` (and
+   \`pageLimit\`); page tokens in results are masked, so you cannot follow them.
 
 ## Helpers
 
@@ -37,15 +38,20 @@ connection's own Google grant; you never see a Google token.
 - Download a file: \`google_call\` with \`download: "attachment"\`.
 - Delete a Drive file: \`drive.files.delete\` moves it to trash (recoverable for
   30 days). Emptying the trash is blocked.
-- Mail: \`google_gmail_send\` always waits for approval; draft first with
-  \`gmail.users.drafts.create\` when unsure.
+- Mail: sending is class \`external\` and waits for approval under the default
+  policy; draft first with \`gmail.users.drafts.create\` when unsure.
 
 ## Rules
 
 - The server decides the class of every call, including each request kind
-  inside a batchUpdate. Writes run; deleting, sharing outside the domain,
-  sending mail and unreviewed methods wait for a person's approval; some calls
-  are blocked. Do not split or rename a call to avoid approval.
+  inside a batchUpdate. Under the default policy writes run; deleting, sharing
+  outside the domain, sending mail and unreviewed methods wait for a person's
+  approval; some calls are blocked. The owner can change this per class, so
+  trust the \`policy\` of a search hit or a dry run. Do not split or rename a
+  call to avoid approval.
+- A call that changes something runs once per run: repeating it with the same
+  arguments returns the first result, or its failure, without calling Google
+  again. Reads always run again.
 - After \`approval_required\`, wait for the approval card; do not retry.
 - Errors are typed: \`validation\` (fix the field at \`pointer\`),
   \`capability_off\`, \`out_of_scope\`, \`scope_missing\` (the owner must change
