@@ -149,6 +149,13 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     expect((await g.access.revokeConnectionGrant(g.connectionId, other.id, actor)).status).toBe("revoked");
   });
 
+  it("revokes the Google token when the whole connection is removed", async () => {
+    const f = await fixture();
+    const result = await f.access.archiveConnection(f.connectionId, f.company.id, actor);
+    expect(f.revoked).toEqual(["token=refresh-fixture"]);
+    expect(result.removal.externalCredentialCleanup).toEqual({ provider: "google", tokensAttempted: 1, tokensRevoked: 1, tokenFailures: 0 });
+  });
+
   it("delivers the Google Workspace connector skill to a run that may use the connection", async () => {
     const f = await fixture();
     expect((await resolveConnectorAssignments(db, f.binding)).map((entry) => entry.key)).toEqual(["google-workspace"]);

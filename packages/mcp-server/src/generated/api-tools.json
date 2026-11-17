@@ -2150,6 +2150,75 @@
           "galleryKey": {
             "type": "string"
           },
+          "googleWorkspace": {
+            "type": "object",
+            "properties": {
+              "capabilities": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "read",
+                    "edit",
+                    "create",
+                    "delete_share"
+                  ]
+                }
+              },
+              "classPolicy": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "require_approval",
+                    "block"
+                  ]
+                }
+              },
+              "domain": {
+                "type": "string"
+              },
+              "methodOverrides": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "require_approval",
+                    "block"
+                  ]
+                }
+              },
+              "scope": {
+                "type": "object",
+                "properties": {
+                  "driveFolderIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "sharedDriveIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "spreadsheetIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "capabilities"
+            ]
+          },
           "grantKind": {
             "type": "string",
             "enum": [

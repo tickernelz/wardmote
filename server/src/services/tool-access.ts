@@ -6377,6 +6377,24 @@ export function toolAccessService(
         ),
       );
     const grantsToRevoke = grantRows.filter((row) => row.status !== "revoked");
+    let googleCleanup: ToolConnectionRemovalSummary["externalCredentialCleanup"] = null;
+    if (isGoogleWorkspaceConnection(connection) && grantsToRevoke.length > 0) {
+      const activeGrants = await db
+        .select()
+        .from(connectionGrants)
+        .where(and(
+          eq(connectionGrants.companyId, connection.companyId),
+          inArray(connectionGrants.id, grantsToRevoke.map((row) => row.id)),
+        ));
+      const outcomes = await Promise.all(activeGrants.map((grant) => revokeGoogleGrantToken(connection, grant, actor)));
+      const attempted = outcomes.filter((outcome) => outcome !== "not_applicable");
+      googleCleanup = {
+        provider: "google",
+        tokensAttempted: attempted.length,
+        tokensRevoked: attempted.filter((outcome) => outcome === "success" || outcome === "already_revoked").length,
+        tokenFailures: attempted.filter((outcome) => outcome === "failed").length,
+      };
+    }
     if (grantsToRevoke.length > 0) {
       await db
         .update(connectionGrants)
@@ -6398,7 +6416,7 @@ export function toolAccessService(
         );
     }
     let externalCredentialCleanup: ToolConnectionRemovalSummary["externalCredentialCleanup"] =
-      null;
+      googleCleanup;
     if (
       connection.credentialSource === "vercel_connect" &&
       connection.externalCredential
