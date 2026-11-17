@@ -5977,14 +5977,6 @@ export function issueRoutes(
       return true;
     }
     if (issue.assigneeAgentId !== actorAgentId) {
-      if (options.additive) {
-        return assertCrossIssueInfluenceWithinRunCap(
-          req,
-          res,
-          issue,
-          "artifact",
-        );
-      }
       if (
         await hasActiveCheckoutManagementOverride(
           actorAgentId,
@@ -5993,6 +5985,14 @@ export function issueRoutes(
         )
       ) {
         return true;
+      }
+      if (options.additive) {
+        return assertCrossIssueInfluenceWithinRunCap(
+          req,
+          res,
+          issue,
+          "artifact",
+        );
       }
       const liveRun = await liveAssigneeCheckoutRun(issue);
       if (liveRun) {

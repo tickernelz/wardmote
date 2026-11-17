@@ -900,15 +900,29 @@ describe("agent issue mutation checkout ownership", () => {
       const res = await sendRequest(await createApp(peerActor()));
 
       expect(res.status, JSON.stringify(res.body)).toBe(expectedStatus);
-      expect(mockAccessService.decide).not.toHaveBeenCalledWith(
-        expect.objectContaining({ action: "tasks:manage_active_checkouts" }),
-      );
       expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
       expect(mockObserveCrossIssueInfluence).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ agentId: peerAgentId, targetIssueId: issueId, kind: "artifact" }),
       );
     });
+  });
+
+  it("does not charge a manage-active-checkouts holder's additive write to the cross-issue cap", async () => {
+    holdCheckoutWithRun("running");
+    const defaultDecide = mockAccessService.decide.getMockImplementation()!;
+    mockAccessService.decide.mockImplementation(async (input: { action: string }) =>
+      input.action === "tasks:manage_active_checkouts"
+        ? { allowed: true, action: input.action, reason: "allow_explicit_grant", explanation: "Allowed by test grant." }
+        : defaultDecide(input),
+    );
+
+    const res = await request(await createApp(peerActor()))
+      .put(`/api/issues/${issueId}/documents/plan`)
+      .send({ format: "markdown", body: "# override" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockObserveCrossIssueInfluence).not.toHaveBeenCalled();
   });
 
   it.each([
