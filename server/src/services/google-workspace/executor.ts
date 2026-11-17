@@ -38,7 +38,7 @@ export interface GoogleCallPlan {
   estimatedRequests: number;
 }
 
-export type GooglePolicyVerdict = { allowed: true; notes?: string[] } | { allowed: false; error: GoogleWorkspaceError };
+export type GooglePolicyVerdict = { allowed: true; notes?: string[]; query?: [string, string][] } | { allowed: false; error: GoogleWorkspaceError };
 
 export interface GoogleStoredAttachment {
   attachmentId: string;
@@ -145,7 +145,7 @@ export function validateGoogleBody(index: GoogleServiceIndex, schema: DiscoveryS
     if (!isRecord(value)) throw invalid(pointer, `Expected an object at ${pointer}`, schemaFragment(resolved));
     for (const [key, child] of Object.entries(value)) {
       const childPointer = `${pointer}/${key.replace(/~/g, "~0").replace(/\//g, "~1")}`;
-      const childSchema = resolved.properties?.[key] ?? resolved.additionalProperties;
+      const childSchema = (resolved.properties && Object.hasOwn(resolved.properties, key) ? resolved.properties[key] : undefined) ?? resolved.additionalProperties;
       if (!childSchema) throw invalid(childPointer, `Unknown field "${key}" at ${pointer}`, schemaFragment(resolved));
       validateGoogleBody(index, childSchema, child, childPointer);
     }
@@ -162,7 +162,12 @@ export function validateGoogleBody(index: GoogleServiceIndex, schema: DiscoveryS
 function expandPath(template: string, values: Map<string, string>): string {
   return template.replace(/\{(\+?)([^}]+)\}/g, (_, reserved: string, name: string) => {
     const value = values.get(name) ?? "";
-    return reserved ? value.split("/").map(encodeURIComponent).join("/") : encodeURIComponent(value);
+    if (!reserved) return encodeURIComponent(value);
+    const segments = value.split("/");
+    if (segments.some((segment) => segment === "." || segment === "..")) {
+      throw invalid(`/params/${name}`, `Parameter "${name}" must not contain "." or ".." path segments`);
+    }
+    return segments.map(encodeURIComponent).join("/");
   });
 }
 
@@ -271,8 +276,45 @@ export function googleErrorFromResponse(status: number, body: GoogleErrorBody, r
   });
 }
 
+function isRateLimited(status: number, reasons: string[]): boolean {
+  return status === 429 || reasons.some((reason) => ["rateLimitExceeded", "userRateLimitExceeded", "RATE_LIMIT_EXCEEDED"].includes(reason));
+}
+
 function isRetryable(status: number, reasons: string[]): boolean {
-  return status === 429 || status >= 500 || reasons.some((reason) => ["rateLimitExceeded", "userRateLimitExceeded", "RATE_LIMIT_EXCEEDED"].includes(reason));
+  return isRateLimited(status, reasons) || status >= 500;
+}
+
+const IDEMPOTENT_HTTP_METHODS = new Set(["GET", "HEAD", "PUT"]);
+const BEFORE_CONNECTION_ERRORS = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]);
+
+function failedBeforeConnection(error: unknown): boolean {
+  const cause = error instanceof Error ? (error.cause as { code?: unknown } | undefined) : undefined;
+  return typeof cause?.code === "string" && BEFORE_CONNECTION_ERRORS.has(cause.code);
+}
+
+async function readBounded(response: Response, limit: number): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  if (response.body) {
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        await reader.cancel();
+        throw new GoogleWorkspaceError("validation", "The file is larger than the download limit", "Export a smaller format or a part of the file.", { byteSize: total, limit });
+      }
+      chunks.push(value);
+    }
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function mergePages(pages: Record<string, unknown>[]): Record<string, unknown> {
@@ -376,7 +418,8 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
   const sleep = context.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const { plan, entry } = await planGoogleCall(context.discovery, input);
   const verdict = await context.policy(plan);
-  const sourceUrl = urlWithQuery(plan.url, plan.query);
+  const query = verdict.allowed && verdict.query ? verdict.query : plan.query;
+  const sourceUrl = urlWithQuery(plan.url, query);
   const base = {
     ok: true as const,
     method: plan.method,
@@ -391,7 +434,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
       plan: {
         httpMethod: plan.httpMethod,
         url: plan.url,
-        query: plan.query,
+        query,
         upload: plan.upload,
         trashInsteadOfDelete: plan.trashInsteadOfDelete,
         classes: plan.classification.classes,
@@ -419,6 +462,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
   }
 
   async function send(url: string, init: { method: string; headers?: Record<string, string>; body?: BodyInit }): Promise<Response> {
+    const idempotent = IDEMPOTENT_HTTP_METHODS.has(init.method.toUpperCase());
     let refreshed = false;
     for (let attempt = 0; ; attempt += 1) {
       const headers = { ...(await authHeaders()), ...init.headers };
@@ -427,11 +471,20 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
       try {
         response = await fetchImpl(url, { method: init.method, headers, body: init.body, signal: AbortSignal.timeout(limits.requestTimeoutMs) });
       } catch (error) {
-        if (attempt === 0) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (attempt === 0 && (idempotent || failedBeforeConnection(error))) {
           await sleep(1000);
           continue;
         }
-        throw new GoogleWorkspaceError("google_error", "Google did not answer", "Retry later.", { reason: error instanceof Error ? error.message : String(error) });
+        if (!idempotent && !failedBeforeConnection(error)) {
+          throw new GoogleWorkspaceError(
+            "google_error",
+            "Google did not answer, and it may already have applied the change",
+            "Check whether the change already happened (read the item back) before calling again.",
+            { reason, outcomeUnknown: true },
+          );
+        }
+        throw new GoogleWorkspaceError("google_error", "Google did not answer", "Retry later.", { reason });
       }
       if (response.ok) return response;
       if (response.status === 401 && !refreshed) {
@@ -441,11 +494,19 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
       }
       const body = await readErrorBody(response);
       const wait = retryAfterMs(response, attempt);
-      if (attempt === 0 && isRetryable(response.status, googleReasons(body))) {
+      const reasons = googleReasons(body);
+      if (attempt === 0 && (isRateLimited(response.status, reasons) || (idempotent && isRetryable(response.status, reasons)))) {
         await sleep(wait);
         continue;
       }
-      throw googleErrorFromResponse(response.status, body, response.status === 429 || isRetryable(response.status, googleReasons(body)) ? wait : null);
+      const error = googleErrorFromResponse(response.status, body, isRetryable(response.status, reasons) ? wait : null);
+      if (!idempotent && response.status >= 500 && error.code === "google_error") {
+        throw new GoogleWorkspaceError("google_error", error.message, "Google may already have applied the change; read the item back before calling again.", {
+          ...error.details,
+          outcomeUnknown: true,
+        });
+      }
+      throw error;
     }
   }
 
@@ -461,7 +522,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
       const boundary = `wardmote_${crypto.randomUUID()}`;
       const head = Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\ncontent-type: ${contentType}\r\n\r\n`);
       const tail = Buffer.from(`\r\n--${boundary}--`);
-      response = await send(urlWithQuery(plan.url, [...plan.query, ["uploadType", "multipart"]]), {
+      response = await send(urlWithQuery(plan.url, [...query, ["uploadType", "multipart"]]), {
         method: plan.httpMethod,
         headers: { accept: "application/json", "content-type": `multipart/related; boundary=${boundary}` },
         body: Buffer.concat([head, Buffer.from(file.bytes), tail]),
@@ -471,7 +532,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
       if (!resumablePath) throw invalid("/upload", `${entry.id} cannot upload files larger than ${MULTIPART_MAX_BYTES} bytes`);
       const index = await context.discovery.service(googleMethodService(plan.method));
       const sessionUrl = joinRoot(index.rootUrl, expandPath(resumablePath, parameterValues(entry, plan.params).pathValues));
-      const start = await send(urlWithQuery(sessionUrl, [...plan.query, ["uploadType", "resumable"]]), {
+      const start = await send(urlWithQuery(sessionUrl, [...query, ["uploadType", "resumable"]]), {
         method: plan.httpMethod,
         headers: { ...jsonHeaders, "x-upload-content-type": contentType, "x-upload-content-length": String(file.bytes.byteLength) },
         body: metadata,
@@ -484,7 +545,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
     }
   } else {
     const hasBody = plan.body !== undefined && plan.body !== null;
-    response = await send(urlWithQuery(plan.url, plan.query), {
+    response = await send(urlWithQuery(plan.url, query), {
       method: plan.httpMethod,
       headers: hasBody ? jsonHeaders : { accept: plan.download ? "*/*" : "application/json" },
       body: hasBody ? JSON.stringify(plan.body) : undefined,
@@ -497,10 +558,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
     if (Number.isFinite(declared) && declared > limits.downloadMaxBytes) {
       throw new GoogleWorkspaceError("validation", "The file is larger than the download limit", "Export a smaller format or a part of the file.", { byteSize: declared, limit: limits.downloadMaxBytes });
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > limits.downloadMaxBytes) {
-      throw new GoogleWorkspaceError("validation", "The file is larger than the download limit", "Export a smaller format or a part of the file.", { byteSize: bytes.byteLength, limit: limits.downloadMaxBytes });
-    }
+    const bytes = await readBounded(response, limits.downloadMaxBytes);
     if (input.download !== "attachment" && INLINE_EXPORT_TYPES.test(contentType) && bytes.byteLength <= limits.inlineTextMaxChars) {
       return { ...base, dryRun: false, status: response.status, data: { contentType, text: new TextDecoder().decode(bytes) }, quota: { requests } };
     }
@@ -521,9 +579,9 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
     const pages: Record<string, unknown>[] = [data];
     let token: string | undefined = data.nextPageToken;
     while (token && pages.length < plan.estimatedRequests) {
-      const query = plan.query.filter(([name]) => name !== "pageToken");
-      query.push(["pageToken", token]);
-      const next = await send(urlWithQuery(plan.url, query), { method: plan.httpMethod, headers: { accept: "application/json" } });
+      const pageQuery = query.filter(([name]) => name !== "pageToken");
+      pageQuery.push(["pageToken", token]);
+      const next = await send(urlWithQuery(plan.url, pageQuery), { method: plan.httpMethod, headers: { accept: "application/json" } });
       const page = (await next.json()) as Record<string, unknown>;
       pages.push(page);
       token = typeof page.nextPageToken === "string" ? page.nextPageToken : undefined;

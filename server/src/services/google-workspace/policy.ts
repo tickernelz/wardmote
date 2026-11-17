@@ -14,9 +14,12 @@ export interface GoogleFileLocation {
   driveId: string | null;
 }
 
+export type GoogleMailSource = { draftId: string } | { attachmentId: string };
+
 export interface GooglePolicyDependencies {
   grantedScopes: readonly string[];
   locate(fileId: string): Promise<GoogleFileLocation | null>;
+  mailHeaders(source: GoogleMailSource): Promise<string | null>;
 }
 
 export interface GooglePolicyDecision {
@@ -24,6 +27,8 @@ export interface GooglePolicyDecision {
   classes: GoogleMethodClassification[];
   reasons: string[];
   externalRecipients: string[];
+  recipientsUnknown: boolean;
+  query: [string, string][] | null;
   error: GoogleWorkspaceError | null;
 }
 
@@ -35,6 +40,10 @@ const DRIVE_BACKED = new Set<GoogleWorkspaceService>(["drive", "sheets", "docs",
 const TARGET_PARAMS = ["fileId", "spreadsheetId", "documentId", "presentationId", "formId"] as const;
 const ROOT_CREATORS = new Set(["sheets.spreadsheets.create", "docs.documents.create", "slides.presentations.create", "forms.forms.create"]);
 const MAX_ANCESTRY = 20;
+const TARGETLESS_IN_SCOPE = new Set(["drive.about.get", "drive.apps.get", "drive.apps.list", "drive.files.generateIds"]);
+const SHARED_DRIVE_SCOPED = new Set(["drive.drives.get", "drive.changes.list", "drive.changes.getStartPageToken"]);
+const LOCATION_TTL_MS = 60_000;
+const LOCATION_CACHE_MAX = 5_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -55,13 +64,11 @@ function emailDomain(email: string): string | null {
   return match ? match[1].toLowerCase() : null;
 }
 
-function headerRecipients(raw: string): string[] {
-  let text: string;
-  try {
-    text = Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-  } catch {
-    return [];
-  }
+function decodeRaw(raw: string): string {
+  return Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+}
+
+function headerRecipients(text: string): string[] {
   const head = text.split(/\r?\n\r?\n/, 1)[0].replace(/\r?\n[ \t]+/g, " ");
   const recipients: string[] = [];
   for (const line of head.split(/\r?\n/)) {
@@ -85,15 +92,57 @@ function sharingTargets(plan: GoogleCallPlan): { recipients: string[]; public: b
     if (scope.type === "domain") return { recipients: [`*@${String(scope.value ?? "").toLowerCase()}`], public: false };
     return { recipients: [], public: true };
   }
-  if (plan.method === "gmail.users.messages.send" && typeof body.raw === "string") return { recipients: headerRecipients(body.raw), public: false };
   return null;
 }
 
-function effectiveClasses(plan: GoogleCallPlan, settings: GoogleWorkspaceSettings, reasons: string[], externalRecipients: string[]) {
+function mailSource(plan: GoogleCallPlan): GoogleMailSource | "raw" | null {
+  const body = isRecord(plan.body) ? plan.body : {};
+  if (plan.method === "gmail.users.drafts.send") {
+    if (plan.upload) return { attachmentId: plan.upload.attachmentId };
+    const message = isRecord(body.message) ? body.message : {};
+    if (typeof message.raw === "string") return "raw";
+    return typeof body.id === "string" ? { draftId: body.id } : null;
+  }
+  if (plan.method !== "gmail.users.messages.send") return null;
+  if (plan.upload) return { attachmentId: plan.upload.attachmentId };
+  return typeof body.raw === "string" ? "raw" : null;
+}
+
+async function mailRecipients(plan: GoogleCallPlan, deps: GooglePolicyDependencies): Promise<string[] | null | undefined> {
+  const source = mailSource(plan);
+  if (source === null) return plan.method === "gmail.users.messages.send" || plan.method === "gmail.users.drafts.send" ? null : undefined;
+  const body = isRecord(plan.body) ? plan.body : {};
+  try {
+    if (source === "raw") {
+      const raw = plan.method === "gmail.users.drafts.send" ? (body.message as { raw: string }).raw : (body.raw as string);
+      return headerRecipients(decodeRaw(raw));
+    }
+    const headers = await deps.mailHeaders(source);
+    return headers === null ? null : headerRecipients(headers);
+  } catch {
+    return null;
+  }
+}
+
+async function effectiveClasses(
+  plan: GoogleCallPlan,
+  settings: GoogleWorkspaceSettings,
+  deps: GooglePolicyDependencies,
+  reasons: string[],
+  externalRecipients: string[],
+): Promise<{ entries: { key: string; value: GoogleMethodClassification; isKind: boolean }[]; recipientsUnknown: boolean }> {
   const kinds = plan.classification.batchRequestKinds;
   const entries = kinds.map((item) => ({ key: `${plan.method}#${item.kind}`, value: item.class, isKind: true }));
   let methodValue = kinds.length > 0 ? plan.classification.baseClass : plan.classification.methodClass;
-  const sharing = sharingTargets(plan);
+  let recipientsUnknown = false;
+  const mail = await mailRecipients(plan, deps);
+  let sharing = sharingTargets(plan);
+  if (mail === null) {
+    recipientsUnknown = true;
+    reasons.push("the recipients could not be read");
+  } else if (mail !== undefined) {
+    sharing = { recipients: mail, public: false };
+  }
   if (sharing && methodValue === "external") {
     const outside = sharing.recipients.filter((recipient) => emailDomain(recipient) !== settings.domain);
     externalRecipients.push(...outside);
@@ -105,7 +154,7 @@ function effectiveClasses(plan: GoogleCallPlan, settings: GoogleWorkspaceSetting
     }
   }
   entries.unshift({ key: plan.method, value: methodValue, isKind: false });
-  return entries;
+  return { entries, recipientsUnknown };
 }
 
 function actionFor(settings: GoogleWorkspaceSettings, key: string, value: GoogleMethodClassification): GoogleWorkspacePolicyAction {
@@ -118,31 +167,117 @@ function scopeLimited(settings: GoogleWorkspaceSettings): boolean {
   return driveFolderIds.length + sharedDriveIds.length + spreadsheetIds.length > 0;
 }
 
-async function withinScope(fileId: string, settings: GoogleWorkspaceSettings, deps: GooglePolicyDependencies, memo: Map<string, Promise<boolean>>, depth = 0): Promise<boolean> {
+async function withinScope(
+  fileId: string,
+  settings: GoogleWorkspaceSettings,
+  deps: GooglePolicyDependencies,
+  memo: Map<string, Promise<boolean>>,
+  chain: ReadonlySet<string> = new Set(),
+): Promise<boolean> {
   const { driveFolderIds, sharedDriveIds, spreadsheetIds } = settings.scope;
   if (driveFolderIds.includes(fileId) || spreadsheetIds.includes(fileId) || sharedDriveIds.includes(fileId)) return true;
-  if (depth >= MAX_ANCESTRY) return false;
+  if (chain.has(fileId) || chain.size >= MAX_ANCESTRY) return false;
   const known = memo.get(fileId);
   if (known) return known;
+  const next = new Set(chain).add(fileId);
   const pending = (async () => {
     const location = await deps.locate(fileId);
     if (!location) return false;
     if (location.driveId && sharedDriveIds.includes(location.driveId)) return true;
-    for (const parent of location.parents) if (await withinScope(parent, settings, deps, memo, depth + 1)) return true;
+    for (const parent of location.parents) if (await withinScope(parent, settings, deps, memo, next)) return true;
     return false;
   })();
   memo.set(fileId, pending);
   return pending;
 }
 
+export function createGoogleLocationCache(
+  locate: (fileId: string) => Promise<GoogleFileLocation | null>,
+  options: { ttlMs?: number; now?: () => number; maxEntries?: number } = {},
+) {
+  const ttlMs = options.ttlMs ?? LOCATION_TTL_MS;
+  const now = options.now ?? Date.now;
+  const maxEntries = options.maxEntries ?? LOCATION_CACHE_MAX;
+  const entries = new Map<string, { value: Promise<GoogleFileLocation | null>; expiresAt: number }>();
+  return {
+    locate(fileId: string): Promise<GoogleFileLocation | null> {
+      const cached = entries.get(fileId);
+      if (cached && cached.expiresAt > now()) return cached.value;
+      const value = locate(fileId);
+      entries.delete(fileId);
+      if (entries.size >= maxEntries) entries.delete(entries.keys().next().value as string);
+      entries.set(fileId, { value, expiresAt: now() + ttlMs });
+      value.catch(() => entries.delete(fileId));
+      return value;
+    },
+    forget(plan: GoogleCallPlan): void {
+      const fileId = plan.params.fileId;
+      if (typeof fileId !== "string") return;
+      if (plan.method === "drive.files.update" && (plan.params.addParents !== undefined || plan.params.removeParents !== undefined)) entries.delete(fileId);
+      if (plan.method === "drive.files.delete") entries.delete(fileId);
+    },
+  };
+}
+
+function balancedDriveQuery(query: string): boolean {
+  let depth = 0;
+  let quoted = false;
+  for (let position = 0; position < query.length; position += 1) {
+    const char = query[position];
+    if (quoted) {
+      if (char === "\\") position += 1;
+      else if (char === "'") quoted = false;
+      continue;
+    }
+    if (char === '"') return false;
+    if (char === "'") quoted = true;
+    else if (char === "(") depth += 1;
+    else if (char === ")" && (depth -= 1) < 0) return false;
+  }
+  return depth === 0 && !quoted;
+}
+
+function driveQueryLiteral(id: string): string {
+  return `'${id.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+}
+
+async function scopedFilesListQuery(
+  plan: GoogleCallPlan,
+  settings: GoogleWorkspaceSettings,
+  inScope: (id: string) => Promise<boolean>,
+): Promise<{ violation: string } | { query: [string, string][] | null }> {
+  const driveId = plan.params.driveId;
+  if (typeof driveId === "string" && settings.scope.sharedDriveIds.includes(driveId) && plan.params.corpora === "drive") return { query: null };
+  const agentQuery = typeof plan.params.q === "string" ? plan.params.q.trim() : "";
+  if (!balancedDriveQuery(agentQuery)) return { violation: "q must have balanced parentheses and single-quoted strings" };
+  const named = [...agentQuery.matchAll(/'((?:[^'\\]|\\.)*)'\s+in\s+parents/g)].map((match) => match[1].replace(/\\(.)/g, "$1"));
+  const folders = named.length > 0 ? [...new Set(named)] : settings.scope.driveFolderIds;
+  if (folders.length === 0) return { violation: "add \"'<allowed folder id>' in parents\" to q, or list an allowed shared drive with corpora=drive" };
+  for (const folder of folders) if (!(await inScope(folder))) return { violation: `folder ${folder} is outside the allowed folders` };
+  const clause = folders.map((folder) => `${driveQueryLiteral(folder)} in parents`).join(" or ");
+  const q = agentQuery ? `(${clause}) and (${agentQuery})` : `(${clause})`;
+  const rest = plan.query.filter(([name]) => name !== "q");
+  return { query: [...rest, ["q", q]] };
+}
+
 function splitIds(value: unknown): string[] {
   return typeof value === "string" ? value.split(",").map((item) => item.trim()).filter(Boolean) : [];
 }
 
-async function scopeViolation(plan: GoogleCallPlan, settings: GoogleWorkspaceSettings, deps: GooglePolicyDependencies, readOnly: boolean): Promise<string | null> {
-  if (!scopeLimited(settings) || !DRIVE_BACKED.has(plan.service as GoogleWorkspaceService)) return null;
+async function scopeCheck(
+  plan: GoogleCallPlan,
+  settings: GoogleWorkspaceSettings,
+  deps: GooglePolicyDependencies,
+): Promise<{ violation: string } | { query: [string, string][] | null }> {
+  if (!scopeLimited(settings) || !DRIVE_BACKED.has(plan.service as GoogleWorkspaceService)) return { query: null };
   const memo = new Map<string, Promise<boolean>>();
   const inScope = (id: string) => withinScope(id, settings, deps, memo);
+  if (plan.method === "drive.files.list") return scopedFilesListQuery(plan, settings, inScope);
+  const violation = await scopeViolation(plan, settings, inScope);
+  return violation ? { violation } : { query: null };
+}
+
+async function scopeViolation(plan: GoogleCallPlan, settings: GoogleWorkspaceSettings, inScope: (id: string) => Promise<boolean>): Promise<string | null> {
   const body = isRecord(plan.body) ? plan.body : {};
   const targets = TARGET_PARAMS.flatMap((name) => (typeof plan.params[name] === "string" ? [plan.params[name] as string] : []));
   for (const target of targets) if (!(await inScope(target))) return `${target} is outside the allowed folders or files`;
@@ -154,22 +289,26 @@ async function scopeViolation(plan: GoogleCallPlan, settings: GoogleWorkspaceSet
     for (const parent of parents) if (!(await inScope(parent))) return `folder ${parent} is outside the allowed folders`;
     return null;
   }
-  if (targets.length > 0) return null;
-  if (plan.method === "drive.files.list") {
-    const query = typeof plan.params.q === "string" ? plan.params.q : "";
-    const allowed = [...settings.scope.driveFolderIds, ...settings.scope.sharedDriveIds].some((id) => query.includes(`'${id}' in parents`));
-    const sharedDrive = typeof plan.params.driveId === "string" && settings.scope.sharedDriveIds.includes(plan.params.driveId);
-    return allowed || sharedDrive ? null : "add \"'<allowed folder id>' in parents\" to q, or list an allowed shared drive";
-  }
-  return readOnly ? null : "this call has no file inside the allowed folders";
+  if (targets.length > 0 || TARGETLESS_IN_SCOPE.has(plan.method)) return null;
+  const driveId = plan.params.driveId;
+  if (SHARED_DRIVE_SCOPED.has(plan.method) && typeof driveId === "string" && settings.scope.sharedDriveIds.includes(driveId)) return null;
+  return "this call is not limited to a file, folder or shared drive this connection allows";
 }
 
 export async function decideGoogleCall(plan: GoogleCallPlan, settings: GoogleWorkspaceSettings, deps: GooglePolicyDependencies): Promise<GooglePolicyDecision> {
   const reasons: string[] = [];
   const externalRecipients: string[] = [];
-  const entries = effectiveClasses(plan, settings, reasons, externalRecipients);
+  const { entries, recipientsUnknown } = await effectiveClasses(plan, settings, deps, reasons, externalRecipients);
   const classes = [...new Set(entries.map((entry) => entry.value))];
-  const block = (error: GoogleWorkspaceError): GooglePolicyDecision => ({ action: "block", classes, reasons: [...reasons, error.message], externalRecipients, error });
+  const block = (error: GoogleWorkspaceError): GooglePolicyDecision => ({
+    action: "block",
+    classes,
+    reasons: [...reasons, error.message],
+    externalRecipients,
+    recipientsUnknown,
+    query: null,
+    error,
+  });
   const service = plan.service as GoogleWorkspaceService;
 
   if (HARD_BLOCKED.has(plan.method)) {
@@ -195,10 +334,11 @@ export async function decideGoogleCall(plan: GoogleCallPlan, settings: GoogleWor
   if (action === "block") {
     return block(new GoogleWorkspaceError("capability_off", `${plan.method} is blocked by this connection's policy`, "Ask the connection owner to change the policy for this class or method.", { method: plan.method, classes }));
   }
-  const outside = await scopeViolation(plan, settings, deps, classes.every((value) => value === "read"));
-  if (outside) {
-    return block(new GoogleWorkspaceError("out_of_scope", outside, "Work inside the folders, shared drives or spreadsheets this connection allows.", { scope: settings.scope }));
+  const scope = await scopeCheck(plan, settings, deps);
+  if ("violation" in scope) {
+    return block(new GoogleWorkspaceError("out_of_scope", scope.violation, "Work inside the folders, shared drives or spreadsheets this connection allows.", { scope: settings.scope }));
   }
+  const query = scope.query;
   if (externalRecipients.length > 0) reasons.push(`recipients outside the domain: ${externalRecipients.join(", ")}`);
   if (action === "require_approval") {
     return {
@@ -206,18 +346,21 @@ export async function decideGoogleCall(plan: GoogleCallPlan, settings: GoogleWor
       classes,
       reasons,
       externalRecipients,
+      recipientsUnknown,
+      query,
       error: new GoogleWorkspaceError("approval_required", `${plan.method} needs approval (${classes.filter((value) => value !== "read" && value !== "write").join(", ")})`, "An approval card was created; the call runs after a person approves it.", {
         classes,
         externalRecipients,
+        recipientsUnknown,
       }),
     };
   }
-  return { action, classes, reasons, externalRecipients, error: null };
+  return { action, classes, reasons, externalRecipients, recipientsUnknown, query, error: null };
 }
 
 export function googlePolicyVerdict(decision: GooglePolicyDecision, options: { approved: boolean }): GooglePolicyVerdict {
   if (decision.action === "allow" || (decision.action === "require_approval" && options.approved)) {
-    return { allowed: true, notes: decision.reasons };
+    return { allowed: true, notes: decision.reasons, ...(decision.query ? { query: decision.query } : {}) };
   }
   return { allowed: false, error: decision.error as GoogleWorkspaceError };
 }

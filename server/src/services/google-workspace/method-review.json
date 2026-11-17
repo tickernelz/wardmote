@@ -21,7 +21,7 @@
         "drive.apps.list": "read",
         "drive.changes.getStartPageToken": "read",
         "drive.changes.list": "read",
-        "drive.changes.watch": "write",
+        "drive.changes.watch": "external",
         "drive.channels.stop": "write",
         "drive.comments.create": "write",
         "drive.comments.delete": "destructive",
@@ -48,7 +48,7 @@
         "drive.files.listLabels": "read",
         "drive.files.modifyLabels": "write",
         "drive.files.update": "write",
-        "drive.files.watch": "write",
+        "drive.files.watch": "external",
         "drive.operations.get": "read",
         "drive.permissions.create": "external",
         "drive.permissions.delete": "destructive",
@@ -312,14 +312,14 @@
         "calendar.acl.list": "read",
         "calendar.acl.patch": "external",
         "calendar.acl.update": "external",
-        "calendar.acl.watch": "write",
+        "calendar.acl.watch": "external",
         "calendar.calendarList.delete": "destructive",
         "calendar.calendarList.get": "read",
         "calendar.calendarList.insert": "write",
         "calendar.calendarList.list": "read",
         "calendar.calendarList.patch": "write",
         "calendar.calendarList.update": "write",
-        "calendar.calendarList.watch": "write",
+        "calendar.calendarList.watch": "external",
         "calendar.calendars.clear": "destructive",
         "calendar.calendars.delete": "destructive",
         "calendar.calendars.get": "read",
@@ -339,11 +339,11 @@
         "calendar.events.patch": "write",
         "calendar.events.quickAdd": "write",
         "calendar.events.update": "write",
-        "calendar.events.watch": "write",
+        "calendar.events.watch": "external",
         "calendar.freebusy.query": "read",
         "calendar.settings.get": "read",
         "calendar.settings.list": "read",
-        "calendar.settings.watch": "write"
+        "calendar.settings.watch": "external"
       }
     },
     "gmail": {
@@ -428,7 +428,7 @@
         "gmail.users.threads.modify": "write",
         "gmail.users.threads.trash": "destructive",
         "gmail.users.threads.untrash": "write",
-        "gmail.users.watch": "write"
+        "gmail.users.watch": "external"
       }
     },
     "forms": {
@@ -441,10 +441,10 @@
         "forms.forms.responses.get": "read",
         "forms.forms.responses.list": "read",
         "forms.forms.setPublishSettings": "external",
-        "forms.forms.watches.create": "write",
+        "forms.forms.watches.create": "external",
         "forms.forms.watches.delete": "destructive",
         "forms.forms.watches.list": "read",
-        "forms.forms.watches.renew": "write"
+        "forms.forms.watches.renew": "external"
       },
       "batchRequests": {
         "forms.forms.batchUpdate": {
