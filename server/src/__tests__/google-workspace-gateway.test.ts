@@ -192,7 +192,7 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     });
     const run = () => f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters: { method: "gmail.users.labels.create", params: { userId: "me" }, body: { name: "bad" } } });
 
-    await expect(run()).rejects.toMatchObject({ status: 424, reasonCode: "google_google_error", details: { code: "google_error", status: 400 } });
+    await expect(run()).rejects.toMatchObject({ status: 424, reasonCode: "google_error", details: { code: "google_error", status: 400 } });
     await expect(run()).rejects.toMatchObject({ status: 409, reasonCode: "replayed_failure", details: { status: "failed" } });
     expect(creates).toBe(1);
   });
