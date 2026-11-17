@@ -11,12 +11,15 @@ import {
   issues,
   toolActionRequests,
   toolInvocations,
+  toolPolicies,
   toolProfileBindings,
   toolProfiles,
 } from "@tickernelz/wardmote-db";
 import { googleWorkspaceScopesFor } from "@tickernelz/wardmote-shared";
 import { toolAccessService } from "../services/tool-access.js";
 import { createToolGatewayService } from "../services/tool-gateway.js";
+import { registerAssignedMcpGateway } from "../services/native-runtime/assigned-mcp-tools.js";
+import { resolveConnectorAssignments } from "../services/connector-runtime.js";
 import { createFakeGoogle } from "./helpers/fake-google.js";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 
@@ -85,10 +88,11 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     const [profile] = await db.insert(toolProfiles).values({ companyId: company.id, name: "Google tools", profileKey: randomUUID(), defaultAction: "allow" }).returning();
     await db.insert(toolProfileBindings).values({ companyId: company.id, profileId: profile.id, targetType: "agent", targetId: agent.id });
     const gateway = createToolGatewayService(db, { remoteHttpRequest: request, toolActionSigningSecret: "google-fixture-signing-secret" });
+    registerAssignedMcpGateway(db, gateway);
     const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
     const tools = await gateway.listToolsForSession(session.token);
     const call = tools.find((tool) => tool.upstreamToolName === "google_call");
-    return { company, google, gateway, session, call, tools };
+    return { company, google, gateway, session, call, tools, binding: { companyId: company.id, agentId: agent.id, runId: run.id, issueId: issue.id } };
   }
 
   async function approvePending(f: Awaited<ReturnType<typeof fixture>>) {
@@ -99,6 +103,29 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     }
     return f.gateway.approveActionRequest({ companyId: f.company.id, actionRequestId: pending!.id, actor: { userId: actor.actorId } });
   }
+
+  it("shows Google's outside recipients on a card a tool policy asked for, and runs it once approved", async () => {
+    const f = await fixture();
+    await db.insert(toolPolicies).values({ companyId: f.company.id, name: "Review Google calls", policyType: "require_approval", selectors: {}, priority: 10 });
+    let sent = 0;
+    f.google.override(/\/gmail\/v1\/users\/me\/drafts\/d2\?/, () => Response.json({ id: "d2", message: { payload: { headers: [{ name: "To", value: "g@other.org" }] } } }));
+    f.google.override(/\/gmail\/v1\/users\/me\/drafts\/send/, () => {
+      sent += 1;
+      return Response.json({ id: "m2" });
+    });
+    const parameters = { method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "d2" } };
+    await expect(f.gateway.executeTool({ sessionToken: f.session.token, tool: f.call!.name, parameters, idempotencyKey: randomUUID() }))
+      .rejects.toMatchObject({ reasonCode: "approval_required" });
+    const [card] = await db.select().from(toolInvocations).where(eq(toolInvocations.companyId, f.company.id));
+    expect(card.policyExplanation).toMatchObject({ google: { externalRecipients: ["g@other.org"], recipientsUnknown: false } });
+    await approvePending(f);
+    expect(sent).toBe(1);
+  });
+
+  it("delivers the Google Workspace connector skill to a run that may use the connection", async () => {
+    const f = await fixture();
+    expect((await resolveConnectorAssignments(db, f.binding)).map((entry) => entry.key)).toEqual(["google-workspace"]);
+  });
 
   it("refuses an approved draft send whose recipients changed after the card was created", async () => {
     const f = await fixture();
