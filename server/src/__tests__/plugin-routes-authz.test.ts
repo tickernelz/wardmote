@@ -49,8 +49,10 @@ async function createApp(
   routeOverrides: {
     db?: unknown;
     jobDeps?: unknown;
+    webhookDeps?: unknown;
     toolDeps?: unknown;
     bridgeDeps?: unknown;
+    toolGatewayDeps?: unknown;
     captureJsonContext?: (context: unknown, body: unknown) => void;
   } = {},
 ) {
@@ -84,9 +86,10 @@ async function createApp(
     (routeOverrides.db ?? {}) as never,
     loader as never,
     routeOverrides.jobDeps as never,
-    undefined,
+    routeOverrides.webhookDeps as never,
     routeOverrides.toolDeps as never,
     routeOverrides.bridgeDeps as never,
+    routeOverrides.toolGatewayDeps as never,
   ));
   app.use(errorHandler);
 
@@ -491,6 +494,181 @@ describe("scoped plugin API routes", () => {
       }),
     );
   }, 20_000);
+});
+
+describe("plugin routes hide unexpected error text", () => {
+  const sqlError = () => new Error('Failed query: insert into "plugin_job_runs" ("output") values ($1) params: secret-token-123');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function expectNoSqlText(res: request.Response) {
+    expect(res.text).not.toContain("insert into");
+    expect(res.text).not.toContain("secret-token-123");
+  }
+
+  function scopedRunContextDb() {
+    return createSelectQueueDb([
+      [{ companyId: companyA }],
+      [{ companyId: companyA, agentId: agentA }],
+      [{ companyId: companyA }],
+    ]);
+  }
+
+  const runContext = { agentId: agentA, runId: runA, companyId: companyA, projectId: projectA };
+
+  it("answers 500 with a generic message when a dispatched plugin tool throws", async () => {
+    const { app } = await createApp(boardActor(), {}, {
+      db: scopedRunContextDb(),
+      toolDeps: {
+        toolDispatcher: {
+          listToolsForAgent: vi.fn(),
+          getTool: vi.fn(() => ({ name: "wardmote.example:search" })),
+          executeTool: vi.fn().mockRejectedValue(sqlError()),
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/plugins/tools/execute")
+      .send({ tool: "wardmote.example:search", parameters: {}, runContext });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Internal server error" });
+    expectNoSqlText(res);
+  });
+
+  it("answers 500 with a generic message when the agent tool gateway throws", async () => {
+    const executePluginTool = vi.fn().mockRejectedValue(sqlError());
+    const { app } = await createApp(agentActor(), {}, {
+      db: scopedRunContextDb(),
+      toolDeps: {
+        toolDispatcher: { listToolsForAgent: vi.fn(), getTool: vi.fn(), executeTool: vi.fn() },
+      },
+      toolGatewayDeps: { toolGateway: { executePluginTool } },
+    });
+
+    const res = await request(app)
+      .post("/api/plugins/tools/execute")
+      .send({ tool: "wardmote.example:search", parameters: {}, runContext });
+
+    expect(executePluginTool).toHaveBeenCalled();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Internal server error" });
+    expectNoSqlText(res);
+  });
+
+  it("answers 502 with a fixed message when the plugin worker is not running", async () => {
+    const { app } = await createApp(boardActor(), {}, {
+      db: scopedRunContextDb(),
+      toolDeps: {
+        toolDispatcher: {
+          listToolsForAgent: vi.fn(),
+          getTool: vi.fn(() => ({ name: "wardmote.example:search" })),
+          executeTool: vi.fn().mockRejectedValue(
+            new Error('Cannot call "executeTool" — worker for "plugin_job_runs secret-token-123" is not running'),
+          ),
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/plugins/tools/execute")
+      .send({ tool: "wardmote.example:search", parameters: {}, runContext });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Plugin worker is not available" });
+    expectNoSqlText(res);
+  });
+
+  it("answers 500 with a generic message when listing plugin jobs or job runs fails", async () => {
+    readyPlugin();
+    const jobStore = {
+      listJobs: vi.fn().mockRejectedValue(sqlError()),
+      getJobByIdForPlugin: vi.fn().mockResolvedValue({ id: "job-1" }),
+      listRunsByJob: vi.fn().mockRejectedValue(sqlError()),
+    };
+    const { app } = await createApp(boardActor(), {}, {
+      jobDeps: { scheduler: { triggerJob: vi.fn() }, jobStore },
+    });
+
+    for (const path of [`/api/plugins/${pluginId}/jobs`, `/api/plugins/${pluginId}/jobs/job-1/runs`]) {
+      const res = await request(app).get(path);
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: "Internal server error" });
+      expectNoSqlText(res);
+    }
+    expect(jobStore.listJobs).toHaveBeenCalled();
+    expect(jobStore.listRunsByJob).toHaveBeenCalled();
+  });
+
+  it("answers 500 with a generic message when a scoped plugin API call throws a host error", async () => {
+    mockRegistry.getById.mockResolvedValue(null);
+    mockRegistry.getByKey.mockResolvedValue({
+      id: pluginId,
+      pluginKey: "wardmote.example",
+      version: "1.0.0",
+      status: "ready",
+      manifestJson: {
+        id: "wardmote.example",
+        capabilities: ["api.routes.register"],
+        apiRoutes: [{
+          routeKey: "smoke",
+          method: "GET",
+          path: "/smoke",
+          auth: "board-or-agent",
+          capability: "api.routes.register",
+          companyResolution: { from: "query", key: "companyId" },
+        }],
+      },
+    });
+    const call = vi.fn().mockRejectedValue(sqlError());
+    const { app } = await createApp(boardActor(), {}, { bridgeDeps: { workerManager: { call } } });
+
+    const res = await request(app)
+      .get("/api/plugins/wardmote.example/api/smoke")
+      .query({ companyId: companyA });
+
+    expect(call).toHaveBeenCalled();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Internal server error" });
+    expectNoSqlText(res);
+  }, 20_000);
+
+  it("keeps the failure on the webhook delivery row but answers the caller with a generic message", async () => {
+    mockRegistry.getById.mockResolvedValue({
+      id: pluginId,
+      pluginKey: "wardmote.example",
+      version: "1.0.0",
+      status: "ready",
+      manifestJson: {
+        id: "wardmote.example",
+        capabilities: ["webhooks.receive"],
+        webhooks: [{ endpointKey: "inbound", displayName: "Inbound" }],
+      },
+    });
+    const set = vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) }));
+    const db = {
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: "delivery-1" }]) })),
+      })),
+      update: vi.fn(() => ({ set })),
+    };
+    const { app } = await createApp(boardActor(), {}, {
+      db,
+      webhookDeps: { workerManager: { call: vi.fn().mockRejectedValue(sqlError()) } },
+    });
+
+    const res = await request(app)
+      .post(`/api/plugins/${pluginId}/webhooks/inbound`)
+      .send({ hello: "world" });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ deliveryId: "delivery-1", status: "failed", error: "Plugin webhook delivery failed" });
+    expectNoSqlText(res);
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", error: sqlError().message }));
+  });
 });
 
 describe("plugin local folder routes", () => {
@@ -927,9 +1105,9 @@ describe("plugin tool and bridge authz", () => {
       .send({ companyId: companyA });
 
     expect(res.status).toBe(502);
-    expect(res.body).toMatchObject({
+    expect(res.body).toEqual({
       code: "UNKNOWN",
-      message: "missing source_objects column",
+      message: "Plugin bridge request failed",
     });
     expect(captured.at(-1)?.context?.error).toMatchObject({
       message: "missing source_objects column",

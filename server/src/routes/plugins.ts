@@ -54,6 +54,7 @@ import {
   REPO_ROOT,
 } from "../services/plugin-loader.js";
 import { logActivity } from "../services/activity-log.js";
+import { logger } from "../middleware/logger.js";
 import { publishGlobalLiveEvent } from "../services/live-events.js";
 import { issueService } from "../services/issues.js";
 import type { PluginJobScheduler } from "../services/plugin-job-scheduler.js";
@@ -168,6 +169,13 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const PLUGIN_API_BODY_LIMIT_BYTES = 1_000_000;
+const PLUGIN_WORKER_UNAVAILABLE_MESSAGE = "Plugin worker is not available";
+
+function isPluginWorkerUnavailable(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("not running") || message.includes("worker");
+}
+
 const PLUGIN_SCOPED_API_RESPONSE_HEADER_ALLOWLIST = new Set([
   "cache-control",
   "etag",
@@ -1029,12 +1037,9 @@ export function pluginRoutes(
           res.status(err.status).json({ error: err.message, reasonCode: err.reasonCode, ...err.details });
           return;
         }
-        const message = err instanceof Error ? err.message : String(err);
-        if (message.includes("not running") || message.includes("worker")) {
-          res.status(502).json({ error: message });
-        } else {
-          res.status(500).json({ error: message });
-        }
+        if (!isPluginWorkerUnavailable(err)) throw err;
+        logger.warn({ err, tool }, "Plugin tool worker unavailable");
+        res.status(502).json({ error: PLUGIN_WORKER_UNAVAILABLE_MESSAGE });
       }
       return;
     }
@@ -1054,14 +1059,9 @@ export function pluginRoutes(
       );
       res.json(result);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-
-      // Distinguish between "worker not running" (502) and other errors (500)
-      if (message.includes("not running") || message.includes("worker")) {
-        res.status(502).json({ error: message });
-      } else {
-        res.status(500).json({ error: message });
-      }
+      if (!isPluginWorkerUnavailable(err)) throw err;
+      logger.warn({ err, tool }, "Plugin tool worker unavailable");
+      res.status(502).json({ error: PLUGIN_WORKER_UNAVAILABLE_MESSAGE });
     }
   });
 
@@ -1271,13 +1271,13 @@ export function pluginRoutes(
     if (message.includes("not running") || message.includes("not registered")) {
       return {
         code: "WORKER_UNAVAILABLE",
-        message,
+        message: PLUGIN_WORKER_UNAVAILABLE_MESSAGE,
       };
     }
 
     return {
       code: "UNKNOWN",
-      message,
+      message: "Plugin bridge request failed",
     };
   }
 
@@ -1291,7 +1291,7 @@ export function pluginRoutes(
     const rootError = err instanceof Error ? err : new Error(String(err));
     (res as any).__errorContext = {
       error: {
-        message: bridgeError.message,
+        message: rootError.message,
         stack: rootError.stack,
         name: rootError.name,
         details: {
@@ -1876,6 +1876,7 @@ export function pluginRoutes(
             : err instanceof JsonRpcCallError
               ? 502
               : 500;
+      if (status === 500) throw err;
       res.status(status).json({
         error: err instanceof Error ? err.message : String(err),
       });
@@ -2515,16 +2516,11 @@ export function pluginRoutes(
       return;
     }
 
-    try {
-      const jobs = await jobDeps.jobStore.listJobs(
-        plugin.id,
-        rawStatus as "active" | "paused" | "failed" | undefined,
-      );
-      res.json(jobs);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: message });
-    }
+    const jobs = await jobDeps.jobStore.listJobs(
+      plugin.id,
+      rawStatus as "active" | "paused" | "failed" | undefined,
+    );
+    res.json(jobs);
   });
 
   /**
@@ -2564,13 +2560,8 @@ export function pluginRoutes(
       return;
     }
 
-    try {
-      const runs = await jobDeps.jobStore.listRunsByJob(jobId, limit);
-      res.json(runs);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: message });
-    }
+    const runs = await jobDeps.jobStore.listRunsByJob(jobId, limit);
+    res.json(runs);
   });
 
   /**
@@ -2768,10 +2759,11 @@ export function pluginRoutes(
         })
         .where(eq(pluginWebhookDeliveries.id, delivery.id));
 
+      logger.warn({ err, pluginId: plugin.id, deliveryId: delivery.id }, "Plugin webhook delivery failed");
       res.status(502).json({
         deliveryId: delivery.id,
         status: "failed",
-        error: errorMessage,
+        error: "Plugin webhook delivery failed",
       });
     }
   });
