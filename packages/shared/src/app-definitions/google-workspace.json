@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "slug": "google-workspace",
   "name": "Google Workspace",
-  "description": "Let agents read and work in Drive, Sheets, Docs, Slides, Gmail, Calendar, Forms, Tasks, Chat, Meet, Contacts and Apps Script through the Google APIs.",
+  "description": "Let agents read and work in Google Drive files, Sheets spreadsheets, Docs documents, Slides presentations, Gmail email, Calendar events, Forms, Tasks, Chat, Meet, Contacts and Apps Script through the Google APIs.",
   "categories": [
     "productivity",
     "content"

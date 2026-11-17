@@ -55,6 +55,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   APP_DEFINITIONS,
   APP_STORE_HIDDEN_SLUGS,
+  RETIRED_GOOGLE_SERVICE_SLUGS,
   getAvailableConnectionMethod,
   getConnectableAppDefinition,
 } from "@tickernelz/wardmote-shared";
@@ -5211,14 +5212,7 @@ describeEmbeddedPostgres("tool access service", () => {
         "sentry",
         "zapier",
         "linear",
-        "gmail",
-        "google-drive",
-        "google-docs",
-        "google-sheets",
-        "google-slides",
-        "google-calendar",
-        "google-chat",
-        "google-people",
+        "google-workspace",
         "google-workspace-search",
         "github",
         "github-code-review-bot",
@@ -5250,14 +5244,9 @@ describeEmbeddedPostgres("tool access service", () => {
       expect(res.body.apps.find((app: { slug: string }) => app.slug === slug).tags).toContain("model-provider");
     }
     expect(
-      res.body.apps.find((app: { slug: string }) => app.slug === "gmail")
+      res.body.apps.find((app: { slug: string }) => app.slug === "google-workspace")
         .ownershipAvailability,
-    ).toEqual({
-      platform_shared: false,
-      platform_provisioned: false,
-      customer: true,
-      dcr: true,
-    });
+    ).toMatchObject({ customer: true });
     const gallerySlugs = new Set(
       res.body.apps.map((app: { slug: string }) => app.slug),
     );
@@ -5287,13 +5276,12 @@ describeEmbeddedPostgres("tool access service", () => {
           ]),
         }),
         expect.objectContaining({
-          slug: "google-sheets",
-          methods: expect.arrayContaining([
-            expect.objectContaining({ key: "local", transport: "local_stdio" }),
-          ]),
+          slug: "google-workspace",
+          methods: [expect.objectContaining({ key: "customer-oauth", transport: "rest_api", auth: "oauth" })],
         }),
       ]),
     );
+    expect(RETIRED_GOOGLE_SERVICE_SLUGS.filter((slug) => gallerySlugs.has(slug))).toEqual([]);
   });
 
   it("quarantines newly discovered Enterpret tools on later refreshes", async () => {
