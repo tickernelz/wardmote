@@ -38,7 +38,7 @@ export interface GoogleCallPlan {
   estimatedRequests: number;
 }
 
-export type GooglePolicyVerdict = { allowed: true; notes?: string[] } | { allowed: false; error: GoogleWorkspaceError };
+export type GooglePolicyVerdict = { allowed: true; notes?: string[]; query?: [string, string][] } | { allowed: false; error: GoogleWorkspaceError };
 
 export interface GoogleStoredAttachment {
   attachmentId: string;
@@ -418,7 +418,8 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
   const sleep = context.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const { plan, entry } = await planGoogleCall(context.discovery, input);
   const verdict = await context.policy(plan);
-  const sourceUrl = urlWithQuery(plan.url, plan.query);
+  const query = verdict.allowed && verdict.query ? verdict.query : plan.query;
+  const sourceUrl = urlWithQuery(plan.url, query);
   const base = {
     ok: true as const,
     method: plan.method,
@@ -433,7 +434,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
       plan: {
         httpMethod: plan.httpMethod,
         url: plan.url,
-        query: plan.query,
+        query,
         upload: plan.upload,
         trashInsteadOfDelete: plan.trashInsteadOfDelete,
         classes: plan.classification.classes,
@@ -519,7 +520,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
       const boundary = `wardmote_${crypto.randomUUID()}`;
       const head = Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\ncontent-type: ${contentType}\r\n\r\n`);
       const tail = Buffer.from(`\r\n--${boundary}--`);
-      response = await send(urlWithQuery(plan.url, [...plan.query, ["uploadType", "multipart"]]), {
+      response = await send(urlWithQuery(plan.url, [...query, ["uploadType", "multipart"]]), {
         method: plan.httpMethod,
         headers: { accept: "application/json", "content-type": `multipart/related; boundary=${boundary}` },
         body: Buffer.concat([head, Buffer.from(file.bytes), tail]),
@@ -529,7 +530,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
       if (!resumablePath) throw invalid("/upload", `${entry.id} cannot upload files larger than ${MULTIPART_MAX_BYTES} bytes`);
       const index = await context.discovery.service(googleMethodService(plan.method));
       const sessionUrl = joinRoot(index.rootUrl, expandPath(resumablePath, parameterValues(entry, plan.params).pathValues));
-      const start = await send(urlWithQuery(sessionUrl, [...plan.query, ["uploadType", "resumable"]]), {
+      const start = await send(urlWithQuery(sessionUrl, [...query, ["uploadType", "resumable"]]), {
         method: plan.httpMethod,
         headers: { ...jsonHeaders, "x-upload-content-type": contentType, "x-upload-content-length": String(file.bytes.byteLength) },
         body: metadata,
@@ -542,7 +543,7 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
     }
   } else {
     const hasBody = plan.body !== undefined && plan.body !== null;
-    response = await send(urlWithQuery(plan.url, plan.query), {
+    response = await send(urlWithQuery(plan.url, query), {
       method: plan.httpMethod,
       headers: hasBody ? jsonHeaders : { accept: plan.download ? "*/*" : "application/json" },
       body: hasBody ? JSON.stringify(plan.body) : undefined,
@@ -576,9 +577,9 @@ export async function executeGoogleCall(context: GoogleCallContext, input: Googl
     const pages: Record<string, unknown>[] = [data];
     let token: string | undefined = data.nextPageToken;
     while (token && pages.length < plan.estimatedRequests) {
-      const query = plan.query.filter(([name]) => name !== "pageToken");
-      query.push(["pageToken", token]);
-      const next = await send(urlWithQuery(plan.url, query), { method: plan.httpMethod, headers: { accept: "application/json" } });
+      const pageQuery = query.filter(([name]) => name !== "pageToken");
+      pageQuery.push(["pageToken", token]);
+      const next = await send(urlWithQuery(plan.url, pageQuery), { method: plan.httpMethod, headers: { accept: "application/json" } });
       const page = (await next.json()) as Record<string, unknown>;
       pages.push(page);
       token = typeof page.nextPageToken === "string" ? page.nextPageToken : undefined;
