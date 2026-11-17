@@ -239,6 +239,22 @@ describe("adapter routes", () => {
     });
   });
 
+  it("answers a failing config schema resolution with a generic 500", async () => {
+    registerServerAdapter({
+      ...overridingConfigSchemaAdapter,
+      getConfigSchema: async () => {
+        throw new Error('Failed query: select "secret" from "adapter_settings" params: secret-token-123');
+      },
+    });
+    const app = createApp();
+
+    const res = await request(app).get("/api/adapters/claude_local/config-schema");
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to resolve config schema" });
+    expect(res.text).not.toContain("secret-token-123");
+  });
+
   it("serves an empty tombstone config schema for retired acpx_local", async () => {
     const app = createApp();
 
