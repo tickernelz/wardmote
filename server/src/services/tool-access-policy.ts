@@ -1621,6 +1621,7 @@ export function toolAccessPolicyService(db: Db) {
       argumentsSummary: redaction.summary,
       policyDecision: accessDecision.decision,
       matchedPolicyIds: accessDecision.matchedPolicyIds,
+      policyExplanation: accessDecision.policyExplanation ?? null,
       approvalState: accessDecision.decision === "require_approval" ? "pending" : "not_required",
       status,
       errorCode: accessDecision.allowed || accessDecision.decision === "require_approval" ? null : accessDecision.reasonCode,
