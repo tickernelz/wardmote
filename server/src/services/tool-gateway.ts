@@ -915,10 +915,10 @@ function humanizeArgumentKey(key: string): string {
     .trim()
     .split(/\s+/)
     .filter(Boolean);
-  if (words.length === 0) return key;
-  return words
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+  const label = words.length === 0
+    ? key
+    : words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
+  return label.length > 60 ? `${label.slice(0, 59)}…` : label;
 }
 
 /** Identifier-ish fields leak raw IDs into the prosumer card; the vocab gate forbids them. */
@@ -939,19 +939,17 @@ function humanizeArgumentValue(value: unknown): string | null {
   return null;
 }
 
-/**
- * Build the prosumer-facing "Ask first" preview (M5/M7/M9). Deliberately free of the
- * words tool/risk/transport/arguments and of raw JSON — those only belong on the
- * Advanced surfaces (M8a/M8b) and the board-only formal-approval interaction.
- */
+const MAX_PREVIEW_CHANGE_KINDS = 5;
+
 function googleCallPreviewLines(parsed: Record<string, unknown>): string[] {
   const lines: string[] = [];
   const method = humanizeArgumentValue(parsed.method);
   if (method) lines.push(`**Method:** ${method}`);
   const requests = asRecord(parsed.body)?.requests;
   if (Array.isArray(requests)) {
-    const kinds = [...new Set(requests.map((request) => Object.keys(asRecord(request) ?? {})[0]).filter((kind): kind is string => Boolean(kind)))];
-    if (kinds.length > 0) lines.push(`**Changes:** ${kinds.join(", ")}`);
+    const kinds = [...new Set(requests.map((request) => humanizeArgumentValue(Object.keys(asRecord(request) ?? {})[0])).filter((kind): kind is string => kind !== null))];
+    const shown = kinds.slice(0, MAX_PREVIEW_CHANGE_KINDS).join(", ");
+    if (kinds.length > 0) lines.push(`**Changes:** ${kinds.length > MAX_PREVIEW_CHANGE_KINDS ? `${shown}, … (${kinds.length} kinds)` : shown}`);
   }
   for (const [key, value] of Object.entries(asRecord(parsed.params) ?? {})) {
     if (lines.length >= 5) break;
@@ -962,6 +960,11 @@ function googleCallPreviewLines(parsed: Record<string, unknown>): string[] {
   return lines;
 }
 
+/**
+ * Build the prosumer-facing "Ask first" preview (M5/M7/M9). Deliberately free of the
+ * words tool/risk/transport/arguments and of raw JSON — those only belong on the
+ * Advanced surfaces (M8a/M8b) and the board-only formal-approval interaction.
+ */
 function buildHumanizedActionPreview(input: {
   tool: ToolGatewayDescriptor;
   argumentsSummary: ReturnType<typeof summarizeToolValue>;

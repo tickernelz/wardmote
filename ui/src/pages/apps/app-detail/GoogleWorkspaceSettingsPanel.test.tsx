@@ -62,6 +62,22 @@ afterEach(() => {
 });
 
 describe("GoogleWorkspaceSettingsPanel", () => {
+  it("refreshes the grant list when revoking a later grant fails", async () => {
+    const twoGrants = { ...view({ sheets: "edit" }), grants: [{ grantId: "g1", kind: "user", grantedScopes: [], missingScopes: [] }, { grantId: "g2", kind: "user", grantedScopes: [], missingScopes: [] }] };
+    googleWorkspaceSettings.mockResolvedValueOnce(twoGrants);
+    googleWorkspaceSettings.mockResolvedValue({ ...twoGrants, grants: [twoGrants.grants[1]] });
+    revokeConnectionGrant.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("Google refused"));
+    await render();
+    expect(container.textContent).toContain("2 sign-ins");
+    await act(async () => button("Revoke Google access").click());
+    const confirm = [...document.body.querySelectorAll('[role="alertdialog"] button')].find((candidate) => candidate.textContent?.trim() === "Revoke") as HTMLButtonElement;
+    await act(async () => confirm.click());
+    await flush();
+    await flush();
+    expect(document.body.textContent).toContain("Google refused");
+    expect(container.textContent).toContain("1 sign-in.");
+  });
+
   it("revokes Google access after confirmation and then offers sign-in", async () => {
     googleWorkspaceSettings.mockResolvedValueOnce(view({ sheets: "edit" }));
     googleWorkspaceSettings.mockResolvedValue({ ...view({ sheets: "edit" }), grants: [] });

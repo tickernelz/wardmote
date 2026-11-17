@@ -142,12 +142,12 @@ const redirectUri = "https://wardmote.example.test/api/tools/oauth/callback";
     await expect(f.gateway.executeTool({
       sessionToken: f.session.token,
       tool: f.call!.name,
-      parameters: { method: "sheets.spreadsheets.batchUpdate", params: { spreadsheetId: "sheet-123" }, body: { requests: [{ deleteSheet: { sheetId: 0 } }] } },
+      parameters: { method: "sheets.spreadsheets.batchUpdate", params: { spreadsheetId: "sheet-123" }, body: { requests: [{ deleteSheet: { sheetId: 0 } }, ...["addSheet", "repeatCell", "updateCells", "mergeCells", "sortRange", "addBanding"].map((kind) => ({ [kind]: {} }))] } },
       idempotencyKey: randomUUID(),
     })).rejects.toMatchObject({ reasonCode: "approval_required" });
     const [request] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.companyId, f.company.id));
     expect(request.previewMarkdown).toContain("This can permanently change or remove data.");
-    expect(request.previewMarkdown).toContain("**Changes:** deleteSheet");
+    expect(request.previewMarkdown).toContain("**Changes:** deleteSheet, addSheet, repeatCell, updateCells, mergeCells, … (7 kinds)");
     expect(request.previewMarkdown).toContain("**Spreadsheet Id:** sheet-123");
   });
 

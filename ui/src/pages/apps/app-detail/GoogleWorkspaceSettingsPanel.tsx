@@ -102,8 +102,8 @@ export function GoogleWorkspaceSettingsPanel({ connection, canConfigure }: { con
     mutationFn: async (grantIds: string[]) => {
       for (const grantId of grantIds) await toolsApi.revokeConnectionGrant(connection.id, grantId);
     },
-    onSuccess: () => {
-      setConfirmRevoke(false);
+    onSuccess: () => setConfirmRevoke(false),
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey });
       void queryClient.invalidateQueries({ queryKey: ["tools"] });
     },
