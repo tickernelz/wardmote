@@ -38,7 +38,8 @@ export type IssueWriteDenialCode = (typeof ISSUE_WRITE_DENIAL_CODES)[number];
 
 /**
  * Why the write stopped, which drives icon + colour. `boundary` is an
- * authorization wall, `cap` is a rate backstop, and `attribution` is a rejected spoof.
+ * authorization wall, `lock` is the assignee's live checkout run, `cap` is a
+ * rate backstop, and `attribution` is a rejected spoof.
  */
 export type IssueWriteDenialTone = "boundary" | "lock" | "cap" | "attribution";
 
