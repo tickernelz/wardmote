@@ -1,6 +1,6 @@
 import { AgentIdentity } from "@/components/AgentIdentity";
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from "react";
-import type { ReactNode } from "react";
+import { cloneElement, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVisibilityRefetchInterval } from "@/lib/polling";
 import { accessApi } from "../api/access";
@@ -144,6 +144,53 @@ function escapeAttrValue(value: string): string {
   return typeof CSS !== "undefined" && typeof CSS.escape === "function"
     ? CSS.escape(value)
     : value.replace(/["\\]/g, "\\$&");
+}
+
+type RowKeyState = { keys: string[]; generations: Map<string, number>; renderKeys: string[] };
+
+function longestIncreasingSubsequence(values: number[]): number[] {
+  const tails: number[] = [];
+  const previous = new Array<number>(values.length);
+  for (let index = 0; index < values.length; index += 1) {
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (values[tails[middle]!]! < values[index]!) low = middle + 1;
+      else high = middle;
+    }
+    previous[index] = low > 0 ? tails[low - 1]! : -1;
+    tails[low] = index;
+  }
+  const result: number[] = [];
+  for (let index = tails.length > 0 ? tails[tails.length - 1]! : -1; index >= 0; index = previous[index]!) {
+    result.push(index);
+  }
+  return result.reverse();
+}
+
+/** Gives rows that changed relative order a fresh key, so React reinserts them instead of moving the rows that stayed. */
+function insertionStableRowKeys(previous: RowKeyState | undefined, keys: string[]): RowKeyState {
+  const previousIndex = new Map<string, number>();
+  previous?.keys.forEach((key, index) => previousIndex.set(key, index));
+  const carriedIndexes: number[] = [];
+  const carriedPositions: number[] = [];
+  keys.forEach((key, position) => {
+    const index = previousIndex.get(key);
+    if (index === undefined) return;
+    carriedIndexes.push(index);
+    carriedPositions.push(position);
+  });
+  const staying = new Set(longestIncreasingSubsequence(carriedIndexes).map((index) => carriedPositions[index]!));
+  const generations = new Map<string, number>();
+  const renderKeys = keys.map((key, position) => {
+    const carried = previous?.generations.get(key) ?? 0;
+    const generation = previousIndex.has(key) && !staying.has(position) ? carried + 1 : carried;
+    if (generation === 0) return key;
+    generations.set(key, generation);
+    return `${key}~${generation}`;
+  });
+  return { keys, generations, renderKeys };
 }
 
 const INITIAL_ISSUE_ROW_RENDER_LIMIT = 100;
@@ -1868,6 +1915,23 @@ function StreamlinedIssuesList({
     viewState.viewMode,
   ]);
 
+  const committedRowKeysRef = useRef<Map<string, RowKeyState>>(new Map());
+  const renderedRowKeys = new Map<string, RowKeyState>();
+  useLayoutEffect(() => {
+    committedRowKeysRef.current = renderedRowKeys;
+  });
+  const withInsertionStableKeys = (groupKey: string, nodes: ReactNode[]) => {
+    const elements = nodes as ReactElement[];
+    const state = insertionStableRowKeys(
+      committedRowKeysRef.current.get(groupKey),
+      elements.map((element) => String(element.key)),
+    );
+    renderedRowKeys.set(groupKey, state);
+    return elements.map((element, index) => (
+      element.key === state.renderKeys[index] ? element : cloneElement(element, { key: state.renderKeys[index] })
+    ));
+  };
+
   const showsListRows = viewState.viewMode === "list" && renderedIssueRowLimit > 0;
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -2838,7 +2902,7 @@ function StreamlinedIssuesList({
                 for (const issue of roots) {
                   appendIssueRow(issue, 0);
                 }
-                return nodes;
+                return withInsertionStableKeys(group.key, nodes);
               })()}
             </CollapsibleContent>
           </Collapsible>

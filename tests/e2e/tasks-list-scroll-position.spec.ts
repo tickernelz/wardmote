@@ -96,30 +96,6 @@ test("returning from a task keeps the row the user was reading in place", async 
   expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(ROW_TOLERANCE_PX);
 });
 
-test("tasks moving or arriving above the reading position do not move it", async ({ page, request }) => {
-  test.setTimeout(120_000);
-  const { company, issues } = await seedCompany(request, 90);
-  await page.goto(`/${company.issuePrefix}/issues`);
-  await expect(page.locator("[data-issue-row-id]").first()).toBeVisible({ timeout: 30_000 });
-  await scrollListToMiddle(page);
-  const reading = await rowInViewportMiddle(page);
-  const firstRowId = () => page.locator("[data-issue-row-id]").first().getAttribute("data-issue-row-id");
-
-  const readingIndex = issues.findIndex((issue) => issue.id === reading.id);
-  const above = issues[Math.min(issues.length - 1, readingIndex + 10)]!;
-  await json(await request.post(`/api/issues/${above.id}/comments`, { data: { body: "Moves this task to the top." } }));
-  await expect.poll(firstRowId, { timeout: 30_000 }).toBe(above.id);
-  await page.waitForTimeout(500);
-  expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(4);
-
-  const created = await json(await request.post(`/api/companies/${company.id}/issues`, {
-    data: { title: "Scroll position task created while reading", status: "backlog" },
-  }));
-  await expect.poll(firstRowId, { timeout: 30_000 }).toBe(created.id);
-  await page.waitForTimeout(500);
-  expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(4);
-});
-
 test("a heartbeat run appearing and ending in Live now above the reading position does not move it", async ({ page, request }) => {
   test.setTimeout(120_000);
   const { company } = await seedCompany(request, 90);
@@ -152,6 +128,30 @@ test("a heartbeat run appearing and ending in Live now above the reading positio
 for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
   test.describe(`at ${viewport.width}px`, () => {
     test.use({ viewport });
+
+    test("tasks moving or arriving above the reading position do not move it", async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const { company, issues } = await seedCompany(request, 90);
+      await page.goto(`/${company.issuePrefix}/issues`);
+      await expect(page.locator("[data-issue-row-id]").first()).toBeVisible({ timeout: 30_000 });
+      const reading = await scrollUntilReadingRow(page, 30);
+      const firstRowId = () => page.locator("[data-issue-row-id]").first().getAttribute("data-issue-row-id");
+      const readingIndex = issues.findIndex((issue) => issue.id === reading.id);
+
+      for (const mover of [issues[readingIndex - 10]!, issues[readingIndex + 10]!]) {
+        await json(await request.post(`/api/issues/${mover.id}/comments`, { data: { body: "Moves this task to the top." } }));
+        await expect.poll(firstRowId, { timeout: 45_000 }).toBe(mover.id);
+        await page.waitForTimeout(500);
+        expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(4);
+      }
+
+      const created = await json(await request.post(`/api/companies/${company.id}/issues`, {
+        data: { title: "Scroll position task created while reading", status: "backlog" },
+      }));
+      await expect.poll(firstRowId, { timeout: 45_000 }).toBe(created.id);
+      await page.waitForTimeout(500);
+      expect(Math.abs((await rowTop(page, reading.id)) - reading.top)).toBeLessThanOrEqual(4);
+    });
 
     test("a list at the top stays at the top when tasks arrive while the tab is away", async ({ page, request }) => {
       test.setTimeout(120_000);
