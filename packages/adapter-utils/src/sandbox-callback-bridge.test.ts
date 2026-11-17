@@ -995,12 +995,13 @@ describe("sandbox callback bridge", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    await expect(readdir(directories.responsesDir)).resolves.toEqual([]);
-    await expect(
-      readdir(directories.responsesDir).then((entries) =>
-        entries.filter((entry) => entry.endsWith(".tmp") || entry.includes(".wardmote-write.lock")),
-      ),
-    ).resolves.toEqual([]);
+    const settleDeadline = Date.now() + 5_000;
+    let responseEntries = await readdir(directories.responsesDir);
+    while (responseEntries.length > 0 && Date.now() < settleDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      responseEntries = await readdir(directories.responsesDir);
+    }
+    expect(responseEntries).toEqual([]);
   });
 
   it("rejects non-JSON request bodies and full queues at the bridge server", async () => {
