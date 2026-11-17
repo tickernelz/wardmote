@@ -72,6 +72,7 @@ describe("parseGoogleClientSecretJson", () => {
     expect(parseGoogleClientSecretJson(web(["https://other.example/cb"]), redirect).problems).toEqual(["redirect_uri_missing"]);
     expect(parseGoogleClientSecretJson(web([redirect], ""), redirect).problems).toEqual(["missing_secret"]);
     expect(parseGoogleClientSecretJson(JSON.stringify({ installed: { client_id: "x", client_secret: "y" } }), redirect).problems).toEqual(["installed_client"]);
+    expect(parseGoogleClientSecretJson(JSON.stringify({ installed: { client_id: "x", client_secret: "y", redirect_uris: ["http://localhost"] } }), "http://localhost:3266/api/tools/oauth/callback").problems).toEqual([]);
   });
 });
 

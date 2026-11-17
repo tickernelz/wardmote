@@ -11,6 +11,16 @@ import {
   type ToolConnection,
 } from "@tickernelz/wardmote-shared";
 import { toolsApi } from "@/api/tools";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -87,12 +97,24 @@ export function GoogleWorkspaceSettingsPanel({ connection, canConfigure }: { con
     mutationFn: () => toolsApi.startOAuth(connection.id, { asCurrentUser: connection.credentialPolicy === "per_user" }),
     onSuccess: (start) => window.location.assign(start.authorizationUrl),
   });
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const revoke = useMutation({
+    mutationFn: async (grantIds: string[]) => {
+      for (const grantId of grantIds) await toolsApi.revokeConnectionGrant(connection.id, grantId);
+    },
+    onSuccess: () => {
+      setConfirmRevoke(false);
+      void queryClient.invalidateQueries({ queryKey });
+      void queryClient.invalidateQueries({ queryKey: ["tools"] });
+    },
+  });
   if (!canConfigure) {
     return <p className="text-sm text-ink-3">Only someone who can configure this connection can change its Google service levels and policy.</p>;
   }
   if (settings.isLoading || !draft) return <p className="text-sm text-ink-3">Loading Google Workspace settings…</p>;
   if (settings.isError) return <p role="alert" className="text-sm text-bad">{settings.error instanceof Error ? settings.error.message : "Settings could not be loaded."}</p>;
-  const missing = [...new Set((settings.data?.grants ?? []).flatMap((grant) => grant.missingScopes))];
+  const grants = settings.data?.grants ?? [];
+  const missing = [...new Set(grants.flatMap((grant) => grant.missingScopes))];
   const dirty = settings.data ? JSON.stringify(draftFrom(settings.data.settings)) !== JSON.stringify(draft) : false;
   return (
     <section className="space-y-6" aria-labelledby={`${id}-title`}>
@@ -100,6 +122,36 @@ export function GoogleWorkspaceSettingsPanel({ connection, canConfigure }: { con
         <h2 id={`${id}-title`} className="text-lg font-semibold">Google Workspace access</h2>
         <p className="text-sm text-ink-3">What agents may do in each Google service, what needs a person's approval, and which Drive folders they may touch.</p>
       </div>
+      {grants.length === 0 ? (
+        <div role="status" className="space-y-2 rounded-lg border border-warn bg-warn-soft p-3 text-sm">
+          <p className="font-medium">No Google account is signed in. Agents cannot call Google until someone signs in.</p>
+          <Button variant="secondary" disabled={grantMore.isPending} onClick={() => grantMore.mutate()}>
+            {grantMore.isPending ? "Opening Google…" : "Sign in with Google"}
+          </Button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line p-3 text-sm">
+          <p>Google access granted for {grants.length} sign-in{grants.length === 1 ? "" : "s"}. Revoking removes Wardmote's Google token at Google.</p>
+          <Button variant="danger" size="sm" onClick={() => setConfirmRevoke(true)}>Revoke Google access</Button>
+        </div>
+      )}
+      {confirmRevoke && (
+        <AlertDialog open onOpenChange={(open) => { if (!open) setConfirmRevoke(false); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Revoke Google access?</AlertDialogTitle>
+              <AlertDialogDescription>Wardmote revokes its Google token and agents stop calling Google until someone signs in again. Settings stay.</AlertDialogDescription>
+            </AlertDialogHeader>
+            {revoke.isError && <p role="alert" className="text-sm text-bad">{revoke.error instanceof Error ? revoke.error.message : "Google access could not be revoked."}</p>}
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={revoke.isPending} autoFocus>Cancel</AlertDialogCancel>
+              <AlertDialogAction disabled={revoke.isPending} onClick={(event) => { event.preventDefault(); revoke.mutate(grants.map((grant) => grant.grantId)); }}>
+                {revoke.isPending ? "Revoking…" : "Revoke"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
       {missing.length > 0 && (
         <div role="status" className="space-y-2 rounded-lg border border-warn bg-warn-soft p-3 text-sm">
           <p className="font-medium">Google has not granted {missing.length} scope{missing.length === 1 ? "" : "s"} these levels need.</p>

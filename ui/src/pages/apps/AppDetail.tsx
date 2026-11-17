@@ -542,9 +542,9 @@ function StandardAppDetail({ renderActions, renderAgentSettings, renderConnectio
     </div>;
   }
 
-  const aiGrantRevoked = connection.connectionPurpose === "ai"
+  const allGrantsRevoked = (connection.connectionPurpose === "ai" || connection.config?.sourceTemplateKey === "google-workspace")
     && grantRows.length > 0 && grantRows.every((grant) => grant.status === "revoked");
-  const status: StatusInfo = aiGrantRevoked ? { label: "Revoked", tone: "attention" } : statusFor(connection);
+  const status: StatusInfo = allGrantsRevoked ? { label: "Revoked", tone: "attention" } : statusFor(connection);
   const needsReconnect = connection.requiresReauthorization
     ?? (status.tone === "attention" && connection.healthStatus !== "unknown");
   const quarantined = catalog.filter((e) => e.status === "quarantined");

@@ -944,24 +944,52 @@ function humanizeArgumentValue(value: unknown): string | null {
  * words tool/risk/transport/arguments and of raw JSON — those only belong on the
  * Advanced surfaces (M8a/M8b) and the board-only formal-approval interaction.
  */
+function googleCallPreviewLines(parsed: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  const method = humanizeArgumentValue(parsed.method);
+  if (method) lines.push(`**Method:** ${method}`);
+  const requests = asRecord(parsed.body)?.requests;
+  if (Array.isArray(requests)) {
+    const kinds = [...new Set(requests.map((request) => Object.keys(asRecord(request) ?? {})[0]).filter((kind): kind is string => Boolean(kind)))];
+    if (kinds.length > 0) lines.push(`**Changes:** ${kinds.join(", ")}`);
+  }
+  for (const [key, value] of Object.entries(asRecord(parsed.params) ?? {})) {
+    if (lines.length >= 5) break;
+    const rendered = humanizeArgumentValue(value);
+    if (rendered !== null) lines.push(`**${humanizeArgumentKey(key)}:** ${rendered}`);
+  }
+  if (parsed.permanentDelete === true) lines.push("**Permanent delete:** true");
+  return lines;
+}
+
 function buildHumanizedActionPreview(input: {
   tool: ToolGatewayDescriptor;
   argumentsSummary: ReturnType<typeof summarizeToolValue>;
+  google?: Record<string, unknown> | null;
 }): string {
   const actionName = input.tool.displayName?.trim() || input.tool.name;
+  const googleClasses = Array.isArray(input.google?.classes) ? input.google.classes : [];
+  const externalRecipients = Array.isArray(input.google?.externalRecipients)
+    ? input.google.externalRecipients.filter((recipient): recipient is string => typeof recipient === "string")
+    : [];
   const trustLine =
-    input.tool.risk === "destructive"
+    input.tool.risk === "destructive" || googleClasses.includes("destructive")
       ? `${actionName}. This can permanently change or remove data.`
       : actionName;
+  const recipientLine = externalRecipients.length > 0 ? [`**Outside your domain:** ${externalRecipients.join(", ")}`] : [];
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(input.argumentsSummary.summary);
   } catch {
-    return trustLine;
+    return [trustLine, ...recipientLine].join(" · ");
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-    return trustLine;
+    return [trustLine, ...recipientLine].join(" · ");
+
+  if (input.tool.upstreamToolName === "google_call") {
+    return [trustLine, ...googleCallPreviewLines(parsed as Record<string, unknown>), ...recipientLine].join(" · ");
+  }
 
   const fieldLines: string[] = [];
   for (const [key, value] of Object.entries(
@@ -974,8 +1002,7 @@ function buildHumanizedActionPreview(input: {
     fieldLines.push(`**${humanizeArgumentKey(key)}:** ${rendered}`);
   }
 
-  if (fieldLines.length === 0) return trustLine;
-  return [trustLine, ...fieldLines].join(" · ");
+  return [trustLine, ...fieldLines, ...recipientLine].join(" · ");
 }
 
 const BUILTIN_TOOLS: ToolGatewayDescriptor[] = [
@@ -2475,6 +2502,7 @@ export function createToolGatewayService(
       buildHumanizedActionPreview({
         tool: input.tool,
         argumentsSummary: input.argumentsSummary,
+        google: asRecord(asRecord(input.policyDecision.policyExplanation)?.google),
       });
 
     let formalApprovalId: string | null = null;
@@ -10503,6 +10531,7 @@ export function createToolGatewayService(
               rateLimitState: accessDecision.rateLimitState ?? null,
             },
           });
+          const googleCode = asRecord(asRecord(accessDecision.policyExplanation)?.google)?.code;
           throw new ToolGatewayHttpError(
             policyErrorStatus(accessDecision),
             accessDecision.explanation,
@@ -10513,6 +10542,7 @@ export function createToolGatewayService(
               decision: accessDecision.decision,
               matchedPolicyIds: accessDecision.matchedPolicyIds,
               rateLimitState: accessDecision.rateLimitState ?? null,
+              ...(typeof googleCode === "string" ? { code: googleCode } : {}),
             },
           );
         }

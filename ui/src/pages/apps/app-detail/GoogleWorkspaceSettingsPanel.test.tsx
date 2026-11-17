@@ -5,13 +5,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { normalizeGoogleWorkspaceSettings, type ToolConnection } from "@tickernelz/wardmote-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { googleWorkspaceSettings, configureGoogleWorkspace, startOAuth } = vi.hoisted(() => ({
+const { googleWorkspaceSettings, configureGoogleWorkspace, startOAuth, revokeConnectionGrant } = vi.hoisted(() => ({
   googleWorkspaceSettings: vi.fn(),
   configureGoogleWorkspace: vi.fn(),
   startOAuth: vi.fn(),
+  revokeConnectionGrant: vi.fn(),
 }));
 
-vi.mock("@/api/tools", () => ({ toolsApi: { googleWorkspaceSettings, configureGoogleWorkspace, startOAuth } }));
+vi.mock("@/api/tools", () => ({ toolsApi: { googleWorkspaceSettings, configureGoogleWorkspace, startOAuth, revokeConnectionGrant } }));
 
 import { GoogleWorkspaceSettingsPanel, parseGoogleIdList } from "./GoogleWorkspaceSettingsPanel";
 
@@ -61,6 +62,22 @@ afterEach(() => {
 });
 
 describe("GoogleWorkspaceSettingsPanel", () => {
+  it("revokes Google access after confirmation and then offers sign-in", async () => {
+    googleWorkspaceSettings.mockResolvedValueOnce(view({ sheets: "edit" }));
+    googleWorkspaceSettings.mockResolvedValue({ ...view({ sheets: "edit" }), grants: [] });
+    revokeConnectionGrant.mockResolvedValue({});
+    await render();
+    await act(async () => button("Revoke Google access").click());
+    expect(revokeConnectionGrant).not.toHaveBeenCalled();
+    const confirm = [...document.body.querySelectorAll('[role="alertdialog"] button')].find((candidate) => candidate.textContent?.trim() === "Revoke") as HTMLButtonElement;
+    await act(async () => confirm.click());
+    await flush();
+    await flush();
+    expect(revokeConnectionGrant).toHaveBeenCalledWith("conn-1", "g1");
+    expect(container.textContent).toContain("No Google account is signed in");
+    expect(button("Sign in with Google")).toBeTruthy();
+  });
+
   it("saves levels, policy and Drive limits pasted as links", async () => {
     googleWorkspaceSettings.mockResolvedValue(view({ sheets: "edit" }));
     configureGoogleWorkspace.mockImplementation(async (_id, input) => view(input.capabilities));
