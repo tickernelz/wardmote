@@ -72,7 +72,7 @@ describe("GoogleWorkspaceSetup", () => {
     await act(async () => root.render(<Harness onConnect={onConnect} />));
     expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Who uses it");
     await click(button("Continue"));
-    expect(container.querySelector<HTMLInputElement>("#gws-callback")?.value).toBe(CALLBACK);
+    expect(container.querySelector("#gws-callback")?.textContent).toBe(CALLBACK);
     const enable = [...container.querySelectorAll("a")].find((link) => link.textContent?.includes("Enable APIs"));
     expect(enable?.getAttribute("href")).toBe(googleWorkspaceEnableApisUrl());
     await click(button("I created the client"));
@@ -116,6 +116,25 @@ describe("GoogleWorkspaceSetup", () => {
     const driveOff = container.querySelector('[aria-labelledby="gws-tier-drive"]')!.querySelector("button")!;
     await click(driveOff);
     expect(button("Continue to Google").disabled).toBe(true);
+  });
+
+  it("saves a level picked from the compact per-service menu used in narrow panels", async () => {
+    const onConnect = vi.fn();
+    await act(async () => root.render(<Harness onConnect={onConnect} />));
+    await click(button("Continue"));
+    await click(button("I created the client"));
+    await type(container.querySelector<HTMLInputElement>("#gws-client-id")!, "123456789012-abc.apps.googleusercontent.com");
+    await type(container.querySelector<HTMLInputElement>("#gws-client-secret")!, "secret");
+    await click(button("Continue"));
+    const slides = container.querySelector<HTMLSelectElement>('select[aria-labelledby="gws-tier-slides"]')!;
+    expect(slides.value).toBe("off");
+    await act(async () => {
+      slides.value = "create";
+      slides.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(container.textContent).toContain("presentations");
+    await click(button("Continue to Google"));
+    expect(onConnect.mock.calls[0][0].draft.capabilities).toEqual({ ...GOOGLE_WORKSPACE_DEFAULT_CAPABILITIES, slides: "create" });
   });
 
   it("sends every service and a lower-case domain to the settings route", () => {
