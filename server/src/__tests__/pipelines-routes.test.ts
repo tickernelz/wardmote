@@ -248,6 +248,56 @@ describeEmbeddedPostgres("pipeline routes", () => {
     expect(idleUnlink.status, JSON.stringify(idleUnlink.body)).toBe(403);
   });
 
+  it("lets the assignee's second run link a case to its in_progress issue while its other run holds the checkout, but not unlink", async () => {
+    const company = await seedCompany();
+    const assignee = await seedAutomationAgent(company.id);
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "agent",
+      principalId: assignee.id,
+      status: "active",
+      membershipRole: "member",
+    });
+    await db.insert(principalPermissionGrants).values({
+      companyId: company.id,
+      principalType: "agent",
+      principalId: assignee.id,
+      permissionKey: "pipelines:write",
+      scope: null,
+    });
+    const [issue, otherIssue] = await db.insert(issues).values([
+      { companyId: company.id, title: "Assignee work", status: "in_progress", priority: "medium", assigneeAgentId: assignee.id },
+      { companyId: company.id, title: "Assignee chat", status: "in_progress", priority: "medium", assigneeAgentId: assignee.id },
+    ]).returning();
+    const [holderRun, secondRun] = await db.insert(heartbeatRuns).values([
+      { companyId: company.id, agentId: assignee.id, status: "running", contextSnapshot: { issueId: issue!.id } },
+      { companyId: company.id, agentId: assignee.id, status: "running", contextSnapshot: { issueId: otherIssue!.id } },
+    ]).returning();
+    await db.update(issues).set({ checkoutRunId: holderRun!.id }).where(eq(issues.id, issue!.id));
+    const http = request(app({
+      type: "agent",
+      agentId: assignee.id,
+      companyId: company.id,
+      runId: secondRun!.id,
+      source: "agent_key",
+    }));
+    const pipeline = await http.post(`/api/companies/${company.id}/pipelines`).send({ key: "own-link", name: "Own link" }).expect(201);
+    const created = await http
+      .post(`/api/pipelines/${pipeline.body.id}/cases`)
+      .send({ caseKey: "own-link", title: "Own link" })
+      .expect(201);
+    const caseId = created.body.case.id as string;
+
+    const link = await http.post(`/api/cases/${caseId}/issue-links`).send({ issueId: issue!.id, role: "work" });
+    expect(link.status, JSON.stringify(link.body)).toBe(201);
+    const [persisted] = await db.select({ checkoutRunId: issues.checkoutRunId }).from(issues).where(eq(issues.id, issue!.id));
+    expect(persisted?.checkoutRunId).toBe(holderRun!.id);
+
+    const unlink = await http.delete(`/api/cases/${caseId}/issue-links/${link.body.id}`);
+    expect(unlink.status, JSON.stringify(unlink.body)).toBe(409);
+    expect(unlink.body.error).toBe("Issue run ownership conflict");
+  });
+
   it("exposes the pipeline and case route surface", async () => {
     const company = await seedCompany();
     const http = request(app(boardActor));

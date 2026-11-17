@@ -32,6 +32,7 @@ import {
   issueAttachments,
   issueAutonomyWindows,
   issues,
+  projects,
   toolConnections,
   type Db,
 } from "@tickernelz/wardmote-db";
@@ -1074,10 +1075,12 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     expect(foreign.code).toBe("attachment_unavailable");
   });
 
-  it("sends files attached to the chat's child tasks, and to a live autonomy window's tree, but never other tasks", async () => {
+  it("sends files of the chat's tree or a live autonomy window's tree in any run, and of other readable non-private tasks only in an owner's run", async () => {
     const t = await setup();
     const c = await conversation(t, MEMBER);
-    const binding = await run(t, c, { triggerClass: "owner" });
+    await trigger(t, c, { triggerClass: "other", role: "allowed" });
+    const binding = await run(t, c, { triggerClass: "other" });
+    const ownerBinding = await run(t, c, { triggerClass: "owner" });
     const [root] = await db.insert(issues).values({ companyId: t.companyId, title: "Window root", status: "todo" }).returning();
     await db.update(issues).set({ parentId: root!.id }).where(eq(issues.id, c.issueId));
     const [child] = await db.insert(issues).values({ companyId: t.companyId, parentId: c.issueId, title: "Delegated", status: "todo" }).returning();
@@ -1091,17 +1094,32 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
       return row!.id;
     };
     const send = (attachmentId: string) => executeOpenwaTool(db, binding, "openwa_send", { kind: "document", attachmentId, idempotencyKey: randomUUID() });
+    const ownerSend = (attachmentId: string) => executeOpenwaTool(db, ownerBinding, "openwa_send", { kind: "document", attachmentId, idempotencyKey: randomUUID() });
 
     await expect(send(await attach(child!.id))).resolves.toMatchObject({ state: "delivered" });
     const [privateChild] = await db.insert(issues).values({ companyId: t.companyId, parentId: c.issueId, title: "Private", status: "todo", visibility: "private" }).returning();
     expect((await rejection(send(await attach(privateChild!.id)))).code).toBe("attachment_unavailable");
     const siblingFile = await attach(sibling!.id);
     expect((await rejection(send(siblingFile))).code).toBe("attachment_unavailable");
-    expect((await rejection(send(await attach(unrelated!.id)))).code).toBe("attachment_unavailable");
+    const unrelatedFile = await attach(unrelated!.id);
+    expect((await rejection(send(unrelatedFile))).code).toBe("attachment_unavailable");
 
     await db.insert(issueAutonomyWindows).values({ companyId: t.companyId, rootIssueId: root!.id, grantedByUserId: "owner", grantedVia: "whatsapp", expiresAt: new Date(Date.now() + 3_600_000) });
     await expect(send(siblingFile)).resolves.toMatchObject({ state: "delivered" });
-    expect((await rejection(send(await attach(unrelated!.id)))).code).toBe("attachment_unavailable");
+    expect((await rejection(send(unrelatedFile))).code).toBe("attachment_unavailable");
+
+    await expect(ownerSend(unrelatedFile)).resolves.toMatchObject({ state: "delivered" });
+    const [privateUnrelated] = await db.insert(issues).values({ companyId: t.companyId, title: "Private elsewhere", status: "todo", visibility: "private" }).returning();
+    expect((await rejection(ownerSend(await attach(privateUnrelated!.id)))).code).toBe("attachment_unavailable");
+    const [closedProject] = await db.insert(projects).values({ companyId: t.companyId, name: "Closed project", visibility: "private" }).returning();
+    const [closedTask] = await db.insert(issues).values({ companyId: t.companyId, projectId: closedProject!.id, title: "In a closed project", status: "todo" }).returning();
+    expect((await rejection(ownerSend(await attach(closedTask!.id)))).code).toBe("attachment_unavailable");
+    const [otherCompany] = await db.insert(companies).values({ name: "Other company", issuePrefix: "OTH" + randomUUID().slice(0, 3).toUpperCase() }).returning();
+    const [foreignTask] = await db.insert(issues).values({ companyId: otherCompany!.id, title: "Other company", status: "todo" }).returning();
+    const foreignPut = await storage.putFile({ companyId: otherCompany!.id, namespace: "issues/" + foreignTask!.id, originalFilename: "report.pdf", contentType: "application/pdf", body: Buffer.from("%PDF-1.4 foreign") });
+    const [foreignAsset] = await db.insert(assets).values({ companyId: otherCompany!.id, provider: foreignPut.provider, objectKey: foreignPut.objectKey, contentType: foreignPut.contentType, byteSize: foreignPut.byteSize, sha256: foreignPut.sha256, originalFilename: "report.pdf" }).returning();
+    const [foreignAttachment] = await db.insert(issueAttachments).values({ companyId: otherCompany!.id, issueId: foreignTask!.id, assetId: foreignAsset!.id }).returning();
+    expect((await rejection(ownerSend(foreignAttachment!.id))).code).toBe("attachment_unavailable");
   });
 
   it("fetches files of any type as attachments and sends them as WhatsApp documents", async () => {
