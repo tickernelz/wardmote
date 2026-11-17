@@ -20,11 +20,19 @@ const WAKE_MAX_ATTEMPTS = 5;
 const WAKE_STALE_PROCESSING_MS = 2 * 60_000;
 const INELIGIBLE_ISSUE_STATUSES = ["backlog", "done", "cancelled"];
 
+export interface OpenwaNumberChangeFacts {
+  previous: string;
+  current: string;
+  activeGroups: number;
+  notInvitedGroups: string[];
+}
+
 export interface OpenwaSessionHealthFacts {
-  kind: "status" | "restriction";
+  kind: "status" | "restriction" | "number_changed";
   healthy: boolean;
   status: string | null;
   restriction: { active: boolean; kind: string | null; code: string | null; expiresAt: string | null } | null;
+  numberChange?: OpenwaNumberChangeFacts;
 }
 
 export type OpenwaSessionHealthWakeStage =
@@ -41,6 +49,16 @@ export function openwaRestrictionSummary(kind: string | null): string {
 }
 
 function healthComment(facts: OpenwaSessionHealthFacts): string {
+  if (facts.kind === "number_changed") {
+    const change = facts.numberChange;
+    if (!change) return "OpenWA session health changed: this session now uses a different WhatsApp number.";
+    return (
+      "OpenWA session health changed: this session now uses " + change.current + " instead of " + change.previous + ". " +
+      change.activeGroups + " group(s) are active on the new number" +
+      (change.notInvitedGroups.length ? "; not invited yet: " + change.notInvitedGroups.join(", ") : "") +
+      "."
+    );
+  }
   if (facts.kind === "status")
     return facts.healthy
       ? "OpenWA session health changed: the WhatsApp session is ready again."

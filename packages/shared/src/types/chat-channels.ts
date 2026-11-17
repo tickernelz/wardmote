@@ -189,7 +189,15 @@ export interface SlackAppConfiguration {
   command: string;
 }
 
+export interface OpenwaPreviousNumber {
+  number: string;
+  lids: string[];
+  replacedAt: string;
+}
+
 export interface ChatEndpointSetupState {
+  /** WhatsApp numbers this OpenWA session used before its current one; a pending notice tells owners once after the groups are recounted. */
+  openwaNumber?: { previous: OpenwaPreviousNumber[]; changedAt: string; noticePending: boolean };
   slackSetupMethod?: "automatic" | "manual" | "existing";
   slackRegistration?: import("../slack-app-manifest.js").SlackRegistrationState;
   /** Provider-confirmed app icon outcome; configuration tokens are never retained. */
@@ -814,6 +822,7 @@ export const CHAT_AUDIT_ENTRY_KINDS = [
   "owner_group_changed",
   "autonomous_action",
   "autonomous_digest",
+  "bot_number_changed",
 ] as const;
 export type ChatAuditEntryKind = (typeof CHAT_AUDIT_ENTRY_KINDS)[number];
 

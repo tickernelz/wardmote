@@ -3141,6 +3141,7 @@ const openwaChatResponseSchema = z
     settings: openwaChatSettingsSchema,
     ownerPresent: z.boolean().nullable(),
     participantCount: z.number().int().nullable(),
+    numberNotInvited: z.boolean(),
   })
   .strict();
 

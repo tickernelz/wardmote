@@ -78,6 +78,7 @@ export interface OpenwaChatView {
   settings: OpenwaChatSettings;
   ownerPresent: boolean | null;
   participantCount: number | null;
+  numberNotInvited: boolean;
 }
 
 function sessionOf(endpoint: Pick<EndpointRow, "providerAccountId">): string {
@@ -757,6 +758,7 @@ export function openwaOwnerService(db: Db, deps: OpenwaOwnerServiceDeps) {
         settings: parsed.success ? parsed.data : { activation: "off" },
         ownerPresent: typeof row.metadata.ownerPresent === "boolean" ? row.metadata.ownerPresent : null,
         participantCount: participants,
+        numberNotInvited: row.metadata.numberNotInvited === true,
       };
     } catch {
       return null;

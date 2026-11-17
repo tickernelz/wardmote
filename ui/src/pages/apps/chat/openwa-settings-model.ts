@@ -46,6 +46,7 @@ export const AUDIT_KIND_LABELS: Record<ChatAuditEntryKind, string> = {
   owner_group_changed: "Owner-only group status changed",
   autonomous_action: "Done in autonomous mode",
   autonomous_digest: "Autonomous digest sent",
+  bot_number_changed: "WhatsApp number changed",
 };
 
 export function mergeOpenwaPolicy(policy: OpenwaEndpointPolicy, patch: OpenwaEndpointPolicyInput): Record<string, unknown> {
