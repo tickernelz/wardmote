@@ -181,6 +181,7 @@ import { extendApprovedExecutionWaitDeadline } from "./approved-execution-wait.j
 import { RETIRED_HEADER_PREFIX } from "./retired-header-names.js";
 
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
+const REST_PREPARATION_LISTING_TTL_MS = 5_000;
 const MAX_SESSION_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
 
@@ -5779,6 +5780,20 @@ export function createToolGatewayService(
     }
   }
 
+  const restPreparationListings = new Map<string, { expiresAt: number; tools: Promise<ToolGatewayDescriptor[]> }>();
+
+  function restToolsForPreparation(session: ToolGatewaySession): Promise<ToolGatewayDescriptor[]> {
+    const now = Date.now();
+    for (const [key, entry] of restPreparationListings) if (entry.expiresAt <= now) restPreparationListings.delete(key);
+    const key = `${session.companyId}:${session.agentId}:${session.runId}:${session.issueId}`;
+    const cached = restPreparationListings.get(key);
+    if (cached) return cached.tools;
+    const tools = listToolsForContext(session).then((listed) => listed.filter((tool) => tool.providerType === "provider_rest"));
+    restPreparationListings.set(key, { expiresAt: now + REST_PREPARATION_LISTING_TTL_MS, tools });
+    tools.catch(() => restPreparationListings.delete(key));
+    return tools;
+  }
+
   async function approvedGoogleSnapshot(session: ToolGatewaySession, invocationId: string): Promise<unknown> {
     const [row] = await db
       .select({ policyExplanation: toolInvocations.policyExplanation })
@@ -8948,7 +8963,7 @@ export function createToolGatewayService(
     async browserUseResources(binding: { companyId: string; agentId: string; runId?: string; issueId?: string }) {
       if (!binding.runId || !binding.issueId) return [];
       const session: ToolGatewaySession = { ...binding, runId: binding.runId, issueId: binding.issueId, id: randomUUID(), token: "", projectId: null, createdAt: new Date(), expiresAt: new Date(Date.now() + 60000) };
-      const tools = (await listToolsForContext(session)).filter(t => t.providerType === "provider_rest");
+      const tools = await restToolsForPreparation(session);
       const resources: Array<{ id: string; label: string; connectionId: string }> = [];
       for (const connectionId of new Set(tools.map(t => t.connectionId!))) {
         const [connection] = await db.select().from(toolConnections).where(and(eq(toolConnections.companyId, binding.companyId), eq(toolConnections.id, connectionId)));
@@ -8971,7 +8986,7 @@ export function createToolGatewayService(
         .limit(1);
       if (!candidate) return [];
       const session: ToolGatewaySession = { ...binding, runId: binding.runId, issueId: binding.issueId, id: randomUUID(), token: "", projectId: null, createdAt: new Date(), expiresAt: new Date(Date.now() + 60000) };
-      const tools = (await listToolsForContext(session)).filter((tool) => tool.providerType === "provider_rest");
+      const tools = await restToolsForPreparation(session);
       const resources: Array<{ id: string; label: string; connectionId: string }> = [];
       for (const connectionId of new Set(tools.map((tool) => tool.connectionId!))) {
         const [connection] = await db.select().from(toolConnections).where(and(eq(toolConnections.companyId, binding.companyId), eq(toolConnections.id, connectionId)));
@@ -10376,9 +10391,21 @@ export function createToolGatewayService(
         if (accessDecision.allowed && tool.providerType === "wardmote_slack_chat" && SLACK_TOOLS.some(t => t.name === tool.upstreamToolName && t.risk === "approval")) {
           accessDecision = { ...accessDecision, allowed: false, decision: "require_approval", reasonCode: "requires_approval_policy", explanation: "Slack destructive actions, channel creation and invitations require approval." };
         }
-        if (accessDecision.allowed && tool.providerType === "provider_rest" && isGoogleWorkspaceToolName(tool.upstreamToolName ?? "")) {
+        if (
+          (accessDecision.allowed || accessDecision.decision === "require_approval")
+          && tool.providerType === "provider_rest"
+          && isGoogleWorkspaceToolName(tool.upstreamToolName ?? "")
+        ) {
           const google = await googleCallDecision(session, tool, effectiveParameters);
-          if (google) accessDecision = { ...accessDecision, allowed: false, ...google };
+          if (google?.decision === "deny" || (google && accessDecision.allowed)) {
+            accessDecision = { ...accessDecision, allowed: false, ...google };
+          } else if (google) {
+            accessDecision = {
+              ...accessDecision,
+              explanation: `${accessDecision.explanation} ${google.explanation}`,
+              policyExplanation: { ...(accessDecision.policyExplanation ?? {}), ...google.policyExplanation },
+            };
+          }
         }
         accessDecision = noteOpenwaToolCall(accessDecision, session, tool);
         const recorded = await policyService.recordInvocation(
