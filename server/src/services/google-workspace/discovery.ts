@@ -1,26 +1,11 @@
+import { GOOGLE_WORKSPACE_API_VERSIONS, type GoogleWorkspaceService } from "@tickernelz/wardmote-shared";
+
 import review from "./method-review.json" with { type: "json" };
 import { GoogleWorkspaceError } from "./errors.js";
 
 export const GOOGLE_METHOD_CLASSES = ["read", "write", "destructive", "external", "execute"] as const;
 export type GoogleMethodClass = (typeof GOOGLE_METHOD_CLASSES)[number];
 export type GoogleMethodClassification = GoogleMethodClass | "unreviewed";
-
-export const GOOGLE_WORKSPACE_SERVICES = {
-  drive: "v3",
-  sheets: "v4",
-  docs: "v1",
-  slides: "v1",
-  calendar: "v3",
-  gmail: "v1",
-  forms: "v1",
-  tasks: "v1",
-  chat: "v1",
-  meet: "v2",
-  people: "v1",
-  script: "v1",
-} as const;
-
-export type GoogleWorkspaceService = keyof typeof GOOGLE_WORKSPACE_SERVICES;
 
 export interface DiscoverySchema {
   id?: string;
@@ -120,6 +105,7 @@ export interface GoogleServiceIndex {
 }
 
 export interface GoogleCallClassification {
+  baseClass: GoogleMethodClassification;
   methodClass: GoogleMethodClassification;
   classes: GoogleMethodClassification[];
   batchRequestKinds: { kind: string; class: GoogleMethodClassification }[];
@@ -178,11 +164,11 @@ const TRASH_LABEL_METHODS = new Set([
 ]);
 
 export function isGoogleWorkspaceService(value: string): value is GoogleWorkspaceService {
-  return Object.prototype.hasOwnProperty.call(GOOGLE_WORKSPACE_SERVICES, value);
+  return Object.prototype.hasOwnProperty.call(GOOGLE_WORKSPACE_API_VERSIONS, value);
 }
 
 export function googleDiscoveryUrls(service: GoogleWorkspaceService): string[] {
-  const version = GOOGLE_WORKSPACE_SERVICES[service];
+  const version = GOOGLE_WORKSPACE_API_VERSIONS[service];
   return [
     `https://www.googleapis.com/discovery/v1/apis/${service}/${version}/rest`,
     `https://${service}.googleapis.com/$discovery/rest?version=${version}`,
@@ -195,7 +181,7 @@ export function googleMethodService(methodId: string): GoogleWorkspaceService {
     throw new GoogleWorkspaceError(
       "validation",
       `Unknown Google Workspace service in method "${methodId}"`,
-      `Use a method id that starts with one of: ${Object.keys(GOOGLE_WORKSPACE_SERVICES).join(", ")}.`,
+      `Use a method id that starts with one of: ${Object.keys(GOOGLE_WORKSPACE_API_VERSIONS).join(", ")}.`,
       { pointer: "/method" },
     );
   }
@@ -352,7 +338,7 @@ export function classifyGoogleCall(index: GoogleServiceIndex, methodId: string, 
     classes.add("destructive");
   }
   const ordered = [...classes].sort((a, b) => CLASS_RANK[a] - CLASS_RANK[b]);
-  return { methodClass: highestGoogleMethodClass(ordered), classes: ordered, batchRequestKinds };
+  return { baseClass: entry.class, methodClass: highestGoogleMethodClass(ordered), classes: ordered, batchRequestKinds };
 }
 
 function words(value: string): string[] {
@@ -544,7 +530,7 @@ export function createGoogleDiscoveryIndex(options: GoogleDiscoveryIndexOptions 
           continue;
         }
         const doc = (await response.json()) as DiscoveryDocument;
-        if (doc.name !== service || doc.version !== GOOGLE_WORKSPACE_SERVICES[service]) {
+        if (doc.name !== service || doc.version !== GOOGLE_WORKSPACE_API_VERSIONS[service]) {
           failures.push(`${url}: unexpected document ${doc.name} ${doc.version}`);
           continue;
         }
@@ -587,7 +573,7 @@ export function createGoogleDiscoveryIndex(options: GoogleDiscoveryIndexOptions 
   return {
     service,
     async search(input: { query: string; service?: GoogleWorkspaceService; class?: GoogleMethodClassification; limit?: number }) {
-      const names = input.service ? [input.service] : (Object.keys(GOOGLE_WORKSPACE_SERVICES) as GoogleWorkspaceService[]);
+      const names = input.service ? [input.service] : (Object.keys(GOOGLE_WORKSPACE_API_VERSIONS) as GoogleWorkspaceService[]);
       const settled = await Promise.allSettled(names.map(service));
       const loaded = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
       if (loaded.length === 0) throw (settled[0] as PromiseRejectedResult).reason;

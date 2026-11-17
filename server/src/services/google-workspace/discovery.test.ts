@@ -1,25 +1,24 @@
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 
+import { GOOGLE_WORKSPACE_API_VERSIONS, type GoogleWorkspaceService } from "@tickernelz/wardmote-shared";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  GOOGLE_WORKSPACE_SERVICES,
   buildGoogleServiceIndex,
   classifyGoogleCall,
   createGoogleDiscoveryIndex,
   describeGoogleMethod,
   searchGoogleMethods,
   type DiscoveryDocument,
-  type GoogleWorkspaceService,
 } from "./discovery.js";
 import { GoogleWorkspaceError } from "./errors.js";
 import review from "./method-review.json" with { type: "json" };
 
-const SERVICES = Object.keys(GOOGLE_WORKSPACE_SERVICES) as GoogleWorkspaceService[];
+const SERVICES = Object.keys(GOOGLE_WORKSPACE_API_VERSIONS) as GoogleWorkspaceService[];
 
 function recorded(service: GoogleWorkspaceService): DiscoveryDocument {
-  const file = new URL(`./__fixtures__/discovery/${service}_${GOOGLE_WORKSPACE_SERVICES[service]}.json.gz`, import.meta.url);
+  const file = new URL(`./__fixtures__/discovery/${service}_${GOOGLE_WORKSPACE_API_VERSIONS[service]}.json.gz`, import.meta.url);
   return JSON.parse(gunzipSync(readFileSync(file)).toString("utf8")) as DiscoveryDocument;
 }
 

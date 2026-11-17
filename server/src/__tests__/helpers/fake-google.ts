@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 
-import { GOOGLE_WORKSPACE_SERVICES, type GoogleWorkspaceService } from "../../services/google-workspace/discovery.js";
+import { GOOGLE_WORKSPACE_API_VERSIONS, type GoogleWorkspaceService } from "@tickernelz/wardmote-shared";
 
 export interface FakeGoogleRequest {
   method: string;
@@ -13,7 +13,7 @@ export interface FakeGoogleRequest {
 type Handler = (request: FakeGoogleRequest, match: RegExpExecArray) => Response | Promise<Response>;
 
 export function recordedDiscovery(service: GoogleWorkspaceService): Record<string, unknown> {
-  const file = new URL(`../../services/google-workspace/__fixtures__/discovery/${service}_${GOOGLE_WORKSPACE_SERVICES[service]}.json.gz`, import.meta.url);
+  const file = new URL(`../../services/google-workspace/__fixtures__/discovery/${service}_${GOOGLE_WORKSPACE_API_VERSIONS[service]}.json.gz`, import.meta.url);
   return JSON.parse(gunzipSync(readFileSync(file)).toString("utf8")) as Record<string, unknown>;
 }
 
