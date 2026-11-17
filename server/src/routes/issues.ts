@@ -5428,9 +5428,13 @@ export function issueRoutes(
     issue: { identifier?: string | null; assigneeAgentId: string | null },
     code: IssueWriteDenialCode,
     extraDetails: Record<string, unknown> = {},
+    extraContext: IssueWriteDenialContext = {},
   ) {
     const labels = await issueWriteDenialLabels(req, issue);
-    const { status, body } = issueWriteDenialResponse(code, labels);
+    const { status, body } = issueWriteDenialResponse(code, {
+      ...labels,
+      ...extraContext,
+    });
     res.status(status).json({
       error: body.error,
       details: { ...body.details, ...extraDetails },
@@ -5883,6 +5887,23 @@ export function issueRoutes(
     return decision.allowed;
   }
 
+  async function liveAssigneeCheckoutRun(issue: {
+    companyId: string;
+    assigneeAgentId: string | null;
+    checkoutRunId: string | null;
+  }) {
+    if (!issue.checkoutRunId || !issue.assigneeAgentId) return null;
+    const run = await heartbeat.getRun(issue.checkoutRunId);
+    if (
+      !run ||
+      run.status !== "running" ||
+      run.companyId !== issue.companyId ||
+      run.agentId !== issue.assigneeAgentId
+    )
+      return null;
+    return run;
+  }
+
   async function assertAgentIssueMutationAllowed(
     req: Request,
     res: Response,
@@ -5897,8 +5918,9 @@ export function issueRoutes(
       reviewPolicy?: IssueReviewPolicy | null;
       /** Used only to name the task in denial copy (plan §6). */
       identifier?: string | null;
+      checkoutRunId: string | null;
     },
-    options: { allowVisibleIssueWrite?: boolean } = {},
+    options: { allowVisibleIssueWrite?: boolean; additive?: boolean } = {},
   ) {
     if (!(await assertIssueReadAllowed(req, res, issue))) return false;
     if (req.actor.type !== "agent" || isCompanyOwnerAgentActor(req)) return true;
@@ -5964,9 +5986,17 @@ export function issueRoutes(
       ) {
         return true;
       }
-      if (issue.status === "in_progress") {
-        // Run/checkout ownership stays assignee-scoped even though writes are
-        // open, so this lock clears on its own — the copy routes to comments.
+      if (options.additive) {
+        return assertCrossIssueInfluenceWithinRunCap(
+          req,
+          res,
+          issue,
+          "artifact",
+        );
+      }
+      const liveRun = await liveAssigneeCheckoutRun(issue);
+      if (liveRun) {
+        const runStartedAt = liveRun.startedAt?.toISOString() ?? null;
         return denyIssueWrite(
           req,
           res,
@@ -5976,11 +6006,12 @@ export function issueRoutes(
             issueId: issue.id,
             assigneeAgentId: issue.assigneeAgentId,
             actorAgentId,
+            checkoutRunId: liveRun.id,
+            checkoutRunStartedAt: runStartedAt,
           },
+          { checkoutRunId: liveRun.id, checkoutRunStartedAt: runStartedAt },
         );
       }
-      // Past the run lock the issue is idle, so only channels that have not
-      // adopted the default-open rule still refuse another agent's issue.
       if (!options.allowVisibleIssueWrite) {
         res.status(403).json({
           error: "Agent cannot mutate another agent's issue",
@@ -6005,6 +6036,13 @@ export function issueRoutes(
     }
     const runId = requireAgentRunId(req, res);
     if (!runId) return false;
+    if (
+      options.additive &&
+      issue.checkoutRunId !== runId &&
+      (await liveAssigneeCheckoutRun(issue))
+    ) {
+      return assertCrossIssueInfluenceWithinRunCap(req, res, issue, "artifact");
+    }
     const ownership = await svc.assertCheckoutOwner(
       issue.id,
       actorAgentId,
@@ -11106,7 +11144,7 @@ export function issueRoutes(
         "Issue not found",
       );
       if (!issue) return;
-      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue, { additive: true }))) return;
       await assertExternalObjectsEnabled();
       const actor = getActorInfo(req);
       const results = await externalObjectsSvc.refreshIssueObjects(issue.id, {
@@ -11279,7 +11317,7 @@ export function issueRoutes(
       if (!issue) return;
       if (
         !(await assertAgentIssueMutationAllowed(req, res, issue, {
-          allowVisibleIssueWrite: true,
+          additive: true,
         }))
       )
         return;
@@ -11400,7 +11438,7 @@ export function issueRoutes(
         "Issue not found",
       );
       if (!issue) return;
-      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue, { additive: true }))) return;
       const keyParsed = issueDocumentKeySchema.safeParse(
         String(req.params.key ?? "")
           .trim()
@@ -11478,7 +11516,7 @@ export function issueRoutes(
         "Issue not found",
       );
       if (!issue) return;
-      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue, { additive: true }))) return;
       const keyParsed = issueDocumentKeySchema.safeParse(
         String(req.params.key ?? "")
           .trim()
@@ -11536,7 +11574,7 @@ export function issueRoutes(
         "Issue not found",
       );
       if (!issue) return;
-      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue, { additive: true }))) return;
       if (
         !(await assertDeliverableMutationAllowedByRunContext(req, res, issue))
       )
@@ -11847,7 +11885,7 @@ export function issueRoutes(
         "Issue not found",
       );
       if (!issue) return;
-      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue, { additive: true }))) return;
       if (
         !(await assertDeliverableMutationAllowedByRunContext(req, res, issue))
       )
@@ -12106,7 +12144,7 @@ export function issueRoutes(
         "Issue not found",
       );
       if (!issue) return;
-      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue, { additive: true }))) return;
       if (
         !(await assertDeliverableMutationAllowedByRunContext(req, res, issue))
       )
@@ -12322,7 +12360,7 @@ export function issueRoutes(
         "Issue not found",
       );
       if (!issue) return;
-      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue, { additive: true }))) return;
       if (
         !(await assertDeliverableMutationAllowedByRunContext(req, res, issue))
       )
@@ -12536,7 +12574,7 @@ export function issueRoutes(
         res.status(404).json({ error: "Issue not found" });
         return;
       }
-      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue, { additive: true }))) return;
       if (
         !(await assertDeliverableMutationAllowedByRunContext(req, res, issue))
       )
@@ -18620,7 +18658,7 @@ export function issueRoutes(
       if (req.actor.type === "agent") {
         if (
           !(await assertAgentIssueMutationAllowed(req, res, issue, {
-            allowVisibleIssueWrite: true,
+            additive: true,
           }))
         )
           return;
@@ -21536,7 +21574,7 @@ export function issueRoutes(
       if (issue.conversationAgentId && req.actor.type === "board" && req.actor.userId !== issue.conversationUserId) {
         throw forbidden("Only the conversation owner can upload attachments");
       }
-      if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+      if (!(await assertAgentIssueMutationAllowed(req, res, issue, { additive: true }))) return;
       if (
         !(await assertDeliverableMutationAllowedByRunContext(req, res, issue))
       )

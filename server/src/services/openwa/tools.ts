@@ -33,6 +33,7 @@ import { HttpError, forbidden } from "../../errors.js";
 import { logger } from "../../middleware/logger.js";
 import { getStorageService } from "../../storage/index.js";
 import type { StorageService } from "../../storage/types.js";
+import { canActorReadIssuePrivacy } from "../authorization.js";
 import { instanceSettingsService } from "../instance-settings.js";
 import { claimOpenwaCompletionReport, isOpenwaCompletionTurn, openwaCompletionOwedToOwner, settleOpenwaCompletionReport } from "../chat-completion-delivery.js";
 import { openwaOwnerFacingChat, registerOpenwaGroupGateway } from "./owner-group.js";
@@ -329,7 +330,7 @@ export interface ToolContext {
   endpoint: EndpointRow;
   conversation: ConversationRow;
   policy: OpenwaEndpointPolicy;
-  run: { id: string; companyId: string; contextSnapshot: Record<string, unknown>; visibleBefore: Date };
+  run: { id: string; companyId: string; contextSnapshot: Record<string, unknown>; visibleBefore: Date; responsibleUserId: string | null };
   openwa: OpenwaRunContext | null;
   senderClass: OpenwaSenderClass;
   runClass: OpenwaTriggerClass | null;
@@ -355,6 +356,7 @@ async function resolveContext(db: Db, binding: OpenwaToolBinding): Promise<ToolC
       contextSnapshot: heartbeatRuns.contextSnapshot,
       startedAt: heartbeatRuns.startedAt,
       createdAt: heartbeatRuns.createdAt,
+      responsibleUserId: heartbeatRuns.responsibleUserId,
     })
     .from(heartbeatRuns)
     .where(and(eq(heartbeatRuns.id, binding.runId), eq(heartbeatRuns.companyId, binding.companyId), eq(heartbeatRuns.agentId, binding.agentId)))
@@ -378,7 +380,13 @@ async function resolveContext(db: Db, binding: OpenwaToolBinding): Promise<ToolC
   const thread = parseOpenwaThreadId(conversation.externalThreadId || conversation.externalConversationId);
   const sessionId = (endpoint.providerAccountId ?? "").slice((endpoint.providerAccountId ?? "").lastIndexOf("#") + 1);
   if (thread.sessionId !== sessionId) throw forbidden("The conversation belongs to another OpenWA session");
-  const runRecord = { id: run.id, companyId: run.companyId, contextSnapshot: snapshot, visibleBefore: run.startedAt ?? run.createdAt };
+  const runRecord = {
+    id: run.id,
+    companyId: run.companyId,
+    contextSnapshot: snapshot,
+    visibleBefore: run.startedAt ?? run.createdAt,
+    responsibleUserId: run.responsibleUserId,
+  };
   const runClass: OpenwaTriggerClass | null = found.conversationIssueId === binding.issueId ? (openwa?.triggerClass ?? "other") : null;
   const senderClass: OpenwaSenderClass = openwa?.senderClass ?? (runClass === null ? "owner" : "non_owner");
   const completion = runClass !== null && (await isOpenwaCompletionTurn(db, { companyId: binding.companyId, runId: run.id, issueId: binding.issueId }));
@@ -789,14 +797,26 @@ async function attachmentIssueSendable(ctx: ToolContext, issueId: string): Promi
   if (issueId === ctx.binding.issueId || issueId === ctx.conversation.issueId) return true;
   const companyId = ctx.endpoint.companyId;
   const [issue] = await ctx.db
-    .select({ visibility: issues.visibility })
+    .select({
+      id: issues.id,
+      companyId: issues.companyId,
+      visibility: issues.visibility,
+      privacyRootIssueId: issues.privacyRootIssueId,
+      responsibleUserId: issues.responsibleUserId,
+      createdByUserId: issues.createdByUserId,
+      assigneeUserId: issues.assigneeUserId,
+      assigneeAgentId: issues.assigneeAgentId,
+      projectId: issues.projectId,
+    })
     .from(issues)
     .where(and(eq(issues.companyId, companyId), eq(issues.id, issueId)))
     .limit(1);
   if (!issue || issue.visibility === "private") return false;
   if (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: ctx.conversation.issueId, issueKey: issueId })) return true;
   const windowRoot = await openwaLiveWindowRoot(ctx.db, companyId, ctx.conversation.issueId);
-  return windowRoot !== null && (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: windowRoot, issueKey: issueId }));
+  if (windowRoot !== null && (await isOpenwaConversationTreeIssue(ctx.db, { companyId, rootIssueId: windowRoot, issueKey: issueId }))) return true;
+  if (ctx.senderClass !== "owner") return false;
+  return canActorReadIssuePrivacy(ctx.db, { type: "agent", agentId: ctx.binding.agentId, companyId, onBehalfOfUserId: ctx.run.responsibleUserId }, issue);
 }
 
 async function attachmentBase64(ctx: ToolContext, attachmentId: string, storage: StorageService | undefined) {
@@ -807,7 +827,7 @@ async function attachmentBase64(ctx: ToolContext, attachmentId: string, storage:
     .where(and(eq(issueAttachments.id, attachmentId), eq(issueAttachments.companyId, ctx.endpoint.companyId)))
     .limit(1);
   if (!row || row.asset.byteSize > getMaxAttachmentBytes() || !(await attachmentIssueSendable(ctx, row.issueId)))
-    throw new OpenwaToolError(422, "attachment_unavailable", "Media must be an attachment of this chat's task tree, or of a live autonomy window's tree, within the attachment size limit");
+    throw new OpenwaToolError(422, "attachment_unavailable", "Media must be an attachment of this chat's task tree or of a live autonomy window's tree (in an owner's run: of any non-private task the agent may read), within the attachment size limit");
   const stored = await (storage ?? getStorageService()).getObject(ctx.endpoint.companyId, row.asset.objectKey);
   const chunks: Buffer[] = [];
   let total = 0;
