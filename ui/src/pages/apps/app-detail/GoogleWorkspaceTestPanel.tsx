@@ -61,7 +61,7 @@ export function GoogleWorkspaceTestPanel({ connection }: { connection: ToolConne
           <h2 id={`${id}-title`} className="text-lg font-semibold">Test Google Workspace</h2>
           <p className="text-sm text-ink-3">One cheap read per service that is turned on, plus a dry-run of a write to show what the policy does.</p>
         </div>
-        <Button variant={test.data ? "secondary" : "default"} disabled={test.isPending || connection.status !== "active"} onClick={() => test.mutate()}>
+        <Button variant={test.data ? "secondary" : "primary"} disabled={test.isPending || connection.status !== "active"} onClick={() => test.mutate()}>
           {test.isPending ? "Testing…" : test.data ? "Test again" : "Run test"}
         </Button>
       </div>
