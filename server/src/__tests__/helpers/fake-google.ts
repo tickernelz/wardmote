@@ -201,7 +201,8 @@ export function createFakeGoogle(options: { pageSize?: number } = {}) {
     ["GET", /^https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile$/, () => json({ emailAddress: "owner@example.com" })],
     ["GET", /^https:\/\/tasks\.googleapis\.com\/tasks\/v1\/users\/@me\/lists$/, () => json({ items: [] })],
     ["GET", /^https:\/\/chat\.googleapis\.com\/v1\/spaces$/, () => json({ spaces: [] })],
-    ["GET", /^https:\/\/people\.googleapis\.com\/v1\/people\/me$/, () => json({ resourceName: "people/me" })],
+    ["GET", /^https:\/\/meet\.googleapis\.com\/v2\/conferenceRecords$/, () => json({})],
+    ["GET", /^https:\/\/people\.googleapis\.com\/v1\/people\/me\/connections$/, () => json({ connections: [], totalItems: 0 })],
     ["POST", /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/([^/?]+)\/permissions$/, (request, m) => {
       const file = requireFile(m[1]);
       if (!file) return googleError(404, "notFound");
