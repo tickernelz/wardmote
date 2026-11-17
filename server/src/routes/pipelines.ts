@@ -706,25 +706,25 @@ async function assertIssueLinkMutationAllowed(
   const actorAgentId = req.actor.agentId;
   if (!actorAgentId) throw forbidden("Agent authentication required");
   if (input.issue.assigneeAgentId === null) return;
-  if (input.issue.assigneeAgentId !== actorAgentId) {
-    if (input.additive) {
-      const runId = req.actor.runId?.trim();
-      if (!runId) throw crossIssueInfluenceRunContextError();
-      const decision = await observeCrossIssueInfluence(input.db, {
-        companyId: input.issue.companyId,
-        runId,
-        agentId: actorAgentId,
-        responsibleUserId: req.actor.onBehalfOfUserId ?? null,
-        targetIssueId: input.issue.id,
-        targetIssueIdentifier: input.issue.identifier,
-        kind: "artifact",
-      });
-      if (decision && !decision.allowed) {
-        const body = crossIssueInfluenceLimitError(decision, { issueIdentifier: input.issue.identifier });
-        throw new HttpError(429, body.error, body.details);
-      }
-      return;
+  const observeAdditiveLink = async () => {
+    const runId = req.actor.runId?.trim();
+    if (!runId) throw crossIssueInfluenceRunContextError();
+    const decision = await observeCrossIssueInfluence(input.db, {
+      companyId: input.issue.companyId,
+      runId,
+      agentId: actorAgentId,
+      responsibleUserId: req.actor.onBehalfOfUserId ?? null,
+      targetIssueId: input.issue.id,
+      targetIssueIdentifier: input.issue.identifier,
+      kind: "artifact",
+    });
+    if (decision && !decision.allowed) {
+      const body = crossIssueInfluenceLimitError(decision, { issueIdentifier: input.issue.identifier });
+      throw new HttpError(429, body.error, body.details);
     }
+  };
+  if (input.issue.assigneeAgentId !== actorAgentId) {
+    if (input.additive) return observeAdditiveLink();
     const liveRun = await liveAssigneeCheckoutRun(input.db, input.issue);
     if (liveRun) {
       throw conflict(
@@ -743,6 +743,9 @@ async function assertIssueLinkMutationAllowed(
   if (input.issue.status !== "in_progress") return;
   const runId = req.actor.runId?.trim();
   if (!runId) throw unauthorized("Agent run id required");
+  if (input.additive && input.issue.checkoutRunId !== runId && (await liveAssigneeCheckoutRun(input.db, input.issue))) {
+    return observeAdditiveLink();
+  }
   await input.issuesSvc.assertCheckoutOwner(input.issue.id, actorAgentId, runId);
 }
 
