@@ -10484,7 +10484,8 @@ export function createToolGatewayService(
         const retryingSlackRateLimit = recorded.replayed && accessDecision.allowed && tool.providerType === "wardmote_slack_chat" && session.agentId && session.runId && session.issueId
           ? await claimSlackRateLimitRetry(db, { companyId: session.companyId, agentId: session.agentId, runId: session.runId, issueId: session.issueId, endpointId: String(asRecord(tool.providerMetadata)?.endpointId ?? ""), identityContextId: session.identityContextId }, invocationId)
           : false;
-        if (recorded.replayed && !retryingSlackRateLimit && REPLAYED_FAILURE_STATUSES.has(recorded.invocation.status)) {
+        const slackSettlesOwnFailures = tool.providerType === "wardmote_slack_chat";
+        if (recorded.replayed && !retryingSlackRateLimit && !slackSettlesOwnFailures && REPLAYED_FAILURE_STATUSES.has(recorded.invocation.status)) {
           throw new ToolGatewayHttpError(
             409,
             `This identical call already ended as ${recorded.invocation.status} in this run and is not sent again: ${recorded.invocation.errorMessage ?? "no message"}`,
