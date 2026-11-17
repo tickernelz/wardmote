@@ -14,8 +14,16 @@ import {
   type GoogleMethodClassification,
 } from "./discovery.js";
 import { GoogleWorkspaceError } from "./errors.js";
-import { executeGoogleCall, planGoogleCall, type GoogleCallContext, type GoogleCallInput } from "./executor.js";
-import { decideGoogleCall, googlePolicyVerdict, type GoogleFileLocation, type GooglePolicyDecision } from "./policy.js";
+import { executeGoogleCall, planGoogleCall, type GoogleCallContext, type GoogleCallInput, type GoogleCallPlan } from "./executor.js";
+import {
+  createGoogleLocationCache,
+  decideGoogleCall,
+  googlePolicyVerdict,
+  type GoogleFileLocation,
+  type GoogleMailSource,
+  type GooglePolicyDecision,
+  type GooglePolicyDependencies,
+} from "./policy.js";
 
 export function isGoogleWorkspaceConnection(connection: { transport: string; config?: Record<string, unknown> }): boolean {
   return connection.transport === "rest_api" && connection.config?.sourceTemplateKey === "google-workspace";
@@ -38,6 +46,7 @@ export function googleDiscovery(): GoogleDiscoveryIndex {
 }
 
 export interface GoogleWorkspaceToolRuntime {
+  connectionId?: string;
   discovery: GoogleDiscoveryIndex;
   settings: GoogleWorkspaceSettings;
   grantedScopes: string[];
@@ -50,6 +59,9 @@ export interface GoogleWorkspaceToolRuntime {
 const TOOL_NAMES = new Set<string>(GOOGLE_WORKSPACE_TOOL_NAMES);
 const EMAIL = /^[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const TIER_RANK: Record<GoogleWorkspaceTier, number> = { off: 0, read: 1, edit: 2, create: 3, delete_share: 4 };
+const LOCATION_CACHE_CONNECTIONS = 200;
+const MAIL_HEADER_BYTES = 64 * 1024;
+const UPLOADED_MAIL_MAX_BYTES = 36 * 1024 * 1024;
 
 export function isGoogleWorkspaceToolName(name: string): boolean {
   return TOOL_NAMES.has(name);
@@ -211,12 +223,53 @@ function locator(runtime: GoogleWorkspaceToolRuntime) {
   };
 }
 
+type GoogleLocationCache = ReturnType<typeof createGoogleLocationCache>;
+const locationCaches = new Map<string, { cache: GoogleLocationCache; load: (fileId: string) => Promise<GoogleFileLocation | null> }>();
+
+function locationCache(runtime: GoogleWorkspaceToolRuntime): GoogleLocationCache {
+  const load = locator(runtime);
+  if (!runtime.connectionId) return createGoogleLocationCache(load);
+  let entry = locationCaches.get(runtime.connectionId);
+  if (!entry) {
+    if (locationCaches.size >= LOCATION_CACHE_CONNECTIONS) locationCaches.delete(locationCaches.keys().next().value as string);
+    const created: { cache: GoogleLocationCache; load: typeof load } = { load, cache: createGoogleLocationCache((fileId) => created.load(fileId)) };
+    entry = created;
+    locationCaches.set(runtime.connectionId, entry);
+  }
+  entry.load = load;
+  return entry.cache;
+}
+
+function mailHeaders(runtime: GoogleWorkspaceToolRuntime) {
+  return async (source: GoogleMailSource): Promise<string | null> => {
+    if ("attachmentId" in source) {
+      const file = await runtime.attachments.read(source.attachmentId, UPLOADED_MAIL_MAX_BYTES);
+      return new TextDecoder().decode(file.bytes.subarray(0, MAIL_HEADER_BYTES));
+    }
+    const result = await executeGoogleCall(
+      { ...runtime, policy: async () => ({ allowed: true }) },
+      { method: "gmail.users.drafts.get", params: { userId: "me", id: source.draftId, format: "metadata" } },
+    );
+    const headers = record(record(record(result.data).message).payload).headers;
+    if (!Array.isArray(headers)) return null;
+    return headers
+      .map(record)
+      .filter((header) => typeof header.name === "string" && /^(to|cc|bcc)$/i.test(header.name))
+      .map((header) => `${String(header.name)}: ${String(header.value)}`)
+      .join("\r\n");
+  };
+}
+
+function policyDependencies(runtime: GoogleWorkspaceToolRuntime, cache: GoogleLocationCache): GooglePolicyDependencies {
+  return { grantedScopes: runtime.grantedScopes, locate: cache.locate, mailHeaders: mailHeaders(runtime) };
+}
+
 export async function decideGoogleWorkspaceTool(runtime: GoogleWorkspaceToolRuntime, toolName: string, args: unknown): Promise<GooglePolicyDecision | null> {
   if (toolName === "google_search_methods" || toolName === "google_describe") return null;
   const input = googleToolCallInput(toolName, args);
   if (input.dryRun) return null;
   const { plan } = await planGoogleCall(runtime.discovery, input);
-  return decideGoogleCall(plan, runtime.settings, { grantedScopes: runtime.grantedScopes, locate: locator(runtime) });
+  return decideGoogleCall(plan, runtime.settings, policyDependencies(runtime, locationCache(runtime)));
 }
 
 export async function runGoogleWorkspaceTool(runtime: GoogleWorkspaceToolRuntime, toolName: string, rawArgs: unknown, options: { approved: boolean }): Promise<unknown> {
@@ -226,13 +279,16 @@ export async function runGoogleWorkspaceTool(runtime: GoogleWorkspaceToolRuntime
     if (service !== undefined && !isGoogleWorkspaceService(service)) {
       throw new GoogleWorkspaceError("validation", `Unknown service "${service}"`, "Omit service or use one of the listed services.", { pointer: "/service" });
     }
-    const hits = await runtime.discovery.search({
+    const { methods, unavailableServices } = await runtime.discovery.search({
       query: text(args, "query") as string,
       service: service as GoogleWorkspaceService | undefined,
       class: text(args, "class", false) as GoogleMethodClassification | undefined,
       limit: typeof args.limit === "number" ? args.limit : undefined,
     });
-    return { hits: hits.map((hit) => ({ ...hit, policy: previewAction(runtime.settings, hit.id.split(".")[0], hit.class) })) };
+    return {
+      hits: methods.map((hit) => ({ ...hit, policy: previewAction(runtime.settings, hit.id.split(".")[0], hit.class) })),
+      ...(unavailableServices.length > 0 ? { unavailableServices } : {}),
+    };
   }
   if (toolName === "google_describe") {
     return runtime.discovery.describe(text(args, "method") as string, {
@@ -240,12 +296,19 @@ export async function runGoogleWorkspaceTool(runtime: GoogleWorkspaceToolRuntime
       depth: typeof args.depth === "number" ? args.depth : undefined,
     });
   }
-  const locate = locator(runtime);
-  return executeGoogleCall(
+  const cache = locationCache(runtime);
+  const dependencies = policyDependencies(runtime, cache);
+  let planned: GoogleCallPlan | null = null;
+  const result = await executeGoogleCall(
     {
       ...runtime,
-      policy: async (plan) => googlePolicyVerdict(await decideGoogleCall(plan, runtime.settings, { grantedScopes: runtime.grantedScopes, locate }), options),
+      policy: async (plan) => {
+        planned = plan;
+        return googlePolicyVerdict(await decideGoogleCall(plan, runtime.settings, dependencies), options);
+      },
     },
     googleToolCallInput(toolName, args),
   );
+  if (planned) cache.forget(planned);
+  return result;
 }

@@ -117,6 +117,43 @@ describe("helpers", () => {
     expect(writable.hits[0].policy).toBe("allow");
   });
 
+  it("reads a draft's recipients from Gmail before asking to send it", async () => {
+    const { google, runtime } = setup();
+    google.queue(
+      new Response(JSON.stringify({ id: "d1", message: { payload: { headers: [{ name: "To", value: "Ann <a@example.com>" }, { name: "Cc", value: "g@other.org" }] } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const decision = await decideGoogleWorkspaceTool(runtime, "google_call", { method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "d1" } });
+    expect(decision?.reasons).not.toContain("the recipients could not be read");
+    expect(decision).toMatchObject({ action: "require_approval", externalRecipients: ["g@other.org"], recipientsUnknown: false });
+    const sent = google.requests.at(-1)?.url ?? "";
+    expect(sent).toContain("/gmail/v1/users/me/drafts/d1");
+    expect(sent).toContain("format=metadata");
+  });
+
+  it("reuses file locations across calls on the same connection", async () => {
+    const { google, runtime } = setup({ scope: { driveFolderIds: ["F1"] } });
+    const folder = google.addFile("sub", "application/vnd.google-apps.folder");
+    const file = google.addFile("a.txt");
+    google.files.get(folder.id)!.parents = ["F1"];
+    google.files.get(file.id)!.parents = [folder.id];
+    const shared = { ...runtime, connectionId: "conn-zha6620-cache" };
+    expect((await decideGoogleWorkspaceTool(shared, "google_call", { method: "drive.files.get", params: { fileId: file.id } }))?.action).toBe("allow");
+    const first = google.requests.length;
+    expect((await decideGoogleWorkspaceTool(shared, "google_call", { method: "drive.files.get", params: { fileId: file.id } }))?.action).toBe("allow");
+    expect(google.requests.length).toBe(first);
+  });
+
+  it("names the services whose Discovery failed in search results", async () => {
+    const { google, runtime } = setup();
+    const failing = { ...runtime, discovery: createGoogleDiscoveryIndex({ fetch: (async (url: string | URL | Request, init?: RequestInit) => (String(url).includes("/sheets/") ? google.fetch(url, init) : new Response("{}", { status: 503 }))) as typeof fetch }) };
+    const result = (await runGoogleWorkspaceTool(failing, "google_search_methods", { query: "append values" }, { approved: false })) as { hits: { id: string }[]; unavailableServices?: string[] };
+    expect(result.hits[0].id).toBe("sheets.spreadsheets.values.append");
+    expect(result.unavailableServices).toContain("drive");
+  });
+
   it("skips the approval decision for dry-runs and discovery tools", async () => {
     const { runtime } = setup();
     expect(await decideGoogleWorkspaceTool(runtime, "google_call", { method: "drive.files.delete", params: { fileId: "f" }, dryRun: true })).toBeNull();

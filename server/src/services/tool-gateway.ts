@@ -5712,6 +5712,7 @@ export function createToolGatewayService(
     const googleFetch = remote ? ((input: string | URL | Request, init?: RequestInit) => remote(String(input instanceof Request ? input.url : input), init ?? {})) as typeof fetch : undefined;
     gatewayGoogleDiscovery ??= googleFetch ? createGoogleDiscoveryIndex({ fetch: googleFetch }) : googleDiscovery();
     return {
+      connectionId: connection.id,
       discovery: gatewayGoogleDiscovery,
       fetch: googleFetch,
       settings: googleWorkspaceSettings(connection),
