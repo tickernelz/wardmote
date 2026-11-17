@@ -38,8 +38,8 @@ export type IssueWriteDenialCode = (typeof ISSUE_WRITE_DENIAL_CODES)[number];
 
 /**
  * Why the write stopped, which drives icon + colour. `boundary` is an
- * authorization wall, `lock` is run-lifecycle machinery that will clear on its
- * own, `cap` is a rate backstop, and `attribution` is a rejected spoof.
+ * authorization wall, `lock` is the assignee's live checkout run, `cap` is a
+ * rate backstop, and `attribution` is a rejected spoof.
  */
 export type IssueWriteDenialTone = "boundary" | "lock" | "cap" | "attribution";
 
@@ -75,6 +75,8 @@ export interface IssueWriteDenialContext {
   count?: number | null;
   /** ISO timestamp at which log-only rollout becomes enforcement. */
   enforceAt?: string | null;
+  checkoutRunId?: string | null;
+  checkoutRunStartedAt?: string | null;
 }
 
 export function isIssueWriteDenialCode(
@@ -203,23 +205,27 @@ export function describeIssueWriteDenial(
       };
     }
 
-    case "issue_write_assignee_run_lock":
+    case "issue_write_assignee_run_lock": {
+      const run = context.checkoutRunId?.trim() ? `run ${context.checkoutRunId.trim()}` : "a run";
+      const since = context.checkoutRunStartedAt?.trim() ? ` since ${context.checkoutRunStartedAt.trim()}` : "";
       return {
         code,
         status: 409,
         tone: "lock",
         boundary: "Run checkout lock",
-        title: "Another agent's run owns this task",
+        title: "Another agent's live run owns this task",
         description:
-          `${assignee} has ${issue} checked out and a run is live. Checkout and run ` +
-          `ownership stay assignee-scoped even though writes are open, so field edits ` +
-          `belong to the run that holds the lock until it finishes.`,
+          `${assignee}'s ${run} has held the checkout of ${issue}${since} and is still running. ` +
+          `Changes to the task's fields, status, or assignee and deletes are refused while it runs, ` +
+          `so that run does not overwrite them. Attachments, documents, work products, and ` +
+          `interaction cards stay open.`,
         whoCanAct:
           `${assignee}'s live run, or an agent holding the manage-active-checkouts permission.`,
         sanctionedPath:
-          `Comment instead of patching — comments stay open and wake ${assignee} — or ` +
-          `wait for the run to release the lock and retry.`,
+          `Comment instead of patching — comments stay open and wake ${assignee}. ` +
+          `Retry the change after ${run} has ended.`,
       };
+    }
 
     case "cross_issue_influence_cap_exceeded": {
       const cap = context.cap ?? 20;
