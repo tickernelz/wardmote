@@ -188,7 +188,7 @@ export interface OpenwaReceiverOptions {
   beforeCatchUp?(): Promise<void>;
   live?(): Promise<void>;
   commitCursor?(cursor: OpenwaIngestCursor): Promise<void>;
-  sessionStatus?(status: string, source: OpenwaSessionStatusSource): Promise<void>;
+  sessionStatus?(status: string, source: OpenwaSessionStatusSource, phone: string | null): Promise<void>;
   sessionReconcileIntervalMs?: number;
 }
 
@@ -279,6 +279,7 @@ export class OpenwaReceiver {
   private commitTimer?: ReturnType<typeof setInterval>;
   private reconcileTimer?: ReturnType<typeof setInterval>;
   private sessionStatus: string | null = null;
+  private sessionPhone: string | null = null;
   private readonly now: () => number;
 
   constructor(private readonly options: OpenwaReceiverOptions) {
@@ -487,19 +488,23 @@ export class OpenwaReceiver {
     if (!apply || this.stopped) return;
     const epoch = this.epoch;
     let status: string | null;
+    let phone: string | null;
     try {
       const result = await this.options.gateway.call("SessionController_findOne", {}, { timeoutMs: SESSION_STATUS_TIMEOUT_MS });
       this.stats.sessionStatusReads++;
-      status = result.kind === "json" ? stringField(record(result.data) ?? {}, "status") : null;
+      const session = result.kind === "json" ? (record(result.data) ?? {}) : {};
+      status = stringField(session, "status");
+      phone = status === "ready" ? stringField(session, "phone") : null;
       if (!status) throw new OpenwaReceiverError("protocol", "OpenWA returned no session status", false);
-      if (this.stopped || epoch !== this.epoch || (source === "reconcile" && status === this.sessionStatus)) return;
-      await apply(status, source);
+      if (this.stopped || epoch !== this.epoch || (source === "reconcile" && status === this.sessionStatus && (phone === null || phone === this.sessionPhone))) return;
+      await apply(status, source, phone);
     } catch {
       this.stats.sessionStatusErrors++;
       this.sessionStatus = null;
       return;
     }
     this.sessionStatus = status;
+    if (phone !== null) this.sessionPhone = phone;
     this.stats.sessionStatusApplied++;
   }
 
@@ -516,7 +521,11 @@ export class OpenwaReceiver {
     if (message && this.sessionStatus !== null && this.sessionStatus !== "ready") await this.reconcileSession("reconcile");
     await this.options.admit(event, key);
     this.stats.processed++;
-    if (event.event === "session.status") this.sessionStatus = stringField(event.data, "status") ?? this.sessionStatus;
+    if (event.event === "session.status") {
+      const previous = this.sessionStatus;
+      this.sessionStatus = stringField(event.data, "status") ?? this.sessionStatus;
+      if (this.sessionStatus === "ready" && previous !== "ready") await this.reconcileSession("reconcile");
+    }
     if (!key) return;
     if (seenKey) remember(this.seen, seenKey);
     const timestamp = epochSeconds(event.data.timestamp);
@@ -711,6 +720,8 @@ export function normalizeOpenwaInbound(
   const quotedSource = record(data.quotedMessage) ?? record(data.quotedMsg);
   const quotedId = quotedSource ? (stringField(quotedSource, "id") ?? stringField(quotedSource, "messageId")) : null;
   const mediaSource = record(data.media);
+  if (stringField(data, "type") === "unknown" && !body.trim() && !stringField(mediaSource ?? {}, "mimetype") && !record(data.location) && !record(data.contact))
+    return null;
   const timestamp = epochSeconds(data.timestamp);
   if (timestamp === null) return null;
   return {

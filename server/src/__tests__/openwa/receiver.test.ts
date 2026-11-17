@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createOpenwaGatewayClient } from "../../services/openwa/gateway.js";
 import {
   createOpenwaEventSocket,
+  normalizeOpenwaInbound,
   OpenwaReceiver,
   type OpenwaIngressEvent,
 } from "../../services/openwa/receiver.js";
@@ -245,5 +246,23 @@ describe("OpenWA receiver", () => {
     await until(() => failures.length === 1);
     expect((failures[0] as { code?: string; fatal?: boolean }).code).toBe("credentials");
     expect((failures[0] as { fatal?: boolean }).fatal).toBe(true);
+  });
+});
+
+describe("normalizeOpenwaInbound protocol messages", () => {
+  const event = (data: Record<string, unknown>): OpenwaIngressEvent => ({
+    event: "message.received",
+    sessionId: SESSION_ID,
+    source: "live",
+    data: { chatId: "120363000000000901@g.us", from: "120363000000000901@g.us", author: "628444000901@c.us", timestamp: 1_790_000_000, id: "false_120363000000000901@g.us_3EB0AA_628444000901@c.us", ...data },
+  });
+
+  it("drops an empty unknown-type message that only carries protocol data, such as the history bundle sent when a member joins", () => {
+    expect(normalizeOpenwaInbound(event({ type: "unknown", body: "", media: { data: "eJzs" } }), "628111000901@c.us", "k", false)).toBeNull();
+  });
+
+  it("keeps unknown-type messages that carry text and real media", () => {
+    expect(normalizeOpenwaInbound(event({ type: "unknown", body: "halo" }), "628111000901@c.us", "k", false)?.body).toBe("halo");
+    expect(normalizeOpenwaInbound(event({ type: "image", body: "", media: { data: "eJzs", mimetype: "image/jpeg" } }), "628111000901@c.us", "k", false)?.media?.mimetype).toBe("image/jpeg");
   });
 });

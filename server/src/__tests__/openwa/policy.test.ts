@@ -27,6 +27,8 @@ function snapshot(policy: Record<string, unknown> = {}, chats: Array<[string, Pa
     agentDigits: AGENT,
     agentJid: AGENT + "@c.us",
     agentLids: new Set(),
+    formerAgentDigits: new Set(),
+    formerAgentLids: new Map(),
     owners: [owner],
     ownerByJid: new Map([
       [OWNER + "@c.us", owner],

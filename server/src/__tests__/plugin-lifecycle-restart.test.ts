@@ -127,3 +127,32 @@ describe("pluginLifecycleManager.restartWorker", () => {
     expect(started).toHaveBeenCalledWith({ pluginId: "plugin-1", pluginKey: "example.plugin" });
   });
 });
+
+describe("pluginLifecycleManager.enable activation failure", () => {
+  it("rejects with an authored 422 that hides the loader error", async () => {
+    mockRegistry.getById.mockResolvedValue({ ...pluginRecord, status: "disabled" });
+    mockRegistry.updateStatus.mockResolvedValue(pluginRecord);
+    const { workerManager } = makeWorkerManagerStub();
+    const loader: Partial<PluginLoader> = {
+      hasRuntimeServices: vi.fn().mockReturnValue(true) as PluginLoader["hasRuntimeServices"],
+      loadSingle: vi.fn().mockResolvedValue({
+        success: false,
+        plugin: pluginRecord,
+        error: "ENOENT: /home/operator/.wardmote/plugins/example/dist/worker.js token=sk-live-123",
+        registered: { worker: false, eventSubscriptions: 0, jobs: 0, webhooks: 0, tools: 0 },
+      }) as PluginLoader["loadSingle"],
+      unloadSingle: vi.fn().mockResolvedValue(undefined) as PluginLoader["unloadSingle"],
+    };
+    const lifecycle = pluginLifecycleManager(
+      {} as never,
+      { loader: loader as PluginLoader, workerManager },
+    );
+
+    const error = await lifecycle.enable("plugin-1").catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      status: 422,
+      message: "Plugin example.plugin failed to start; check the server logs for details",
+    });
+  });
+});

@@ -345,6 +345,9 @@ export function ChatEndpointDetail() {
             <GitHubBotMention endpoint={endpoint} />
             <GitHubAppIdentityActions endpoint={endpoint} avatarUrl={avatarAgent.data ? agentAvatarUrl(resolveAgentAppearance(avatarAgent.data.appearance, endpoint.assignedAgentId), 512, 1, "rest") : undefined} />
           </div>}
+          {endpoint.provider === "openwa" && endpoint.botExternalId && (
+            <p className="mt-1 text-sm text-ink-3">WhatsApp number: <span className="text-ink-1">+{endpoint.botExternalId}</span></p>
+          )}
           {endpoint.provider === "imessage-photon" && endpoint.botExternalId && endpoint.photonAllocation !== "shared" && (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
               <span>{endpoint.botExternalId}</span>

@@ -81,7 +81,7 @@ export interface FakeGatewayOptions {
 
 export class FakeOpenwaGateway {
   readonly sessionId: string;
-  readonly ownJid: string;
+  ownJid: string;
   restLatencyMs: number;
   readonly rows: FakeStoredRow[] = [];
   readonly sends: Array<{ chatId: string; text: string; messageId: string | null; quotedMessageId?: string; mentions?: string[] }> = [];

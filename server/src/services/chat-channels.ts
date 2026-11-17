@@ -132,6 +132,7 @@ import { PhotonChatAdapter, photonThreadId, photonReplyReference } from "./photo
 import { maskOpenwaPhoneNumber, openwaChannelConfigurationSchema, openwaEndpointPolicySchema, photonChannelConfigurationSchema, stripOpenwaPasteNoise, type OpenwaEndpointPolicy, type PhotonChannelConfiguration } from "@tickernelz/wardmote-shared";
 import {
   inspectOpenwaGateway,
+  openwaPhoneDigits,
   openwaProviderAccountId,
   openwaSetupReplyDelivered,
   revokeOpenwaAgentKey,
@@ -1767,6 +1768,7 @@ function openwaReconnectKeepsActive(endpoint: Pick<EndpointRow, "status" | "setu
   return endpoint.status === "attention" && (endpoint.setup.step === "complete" || Boolean((endpoint.setup as { activatedAt?: string | null }).activatedAt));
 }
 
+const OPENWA_LINKED_NUMBER_TIMEOUT_MS = 10_000;
 const OPENWA_SETUP_OWNER_ONLY_REASON = "Only an endpoint owner can send the OpenWA setup test message";
 const OPENWA_SETUP_DROPPING_HEALTH =
   "Setup is waiting for an owner test message; messages from other senders are dropped until setup is finished";
@@ -8652,6 +8654,16 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         return adapter instanceof OpenwaChatAdapter ? adapter : null;
       },
       admit: (input: OpenwaAdmitInput) => admitOpenwaMessage(endpoint.id, input, context),
+      linkedNumber: async () => {
+        const adapter = context.endpointRuntime?.getProviderAdapter();
+        if (!(adapter instanceof OpenwaChatAdapter)) return null;
+        const result = await adapter.gateway.call("SessionController_findOne", {}, { timeoutMs: OPENWA_LINKED_NUMBER_TIMEOUT_MS });
+        const session = result.kind === "json" && result.data && typeof result.data === "object" ? (result.data as Record<string, unknown>) : {};
+        if (session.status !== "ready" || typeof session.phone !== "string") return null;
+        const digits = openwaPhoneDigits(session.phone);
+        if (digits && digits !== (endpoint.botExternalId ?? "").replace(/\D/g, "")) await callbacks.onOpenwaSessionNumber(session.phone);
+        return digits;
+      },
     };
     const admissionHooks = openwaAdmission.hooks(admissionRuntime);
     const { dispatcher: _dispatcher, ...callbacks } = createOpenwaIngressCallbacks({
@@ -8678,6 +8690,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         void invalidateRuntime(endpoint.id).catch(() => undefined);
       },
       redact: (error) => redactError(error),
+      agentLids: () => [...(openwaPolicies.peek(endpoint.id)?.agentLids ?? [])],
     });
     return {
       ...callbacks,
@@ -8685,7 +8698,10 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
         openwaTypingAllowed(db, { companyId: endpoint.companyId, endpointId: endpoint.id, agentId: endpoint.assignedAgentId, threadId, requireActiveRun: refresh }),
       async onOpenwaLive() {
         await callbacks.onOpenwaLive();
-        void openwaAdmission.refreshGroups(admissionRuntime).catch(() => 0);
+        void (async () => {
+          if (await callbacks.onOpenwaNumberNotice(() => openwaAdmission.recountGroupsAfterNumberChange(admissionRuntime))) return;
+          await openwaAdmission.refreshGroups(admissionRuntime);
+        })().catch(() => 0);
       },
     };
   }

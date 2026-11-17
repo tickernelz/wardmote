@@ -61,6 +61,7 @@ function isDedicatedGroup(settings: OpenwaChatSettings): boolean {
 
 function chatMetaText(chat: OpenwaChat, numberMode: OpenwaEndpointPolicy["numberMode"], labels: ReadonlyMap<string, string>): string {
   const parts = [activationDetail(chat, numberMode)];
+  if (chat.numberNotInvited) parts.push("new number not invited yet");
   if (chat.participantCount !== null) parts.push(chat.participantCount + " members");
   const reportKey = chat.settings.ownerReportChatKey;
   if (reportKey) parts.push("owner reports to " + (labels.get(reportKey) ?? reportKey));

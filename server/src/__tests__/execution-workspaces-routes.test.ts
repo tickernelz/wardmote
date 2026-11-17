@@ -19,6 +19,7 @@ const mockExecutionWorkspaceService = vi.hoisted(() => ({
   getCloseReadiness: vi.fn(),
   archiveWorkspaceUnderLifecycleLock: vi.fn(),
   fenceClosedWorkspaceDestruction: vi.fn(),
+  applyClosedWorkspaceCleanupOutcome: vi.fn(),
   reconcileExecutionWorkspaceBranch: vi.fn(),
   update: vi.fn(),
 }));
@@ -460,6 +461,40 @@ describe("execution workspace routes", () => {
     expect(mockExecutionWorkspaceService.archiveWorkspaceUnderLifecycleLock).toHaveBeenCalledTimes(1);
     // The destruction fence never runs, so no worktree is removed.
     expect(mockExecutionWorkspaceService.fenceClosedWorkspaceDestruction).not.toHaveBeenCalled();
+  });
+
+  it("records the archive cleanup failure but answers with a generic 500", async () => {
+    const archivedWorkspace = {
+      id: "workspace-1",
+      companyId: "company-1",
+      sourceIssueId: "issue-1",
+      status: "archived",
+      mode: "isolated_workspace",
+      projectWorkspaceId: null,
+      projectId: null,
+      cwd: "/tmp/worktree",
+    };
+    const failure = 'Failed query: update "execution_workspaces" set "metadata" = $1 params: secret-token-123';
+    mockExecutionWorkspaceService.getById.mockResolvedValue({ ...archivedWorkspace, status: "active" });
+    mockExecutionWorkspaceService.getCloseReadiness.mockResolvedValue({ state: "ready", blockingReasons: [] });
+    mockExecutionWorkspaceService.archiveWorkspaceUnderLifecycleLock.mockResolvedValue({
+      outcome: "archived",
+      workspace: archivedWorkspace,
+      capturedGeneration: 3,
+    });
+    mockExecutionWorkspaceService.fenceClosedWorkspaceDestruction.mockRejectedValue(new Error(failure));
+    mockExecutionWorkspaceService.applyClosedWorkspaceCleanupOutcome.mockResolvedValue(null);
+
+    const res = await request(createApp())
+      .patch("/api/execution-workspaces/workspace-1")
+      .send({ status: "archived" });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Failed to archive execution workspace" });
+    expect(res.text).not.toContain("secret-token-123");
+    expect(mockExecutionWorkspaceService.applyClosedWorkspaceCleanupOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ cleanupReason: failure, markCleanupFailed: true }),
+    );
   });
 
   it("destroys the reusable sandbox leases inside the destruction fence when the archive wins", async () => {
