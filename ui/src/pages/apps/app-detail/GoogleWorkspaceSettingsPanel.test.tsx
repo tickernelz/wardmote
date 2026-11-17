@@ -70,7 +70,7 @@ describe("GoogleWorkspaceSettingsPanel", () => {
     await act(async () => driveRead.click());
     const folders = container.querySelectorAll("textarea")[0] as HTMLTextAreaElement;
     await typeInto(folders, "https://drive.google.com/drive/folders/FOLDER_1?usp=sharing\nFOLDER_2");
-    const destructive = [...container.querySelectorAll("select")][1] as HTMLSelectElement;
+    const destructive = container.querySelector<HTMLSelectElement>('select[id$="-destructive"]')!;
     await act(async () => {
       destructive.value = "allow";
       destructive.dispatchEvent(new Event("change", { bubbles: true }));
