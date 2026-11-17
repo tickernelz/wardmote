@@ -15,6 +15,7 @@ function setup(options: { policy?: (plan: GoogleCallPlan) => GooglePolicyVerdict
     credentials: { headers },
     attachments: {
       read: async (attachmentId) => ({ bytes: options.attachmentBytes ?? Buffer.from(`bytes of ${attachmentId}`), contentType: "text/csv", filename: "data.csv" }),
+      head: async (attachmentId, bytes) => Buffer.from(`bytes of ${attachmentId}`).subarray(0, bytes),
       store: async (input) => {
         stored.push(input);
         return { attachmentId: `att-${stored.length}`, byteSize: input.bytes.byteLength, contentType: input.contentType, filename: input.filename };

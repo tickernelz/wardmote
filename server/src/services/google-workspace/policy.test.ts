@@ -93,6 +93,16 @@ describe("default policy (write runs, delete/share/send need approval)", () => {
     expect(unknown.reasons).toContain("the recipients could not be read");
   });
 
+  it("does not read a draft from Gmail when Gmail is off or the grant lacks the scope", async () => {
+    const mailHeaders = vi.fn(async () => "To: a@example.com");
+    const dependencies = { ...deps(), mailHeaders };
+    const off = await decide({ method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "d1" } }, settings({ capabilities: { gmail: "off" } }), dependencies);
+    expect(off).toMatchObject({ action: "block", error: { code: "capability_off" } });
+    const noScope = await decide({ method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "d1" } }, settings(), { ...dependencies, grantedScopes: ["https://www.googleapis.com/auth/drive"] });
+    expect(noScope).toMatchObject({ action: "block", error: { code: "scope_missing" } });
+    expect(mailHeaders).not.toHaveBeenCalled();
+  });
+
   it("blocks emptying the trash and running Apps Script", async () => {
     expect(await decide({ method: "drive.files.emptyTrash" })).toMatchObject({ action: "block", error: { code: "capability_off" } });
     expect(await decide({ method: "script.scripts.run", params: { scriptId: "x" }, body: { function: "main" } })).toMatchObject({ action: "block" });
@@ -184,7 +194,7 @@ describe("folder and file scope", () => {
       {
         discovery: createGoogleDiscoveryIndex({ fetch: fake.fetch }),
         credentials: { headers: async () => ({ authorization: `Bearer ${fake.token}` }) },
-        attachments: { read: async () => ({ bytes: new Uint8Array(), contentType: "text/plain", filename: "x" }), store: async () => ({ attachmentId: "a", byteSize: 0, contentType: "", filename: "" }) },
+        attachments: { read: async () => ({ bytes: new Uint8Array(), contentType: "text/plain", filename: "x" }), head: async () => new Uint8Array(), store: async () => ({ attachmentId: "a", byteSize: 0, contentType: "", filename: "" }) },
         policy: async (plan) => googlePolicyVerdict(await decideGoogleCall(plan, limited, deps(tree)), { approved: false }),
         fetch: fake.fetch,
         sleep: async () => undefined,
@@ -250,7 +260,7 @@ describe("policy enforced by executeGoogleCall (negative tests)", () => {
       {
         discovery: createGoogleDiscoveryIndex({ fetch: fake.fetch }),
         credentials: { headers: async () => ({ authorization: `Bearer ${fake.token}` }) },
-        attachments: { read: async () => ({ bytes: new Uint8Array(), contentType: "text/plain", filename: "x" }), store: async () => ({ attachmentId: "a", byteSize: 0, contentType: "", filename: "" }) },
+        attachments: { read: async () => ({ bytes: new Uint8Array(), contentType: "text/plain", filename: "x" }), head: async () => new Uint8Array(), store: async () => ({ attachmentId: "a", byteSize: 0, contentType: "", filename: "" }) },
         policy: async (plan) => googlePolicyVerdict(await decideGoogleCall(plan, config, deps()), { approved }),
         fetch: fake.fetch,
         sleep: async () => undefined,

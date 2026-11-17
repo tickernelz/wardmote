@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { createFakeGoogle } from "../../__tests__/helpers/fake-google.js";
 import { createGoogleDiscoveryIndex } from "./discovery.js";
+import { googleApprovalSnapshot } from "./policy.js";
 import { buildPlainTextMessage, decideGoogleWorkspaceTool, googleToolCallInput, runGoogleWorkspaceTool, type GoogleWorkspaceToolRuntime } from "./runtime.js";
 
 function setup(settingsInput: Record<string, unknown> = {}) {
@@ -15,6 +16,7 @@ function setup(settingsInput: Record<string, unknown> = {}) {
     credentials: { headers: async () => ({ authorization: `Bearer ${google.token}` }) },
     attachments: {
       read: async () => ({ bytes: Buffer.from("q1,q2\n1,2\n"), contentType: "text/csv", filename: "report.csv" }),
+      head: async () => Buffer.from("To: a@example.com\r\nSubject: report\r\n\r\n"),
       store: async (input) => ({ attachmentId: "att-1", byteSize: input.bytes.byteLength, contentType: input.contentType, filename: input.filename }),
     },
     fetch: google.fetch,
@@ -30,7 +32,8 @@ async function step(runtime: GoogleWorkspaceToolRuntime, tool: string, args: Rec
   if (action === "require_approval") {
     refused = await runGoogleWorkspaceTool(runtime, tool, args, { approved: false }).catch((error: unknown) => error);
   }
-  const result = (await runGoogleWorkspaceTool(runtime, tool, args, { approved: action === "require_approval" })) as { data?: Record<string, unknown>; class?: string };
+  const approvedSnapshot = decision ? googleApprovalSnapshot(decision) : undefined;
+  const result = (await runGoogleWorkspaceTool(runtime, tool, args, { approved: action === "require_approval", approvedSnapshot })) as { data?: Record<string, unknown>; class?: string };
   return { action, refused, result, decision };
 }
 
@@ -98,6 +101,8 @@ describe("helpers", () => {
     expect(() => googleToolCallInput("google_gmail_send", { to: ["a@example.com\r\nBcc: x@evil.org"], subject: "s", body: "b" })).toThrow(expect.objectContaining({ code: "validation" }));
     expect(() => googleToolCallInput("google_gmail_send", { to: ["a@example.com"], subject: "s\r\nBcc: x@evil.org", body: "b" })).toThrow(expect.objectContaining({ code: "validation" }));
     expect(() => googleToolCallInput("google_drive_share", { fileId: "f", role: "reader", type: "user" })).toThrow(expect.objectContaining({ details: { pointer: "/emailAddress" } }));
+    expect(() => googleToolCallInput("google_drive_share", { fileId: "f", role: "reader" })).toThrow(expect.objectContaining({ details: { pointer: "/type" } }));
+    expect(googleToolCallInput("google_drive_share", { fileId: "f", role: "reader", type: "anyone" })).toMatchObject({ body: { type: "anyone" } });
   });
 
   it("maps calendar and docs helpers to the reviewed methods", () => {
@@ -131,6 +136,33 @@ describe("helpers", () => {
     const sent = google.requests.at(-1)?.url ?? "";
     expect(sent).toContain("/gmail/v1/users/me/drafts/d1");
     expect(sent).toContain("format=metadata");
+  });
+
+  it("refuses an approved send whose recipients changed after the card was created", async () => {
+    const { google, runtime } = setup();
+    const draft = (to: string) =>
+      new Response(JSON.stringify({ id: "d1", message: { payload: { headers: [{ name: "To", value: to }] } } }), { status: 200, headers: { "content-type": "application/json" } });
+    let current = "a@example.com";
+    google.override(/\/gmail\/v1\/users\/me\/drafts\/d1\?/, () => draft(current));
+    let sent = 0;
+    google.override(/\/gmail\/v1\/users\/me\/drafts\/send/, () => {
+      sent += 1;
+      return new Response(JSON.stringify({ id: "m1" }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const args = { method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "d1" } };
+    const card = await decideGoogleWorkspaceTool(runtime, "google_call", args);
+    expect(card).toMatchObject({ action: "require_approval", externalRecipients: [] });
+    const approvedSnapshot = googleApprovalSnapshot(card!);
+    current = "x@evil.example";
+    await expect(runGoogleWorkspaceTool(runtime, "google_call", args, { approved: true, approvedSnapshot })).rejects.toMatchObject({
+      code: "approval_required",
+      details: { current: { externalRecipients: ["x@evil.example"] } },
+    });
+    await expect(runGoogleWorkspaceTool(runtime, "google_call", args, { approved: true })).rejects.toMatchObject({ code: "approval_required" });
+    expect(sent).toBe(0);
+    current = "a@example.com";
+    await runGoogleWorkspaceTool(runtime, "google_call", args, { approved: true, approvedSnapshot });
+    expect(sent).toBe(1);
   });
 
   it("reuses file locations across calls on the same connection", async () => {

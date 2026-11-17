@@ -73,6 +73,7 @@ export function createFakeGoogle(options: { pageSize?: number } = {}) {
   const spreadsheets = new Map<string, FakeSpreadsheet>();
   const requests: { method: string; url: string }[] = [];
   const queued: Response[] = [];
+  const overrides: [RegExp, () => Response][] = [];
   const resumable = new Map<string, Record<string, unknown>>();
   const pageSize = options.pageSize ?? 2;
 
@@ -215,6 +216,8 @@ export function createFakeGoogle(options: { pageSize?: number } = {}) {
     if (!discovery) requests.push({ method, url: url.href });
     if (!discovery && headers.get("authorization") !== `Bearer ${token}`) return googleError(401, "authError", "Invalid Credentials");
     if (!discovery && queued.length > 0) return queued.shift()!;
+    const override = discovery ? undefined : overrides.find(([pattern]) => pattern.test(url.href));
+    if (override) return override[1]();
     for (const [routeMethod, pattern, handler] of routes) {
       const match = pattern.exec(base);
       if (match && routeMethod === method) return handler({ method, url, headers, body }, match);
@@ -236,6 +239,9 @@ export function createFakeGoogle(options: { pageSize?: number } = {}) {
     },
     queue(...responses: Response[]) {
       queued.push(...responses);
+    },
+    override(pattern: RegExp, respond: () => Response) {
+      overrides.push([pattern, respond]);
     },
     addFile(name: string, mimeType = "text/plain", content = Buffer.from("hello")) {
       return createFile({ name, mimeType }, content, mimeType);

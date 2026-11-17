@@ -52,6 +52,7 @@ export interface GoogleCallContext {
   credentials: { headers(options: { forceRefresh: boolean }): Promise<Record<string, string>> };
   attachments: {
     read(attachmentId: string, maxBytes: number): Promise<{ bytes: Uint8Array; contentType: string; filename: string }>;
+    head(attachmentId: string, bytes: number): Promise<Uint8Array>;
     store(input: { filename: string; contentType: string; bytes: Uint8Array }): Promise<GoogleStoredAttachment>;
   };
   policy(plan: GoogleCallPlan): Promise<GooglePolicyVerdict>;
