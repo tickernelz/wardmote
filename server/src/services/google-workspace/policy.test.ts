@@ -86,6 +86,8 @@ describe("default policy (write runs, delete/share/send need approval)", () => {
     expect(draft).toMatchObject({ action: "require_approval", externalRecipients: ["g@other.org"], recipientsUnknown: false });
     const upload = await decide({ method: "gmail.users.messages.send", params: { userId: "me" }, upload: { attachmentId: "m1" } }, settings(), deps({}, [], mail));
     expect(upload).toMatchObject({ action: "require_approval", externalRecipients: ["x@third.net"], recipientsUnknown: false });
+    const both = await decide({ method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "d1", message: { raw: raw("To: a@example.com") } } }, settings(), deps({}, [], mail));
+    expect(both).toMatchObject({ action: "require_approval", externalRecipients: ["g@other.org"], recipientsUnknown: false });
     const unknown = await decide({ method: "gmail.users.drafts.send", params: { userId: "me" }, body: { id: "gone" } }, settings(), deps({}, [], mail));
     expect(unknown).toMatchObject({ action: "require_approval", externalRecipients: [], recipientsUnknown: true, error: { details: { recipientsUnknown: true } } });
     expect(unknown.reasons).toContain("the recipients could not be read");

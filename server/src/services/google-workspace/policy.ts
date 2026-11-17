@@ -95,33 +95,37 @@ function sharingTargets(plan: GoogleCallPlan): { recipients: string[]; public: b
   return null;
 }
 
-function mailSource(plan: GoogleCallPlan): GoogleMailSource | "raw" | null {
+const MAIL_SEND_METHODS = new Set(["gmail.users.messages.send", "gmail.users.drafts.send"]);
+
+function mailSources(plan: GoogleCallPlan): (GoogleMailSource | { raw: string })[] {
   const body = isRecord(plan.body) ? plan.body : {};
+  const sources: (GoogleMailSource | { raw: string })[] = [];
+  if (plan.upload) sources.push({ attachmentId: plan.upload.attachmentId });
   if (plan.method === "gmail.users.drafts.send") {
-    if (plan.upload) return { attachmentId: plan.upload.attachmentId };
     const message = isRecord(body.message) ? body.message : {};
-    if (typeof message.raw === "string") return "raw";
-    return typeof body.id === "string" ? { draftId: body.id } : null;
+    if (typeof message.raw === "string") sources.push({ raw: message.raw });
+    if (typeof body.id === "string") sources.push({ draftId: body.id });
+  } else if (typeof body.raw === "string") {
+    sources.push({ raw: body.raw });
   }
-  if (plan.method !== "gmail.users.messages.send") return null;
-  if (plan.upload) return { attachmentId: plan.upload.attachmentId };
-  return typeof body.raw === "string" ? "raw" : null;
+  return sources;
 }
 
 async function mailRecipients(plan: GoogleCallPlan, deps: GooglePolicyDependencies): Promise<string[] | null | undefined> {
-  const source = mailSource(plan);
-  if (source === null) return plan.method === "gmail.users.messages.send" || plan.method === "gmail.users.drafts.send" ? null : undefined;
-  const body = isRecord(plan.body) ? plan.body : {};
+  if (!MAIL_SEND_METHODS.has(plan.method)) return undefined;
+  const sources = mailSources(plan);
+  if (sources.length === 0) return null;
+  const recipients = new Set<string>();
   try {
-    if (source === "raw") {
-      const raw = plan.method === "gmail.users.drafts.send" ? (body.message as { raw: string }).raw : (body.raw as string);
-      return headerRecipients(decodeRaw(raw));
+    for (const source of sources) {
+      const headers = "raw" in source ? decodeRaw(source.raw) : await deps.mailHeaders(source);
+      if (headers === null) return null;
+      for (const recipient of headerRecipients(headers)) recipients.add(recipient);
     }
-    const headers = await deps.mailHeaders(source);
-    return headers === null ? null : headerRecipients(headers);
   } catch {
     return null;
   }
+  return [...recipients];
 }
 
 async function effectiveClasses(
