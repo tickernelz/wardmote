@@ -57,6 +57,7 @@ export interface OmpModelFallbackSwitch {
   to: string;
   reason: OmpFallbackReason;
   retryAfterMs: number;
+  retryAfterSource: "provider" | "default";
   at: string;
 }
 
@@ -93,15 +94,17 @@ export function createOmpModelFallbackTracker(input: {
         const to = stripOmpThinkingSuffix(text(event.to));
         if (!from || !to || from === to || from !== active) return;
         const reason = classifyFallbackReason(lastRetryError);
-        const retryAfterMs = retryDelayMsFromText(lastRetryError) ?? DEFAULT_COOLDOWN_MS;
+        const providerRetryAfterMs = retryDelayMsFromText(lastRetryError);
+        const retryAfterMs = providerRetryAfterMs ?? DEFAULT_COOLDOWN_MS;
+        const retryAfterSource = providerRetryAfterMs === null ? "default" : "provider";
         active = to;
-        switches.push({ from, to, reason, retryAfterMs, at: new Date().toISOString() });
+        switches.push({ from, to, reason, retryAfterMs, retryAfterSource, at: new Date().toISOString() });
         await emit({
           eventType: "model.fallback",
           stream: "system",
           level: "warn",
           message: `Fallback: ${to} (primary ${input.primary}: ${FALLBACK_REASON_LABELS[reason]})`,
-          payload: { phase: "in_run", from, to, primary: input.primary, reason, retryAfterMs },
+          payload: { phase: "in_run", from, to, primary: input.primary, reason, retryAfterMs, retryAfterSource },
         });
         return;
       }

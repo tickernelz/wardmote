@@ -11,7 +11,7 @@ describe("OMP model fallback tracker", () => {
     expect(emit).toHaveBeenCalledTimes(1);
     expect(emit.mock.calls[0]![0]).toMatchObject({
       eventType: "model.fallback",
-      payload: { phase: "in_run", from: "a/primary", to: "b/backup", primary: "a/primary", reason: "rate_limit", retryAfterMs: 90000 },
+      payload: { phase: "in_run", from: "a/primary", to: "b/backup", primary: "a/primary", reason: "rate_limit", retryAfterMs: 90000, retryAfterSource: "provider" },
     });
     expect(tracker.snapshot()).toMatchObject({ primary: "a/primary", active: "b/backup" });
   });
@@ -21,7 +21,7 @@ describe("OMP model fallback tracker", () => {
     const tracker = createOmpModelFallbackTracker({ primary: "a/primary", start: "a/primary", emit });
     await tracker.ingest({ type: "auto_retry_start", errorMessage: "503 Service Unavailable" });
     await tracker.ingest({ type: "retry_fallback_applied", from: "a/primary", to: "b/backup", role: "a/primary" });
-    expect(emit.mock.calls[0]![0]).toMatchObject({ payload: { reason: "upstream", retryAfterMs: 300000 } });
+    expect(emit.mock.calls[0]![0]).toMatchObject({ payload: { reason: "upstream", retryAfterMs: 300000, retryAfterSource: "default" } });
   });
 
   it("ignores switches of other roles and reports the return to the primary", async () => {

@@ -13,6 +13,7 @@ import {
   MODEL_FALLBACK_EVENT,
   MODEL_FALLBACK_EXHAUSTED_EVENT,
   MODEL_FALLBACK_PRIMARY_KEY,
+  MODEL_FALLBACK_PROBATION_EVENT,
   MODEL_FALLBACK_RESTORED_EVENT,
   MODEL_FALLBACK_STATE_KEY,
   modelFallbackEventMessage,
@@ -38,6 +39,7 @@ type RunEvent = {
 export interface RunModelFallbackDependencies {
   db: Db;
   appendRunEvent: (run: Run, event: RunEvent) => Promise<unknown>;
+  armModelCooldownProbe?: (companyId: string, selector: string) => void;
 }
 
 export interface AdapterModelFallbackEvent {
@@ -101,7 +103,12 @@ function readTransientRetryNotBeforeFromRun(
 }
 
 export function createRunModelFallback(dependencies: RunModelFallbackDependencies): RunModelFallback {
-  const { db, appendRunEvent } = dependencies;
+  const { db, appendRunEvent, armModelCooldownProbe } = dependencies;
+
+  async function writeCooldown(input: Parameters<typeof recordModelCooldown>[1]) {
+    const written = await recordModelCooldown(db, input);
+    if (written && input.probeAfter) armModelCooldownProbe?.(input.companyId, input.selector.trim());
+  }
 
   async function logRunModelFallbackActivity(
     run: Pick<Run, "id" | "companyId" | "agentId">,
@@ -152,6 +159,19 @@ export function createRunModelFallback(dependencies: RunModelFallbackDependencie
     context[MODEL_FALLBACK_PRIMARY_KEY] = selection.primary;
     context[MODEL_FALLBACK_STATE_KEY] = state;
     await persistRunModelFallbackState(db, run.id, { primary: selection.primary, state });
+    if (selection.probation) {
+      await appendRunEvent(run, {
+        eventType: MODEL_FALLBACK_PROBATION_EVENT,
+        stream: "system",
+        level: "info",
+        message: `${selection.probation.selector} recovered by probe at ${selection.probation.releasedAt.toISOString()}; first response limit ${selection.probation.firstEventTimeoutSec}s for this run`,
+        payload: {
+          selector: selection.probation.selector,
+          releasedAt: selection.probation.releasedAt.toISOString(),
+          firstEventTimeoutSec: selection.probation.firstEventTimeoutSec,
+        },
+      });
+    }
     if (!state) return;
     await appendRunEvent(run, {
       eventType: MODEL_FALLBACK_EVENT,
@@ -196,15 +216,17 @@ export function createRunModelFallback(dependencies: RunModelFallbackDependencie
         : "upstream";
     if (!from || !to || !primary) return;
     const now = new Date();
-    const retryAfterMs = typeof payload.retryAfterMs === "number" && payload.retryAfterMs > 0
+    const providerRetryAfterMs = payload.retryAfterSource !== "default" &&
+      typeof payload.retryAfterMs === "number" && payload.retryAfterMs > 0
       ? payload.retryAfterMs
-      : MODEL_FALLBACK_DEFAULT_COOLDOWN_MS;
-    await recordModelCooldown(db, {
+      : null;
+    await writeCooldown({
       companyId: run.companyId,
       selector: from,
-      until: new Date(now.getTime() + retryAfterMs),
+      until: new Date(now.getTime() + (providerRetryAfterMs ?? MODEL_FALLBACK_DEFAULT_COOLDOWN_MS)),
       reason,
       sourceRunId: run.id,
+      probeAfter: providerRetryAfterMs === null ? now : null,
     });
     await persistRunModelFallbackState(db, run.id, {
       state: to === primary
@@ -223,14 +245,14 @@ export function createRunModelFallback(dependencies: RunModelFallbackDependencie
     if (!reason || reason === "refusal" || !active) return;
     const now = new Date();
     const retryNotBefore = readTransientRetryNotBeforeFromRun(run);
-    await recordModelCooldown(db, {
+    const providerUntil = retryNotBefore && retryNotBefore.getTime() > now.getTime() ? retryNotBefore : null;
+    await writeCooldown({
       companyId: run.companyId,
       selector: active,
-      until: retryNotBefore && retryNotBefore.getTime() > now.getTime()
-        ? retryNotBefore
-        : new Date(now.getTime() + MODEL_FALLBACK_DEFAULT_COOLDOWN_MS),
+      until: providerUntil ?? new Date(now.getTime() + MODEL_FALLBACK_DEFAULT_COOLDOWN_MS),
       reason,
       sourceRunId: run.id,
+      probeAfter: providerUntil ? null : now,
     });
   }
 

@@ -1,5 +1,6 @@
 import { subscribeAllCompanyLiveEvents } from "./services/live-events.js";
 import { startNotificationDispatcher } from "./services/notifications/dispatcher.js";
+import { modelCooldownProber } from "./services/model-cooldown-prober.js";
 import { createWebPushRuntime } from "./services/notifications/web-push.js";
 import { DELIVERY_QUEUES } from "./services/delivery-work-notifications.js";
 import type { createDeliveryWorkCoordinator } from "./services/delivery-work-coordinator.js";
@@ -1524,6 +1525,11 @@ async function startServerWithDatabaseTeardown(
         }
 
         const promotion = await heartbeat.promoteDueScheduledRetries();
+        const armedCooldownProbes = await modelCooldownProber(db as any).start().catch((err) => {
+          logger.warn({ err }, "model cooldown prober did not start; cooldowns expire on their own");
+          return 0;
+        });
+        if (armedCooldownProbes > 0) logger.info({ armedCooldownProbes }, "model cooldown prober rebuilt from model_cooldowns");
         await heartbeat.resumeQueuedRuns();
         const recoveredGoalActions = await heartbeat.recoverPendingSessionGoalActions();
         if (
@@ -1968,6 +1974,7 @@ async function startServerWithDatabaseTeardown(
     clearInterval(diskGuardInterval);
     clearInterval(runLogRetentionInterval);
     clearInterval(executionControlInterval);
+    if (db) modelCooldownProber(db as any).stop();
     if (heartbeatSchedulerInterval) {
       clearInterval(heartbeatSchedulerInterval);
       heartbeatSchedulerInterval = null;

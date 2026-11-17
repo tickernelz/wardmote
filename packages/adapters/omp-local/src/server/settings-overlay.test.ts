@@ -84,6 +84,11 @@ describe("OMP settings overlay", () => {
     }
   });
 
+  it("writes the probation first-response limit the server sets for a run on a just-released model", () => {
+    const yaml = parseYaml(renderOmpSettingsOverlay({ ompSettings: { "providers.streamFirstEventTimeoutSeconds": 60 } })) as Record<string, unknown>;
+    expect(yaml.providers).toEqual({ streamFirstEventTimeoutSeconds: 60 });
+  });
+
   it("keeps the owner's other fallback chains when OMP deep-merges the overlay", () => {
     const deepMerge = (base: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> => {
       const result = { ...base };

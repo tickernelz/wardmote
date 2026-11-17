@@ -37,6 +37,8 @@ export type {
   ServerAdapterModule,
   QuotaWindow,
   ProviderQuotaResult,
+  AdapterModelProbeInput,
+  AdapterModelProbeResult,
   TranscriptEntry,
   WardmoteQuestion,
   WardmoteQuestionOption,

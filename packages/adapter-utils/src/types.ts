@@ -499,6 +499,18 @@ export interface AcpTargetDescriptor {
   };
 }
 
+export interface AdapterModelProbeInput {
+  config: Record<string, unknown>;
+  selector: string;
+}
+
+export interface AdapterModelProbeResult {
+  ok: boolean;
+  latencyMs: number;
+  costUsd: number | null;
+  error?: string;
+}
+
 export interface ServerAdapterModule {
   type: string;
   execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult>;
@@ -536,6 +548,8 @@ export interface ServerAdapterModule {
    * without knowing provider-specific credential paths or API shapes.
    */
   getQuotaWindows?: () => Promise<ProviderQuotaResult>;
+  /** One-token inference on a model through the agent's own runtime, endpoint and credentials. */
+  probeModel?: (input: AdapterModelProbeInput) => Promise<AdapterModelProbeResult>;
   /**
    * Optional: detect the currently configured model from local config files.
    * Returns the detected model/provider and the config source, or null if
