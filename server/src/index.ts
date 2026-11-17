@@ -1572,6 +1572,14 @@ async function startServerWithDatabaseTeardown(
           );
         }
 
+        const promptTooLongResumed = await heartbeat.resumePromptTooLongBlockedIssues().catch((err) => {
+          logger.error({ err }, "startup resume of prompt-too-long blocked issues failed");
+          return { resumed: 0 };
+        });
+        if (promptTooLongResumed.resumed > 0) {
+          logger.warn(promptTooLongResumed, "startup resumed issues blocked by a prompt-too-long rejection");
+        }
+
         const taskWatchdogsReconciled = await heartbeat.reconcileTaskWatchdogs();
         if (taskWatchdogsReconciled.triggered > 0) {
           logger.warn(

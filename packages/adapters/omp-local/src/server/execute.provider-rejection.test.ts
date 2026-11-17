@@ -55,7 +55,7 @@ describe("OMP provider request rejection", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function run(outcomes: Outcome[]) {
+  async function run(outcomes: Outcome[], extra: { config?: Record<string, unknown>; context?: Record<string, unknown> } = {}) {
     runProcessMock.mockImplementation((async (
       _runId: string,
       _target: unknown,
@@ -85,8 +85,8 @@ describe("OMP provider request rejection", () => {
         sessionDisplayId: "saved-session",
         taskKey: "task-1",
       },
-      config: { command: commandPath, cwd: workspaceCwd, rpcSteering: false, wardmoteMcp: false },
-      context: {},
+      config: { command: commandPath, cwd: workspaceCwd, rpcSteering: false, wardmoteMcp: false, ...extra.config },
+      context: extra.context ?? {},
       onLog: async () => {},
     });
   }
@@ -110,6 +110,72 @@ describe("OMP provider request rejection", () => {
     expect(result.errorCode).toBe("omp_provider_request_rejected");
     expect(result.errorFamily).toBe("provider_request_rejected");
     expect(result.errorMessage).toContain("invalid_request_error");
+  });
+
+  const PROMPT_TOO_LONG = '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1194922 tokens > 1000000 maximum"}}';
+
+  function longConversationWake() {
+    const messages = Array.from({ length: 1500 }, (_value, index) => {
+      const at = new Date(Date.UTC(2026, 10, 1) + index * 60_000).toISOString();
+      return {
+        id: `c-${index}`, authorType: index % 3 === 2 ? "agent" : "user", authorId: "author-1",
+        body: `pesan grup ${index} ${"x".repeat(900)}`, createdAt: at, updatedAt: at, deleted: false, sourceTrust: null,
+      };
+    });
+    return {
+      reason: "issue_commented",
+      issue: { id: "issue-1", identifier: "ZHA-1", title: "Grup", status: "in_progress" },
+      executionContinuation: {
+        version: 1, companyId: "company-1", issueId: "issue-1",
+        trigger: { reason: "issue_commented", interactionId: null, sourceRunId: null },
+        originCommentIds: ["c-1499"], objective: "jawab grup", messages, interactionOutcomes: [], completedWork: null,
+        unresolvedInteractionIds: [],
+        coverage: { kind: "full_task_history", throughCommentId: "c-1499", summaryThroughCommentId: null },
+      },
+    };
+  }
+
+  async function withModelCatalog(contextWindow: number) {
+    await fs.writeFile(
+      commandPath,
+      `#!/bin/sh\nif [ "$1" = "models" ]; then echo '{"models":[{"provider":"fake","id":"small","selector":"fake/small","contextWindow":${contextWindow}}]}'; fi\nexit 0\n`,
+      "utf8",
+    );
+    return { config: { model: "fake/small" }, context: { wardmoteWake: longConversationWake() } };
+  }
+
+  function historyWindows(result: Awaited<ReturnType<typeof run>>) {
+    return (result.resultJson as { historyWindows?: Array<{ attempt: number; budgetTokens: number; historyTokensAfter: number; contextWindow: number | null }> }).historyWindows ?? [];
+  }
+
+  it("retries a too-long prompt on a fresh session with the history cut to the model's context budget and does not report a failure", async () => {
+    const result = await run([
+      { exitCode: 1, stdout: failedTurn(PROMPT_TOO_LONG) },
+      { exitCode: 0, stdout: "" },
+    ], await withModelCatalog(40_000));
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain("--resume");
+    expect(calls[1]).not.toContain("--resume");
+    expect(calls[1]!.at(-1)).toContain("Older history is omitted to fit the model's context window");
+    expect(result.exitCode).toBe(0);
+    expect(result.errorFamily).toBeUndefined();
+    expect(historyWindows(result)).toEqual([
+      expect.objectContaining({ attempt: 1, contextWindow: 40_000, budgetTokens: 16_000 }),
+    ]);
+    expect(historyWindows(result)[0]!.historyTokensAfter).toBeLessThanOrEqual(16_000);
+  });
+
+  it("halves the history window on every further rejection and reports prompt_too_long once the retries run out", async () => {
+    const result = await run([{ exitCode: 1, stdout: failedTurn(PROMPT_TOO_LONG) }], await withModelCatalog(40_000));
+    const windows = historyWindows(result);
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(calls.length).toBeLessThanOrEqual(4);
+    expect(calls.slice(1).every((args) => !args.includes("--resume"))).toBe(true);
+    for (let index = 1; index < windows.length; index += 1) {
+      expect(windows[index]!.historyTokensAfter).toBeLessThan(windows[index - 1]!.historyTokensAfter);
+    }
+    expect(result.errorCode).toBe("omp_prompt_too_long");
+    expect(result.errorFamily).toBe("prompt_too_long");
   });
 
   it("keeps a 5xx failure on the existing path without a fresh-session retry", async () => {

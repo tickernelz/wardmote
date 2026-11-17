@@ -16,6 +16,7 @@ const REFRESH_EXPIRED_RE = /\brefresh token (?:has )?expired\b/i;
 const REFRESH_INVALID_RE = /\brefresh token (?:is )?(?:invalid|revoked|invalidated)\b/i;
 const AGENT_START_POLICY_CHANGED_RE = /\bsystem prompt changed repeatedly during before_agent_start\b/i;
 const PROVIDER_REQUEST_REJECTED_RE = /\b4(?!29)\d\d\b[^\n]*\binvalid_request_error\b/i;
+const PROMPT_TOO_LONG_RE = /\b(?:prompt is too long|context_length_exceeded|maximum context length|exceeds? the (?:model's )?context window|input is too long for)\b/i;
 
 const RETRY_AFTER_SECONDS_RE = /\bretry[- ]?after["':\s]+(\d+(?:\.\d+)?)\b/i;
 const RETRY_IN_RE = /\btry again in (\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|seconds?|m|minutes?|h|hours?)\b/i;
@@ -80,6 +81,9 @@ export function classifyOmpFailure(input: {
     return { errorCode: "omp_timeout", errorFamily: null, retryNotBefore: null };
   }
   const text = `${input.parsedError}\n${input.stderr}`;
+  if (PROMPT_TOO_LONG_RE.test(text)) {
+    return { errorCode: "omp_prompt_too_long", errorFamily: "prompt_too_long", retryNotBefore: null };
+  }
   if (REFRESH_REUSED_RE.test(text)) {
     return { errorCode: "omp_refresh_token_reused", errorFamily: "refresh_token_reused", retryNotBefore: null };
   }

@@ -60,9 +60,18 @@ export interface ExecutionContinuationEnvelope {
   }>;
   unresolvedInteractionIds: string[];
   coverage: {
-    kind: "full_task_history" | "task_history_delta";
+    kind: "full_task_history" | "task_history_delta" | "task_history_window";
     baseRunId?: string;
     throughCommentId: string | null;
     summaryThroughCommentId: null;
+    /** Older messages left out of a fresh-session prompt so it fits the model's context window. */
+    omitted?: {
+      messageCount: number;
+      firstCommentId: string;
+      lastCommentId: string;
+      firstCreatedAt: string;
+      lastCreatedAt: string;
+      read: string;
+    };
   };
 }

@@ -7,7 +7,7 @@ import { resolveOmpProfile } from "./profile.js";
 const MODEL_CACHE_TTL_MS = 60_000;
 const MODEL_DISCOVERY_TIMEOUT_SEC = 30;
 
-type DiscoveryInput = {
+export type DiscoveryInput = {
   command?: unknown;
   cwd?: unknown;
   env?: unknown;
@@ -180,12 +180,16 @@ export function parseOmpModelsOutput(stdout: string): AdapterModel[] {
     const name = nonEmptyString(row.name);
     const thinking = stringList(row.thinking);
     const cost = modelCost(row.cost);
+    const contextWindow = typeof row.contextWindow === "number" && Number.isSafeInteger(row.contextWindow) && row.contextWindow > 0
+      ? row.contextWindow
+      : null;
     models.push({
       id: selector,
       label: name ?? selector,
       provider,
       ...(thinking.length > 0 ? { thinking } : {}),
       ...(cost ? { cost } : {}),
+      ...(contextWindow ? { contextWindow } : {}),
     });
   }
   return models;
@@ -236,6 +240,16 @@ export async function discoverOmpModels(input: DiscoveryInput = {}): Promise<Ada
   const models = parseOmpModelsOutput(result.stdout);
   modelCache.set(key, { expiresAt: now + MODEL_CACHE_TTL_MS, models });
   return models;
+}
+
+/** Context window of a configured model selector from the OMP catalog, or null when OMP does not report one. */
+export async function resolveOmpModelContextWindow(model: string, input: DiscoveryInput): Promise<number | null> {
+  const selector = model.trim();
+  if (!selector) return null;
+  const models = await discoverOmpModels(input).catch(() => []);
+  const match = models.find((candidate) => candidate.id === selector)
+    ?? models.find((candidate) => candidate.id.endsWith(`/${selector}`));
+  return match?.contextWindow ?? null;
 }
 
 export async function listOmpModels(): Promise<AdapterModel[]> {
