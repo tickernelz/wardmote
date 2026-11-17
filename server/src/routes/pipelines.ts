@@ -102,6 +102,11 @@ import {
 import { documentAnnotationService } from "../services/document-annotations.js";
 import { logActivity } from "../services/activity-log.js";
 import {
+  crossIssueInfluenceLimitError,
+  crossIssueInfluenceRunContextError,
+  observeCrossIssueInfluence,
+} from "../services/cross-issue-influence-limit.js";
+import {
   formatPipelineConversationBodyDocumentContextMarkdown,
   loadPipelineConversationBodyDocumentContext,
 } from "../services/pipeline-conversation-context.js";
@@ -636,6 +641,8 @@ async function getIssueMutationTarget(db: Db, input: { companyId: string; issueI
       assigneeAgentId: issueRows.assigneeAgentId,
       assigneeUserId: issueRows.assigneeUserId,
       status: issueRows.status,
+      identifier: issueRows.identifier,
+      checkoutRunId: issueRows.checkoutRunId,
     })
     .from(issueRows)
     .where(and(eq(issueRows.id, input.issueId), eq(issueRows.companyId, input.companyId)))
@@ -643,12 +650,32 @@ async function getIssueMutationTarget(db: Db, input: { companyId: string; issueI
     .then((rows) => rows[0] ?? null);
 }
 
+async function liveAssigneeCheckoutRun(
+  db: Db,
+  issue: { companyId: string; assigneeAgentId: string | null; checkoutRunId: string | null },
+) {
+  if (!issue.checkoutRunId || !issue.assigneeAgentId) return null;
+  return db
+    .select({ id: heartbeatRuns.id, startedAt: heartbeatRuns.startedAt })
+    .from(heartbeatRuns)
+    .where(and(
+      eq(heartbeatRuns.id, issue.checkoutRunId),
+      eq(heartbeatRuns.companyId, issue.companyId),
+      eq(heartbeatRuns.agentId, issue.assigneeAgentId),
+      eq(heartbeatRuns.status, "running"),
+    ))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+}
+
 async function assertIssueLinkMutationAllowed(
   req: Request,
   input: {
+    db: Db;
     access: ReturnType<typeof accessService>;
     issuesSvc: ReturnType<typeof issueService>;
     issue: NonNullable<Awaited<ReturnType<typeof getIssueMutationTarget>>>;
+    additive: boolean;
   },
 ) {
   const decision = await input.access.decide({
@@ -680,12 +707,36 @@ async function assertIssueLinkMutationAllowed(
   if (!actorAgentId) throw forbidden("Agent authentication required");
   if (input.issue.assigneeAgentId === null) return;
   if (input.issue.assigneeAgentId !== actorAgentId) {
-    if (input.issue.status === "in_progress") {
-      throw conflict("Issue is checked out by another agent", {
-        issueId: input.issue.id,
-        assigneeAgentId: input.issue.assigneeAgentId,
-        actorAgentId,
+    if (input.additive) {
+      const runId = req.actor.runId?.trim();
+      if (!runId) throw crossIssueInfluenceRunContextError();
+      const decision = await observeCrossIssueInfluence(input.db, {
+        companyId: input.issue.companyId,
+        runId,
+        agentId: actorAgentId,
+        responsibleUserId: req.actor.onBehalfOfUserId ?? null,
+        targetIssueId: input.issue.id,
+        targetIssueIdentifier: input.issue.identifier,
+        kind: "artifact",
       });
+      if (decision && !decision.allowed) {
+        const body = crossIssueInfluenceLimitError(decision, { issueIdentifier: input.issue.identifier });
+        throw new HttpError(429, body.error, body.details);
+      }
+      return;
+    }
+    const liveRun = await liveAssigneeCheckoutRun(input.db, input.issue);
+    if (liveRun) {
+      throw conflict(
+        `Issue is checked out by run ${liveRun.id} of its assignee, running since ${liveRun.startedAt?.toISOString() ?? "an unknown time"}; comment on the issue instead or retry after that run ends`,
+        {
+          issueId: input.issue.id,
+          assigneeAgentId: input.issue.assigneeAgentId,
+          actorAgentId,
+          checkoutRunId: liveRun.id,
+          checkoutRunStartedAt: liveRun.startedAt?.toISOString() ?? null,
+        },
+      );
     }
     throw forbidden("Agent cannot mutate another agent's issue");
   }
@@ -1987,7 +2038,7 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
     const actor = actorForMutation(req);
     const targetIssue = await getIssueMutationTarget(db, { companyId, issueId: req.body.issueId });
     if (!targetIssue) throw notFound("Issue not found");
-    await assertIssueLinkMutationAllowed(req, { access, issuesSvc, issue: targetIssue });
+    await assertIssueLinkMutationAllowed(req, { db, access, issuesSvc, issue: targetIssue, additive: true });
     try {
       const link = await db.transaction(async (tx) => {
         const [created] = await tx.insert(pipelineCaseIssueLinks).values({
@@ -2030,7 +2081,7 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
     if (!existingLink) throw notFound("Pipeline case issue link not found");
     const targetIssue = await getIssueMutationTarget(db, { companyId, issueId: existingLink.issueId });
     if (!targetIssue) throw notFound("Issue not found");
-    await assertIssueLinkMutationAllowed(req, { access, issuesSvc, issue: targetIssue });
+    await assertIssueLinkMutationAllowed(req, { db, access, issuesSvc, issue: targetIssue, additive: false });
     const deleted = await db.transaction(async (tx) => {
       const [removed] = await tx
         .delete(pipelineCaseIssueLinks)

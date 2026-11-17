@@ -97,14 +97,21 @@ describe("describeIssueWriteDenial", () => {
     expect(copy.sanctionedPath).toContain("onBehalfOfUserId");
   });
 
-  it("routes a run lock to comments, which stay open", () => {
+  it("names the live run behind a run lock and routes to comments", () => {
     const copy = describeIssueWriteDenial("issue_write_assignee_run_lock", {
       assigneeLabel: "CodexCoder",
+      issueIdentifier: "TASK-4722",
+      checkoutRunId: "run-123",
+      checkoutRunStartedAt: "2026-11-17T03:57:09.000Z",
     });
     expect(copy.status).toBe(409);
     expect(copy.tone).toBe("lock");
+    expect(copy.description).toContain("CodexCoder's run run-123");
+    expect(copy.description).toContain("since 2026-11-17T03:57:09.000Z");
+    expect(copy.description).toContain("Attachments, documents, work products");
     expect(copy.sanctionedPath).toContain("Comment instead");
     expect(copy.sanctionedPath).toContain("CodexCoder");
+    expect(`${copy.description} ${copy.sanctionedPath}`).not.toMatch(/on its own|release the lock/);
   });
 
   it("reuses responsible-user ceiling copy and keeps on-behalf-of terminology", () => {
