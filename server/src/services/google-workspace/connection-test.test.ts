@@ -15,6 +15,7 @@ function runtimeFor(capabilities: Record<string, string>) {
     credentials: { headers: async () => ({ authorization: `Bearer ${google.token}` }) },
     attachments: {
       read: async () => ({ bytes: new Uint8Array(), contentType: "text/plain", filename: "x" }),
+      head: async () => new Uint8Array(),
       store: async () => ({ attachmentId: "a", byteSize: 0, contentType: "", filename: "" }),
     },
     fetch: google.fetch,
