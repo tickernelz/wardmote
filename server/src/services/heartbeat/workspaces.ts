@@ -31,7 +31,7 @@ import {
 import type { Db } from "@tickernelz/wardmote-db";
 import {
   OMP_MODEL_SWITCH_ADAPTER_CONFIG_KEYS,
-  OMP_MODEL_SWITCH_OMP_SETTINGS,
+  OMP_SESSION_KEEPING_OMP_SETTINGS,
   OMP_SESSION_NEUTRAL_ADAPTER_CONFIG_KEYS,
   type ExecutionWorkspace,
   type ExecutionWorkspaceConfig,
@@ -1922,7 +1922,7 @@ const SCHEDULING_AGENT_RUNTIME_CONFIG_KEYS = ["heartbeat"] as const;
 
 const MODEL_SWITCHING_RESUME_ADAPTER_TYPES = new Set(["omp_local"]);
 const MODEL_SWITCH_ADAPTER_CONFIG_KEYS = OMP_MODEL_SWITCH_ADAPTER_CONFIG_KEYS;
-const MODEL_SWITCH_OMP_SETTINGS = OMP_MODEL_SWITCH_OMP_SETTINGS;
+const SESSION_KEEPING_OMP_SETTINGS = OMP_SESSION_KEEPING_OMP_SETTINGS;
 
 function adapterResumesAcrossModelSwitch(adapterType: string | null | undefined) {
   return adapterType != null && MODEL_SWITCHING_RESUME_ADAPTER_TYPES.has(adapterType);
@@ -1934,7 +1934,7 @@ function withoutModelSwitchKeys(config: Record<string, unknown>) {
   const ompSettings = parseObject(next.ompSettings);
   if (Object.keys(ompSettings).length > 0) {
     const kept = { ...ompSettings };
-    for (const key of MODEL_SWITCH_OMP_SETTINGS) delete kept[key];
+    for (const key of SESSION_KEEPING_OMP_SETTINGS) delete kept[key];
     if (Object.keys(kept).length > 0) next.ompSettings = kept;
     else delete next.ompSettings;
   }

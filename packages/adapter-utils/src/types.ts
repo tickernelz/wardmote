@@ -96,6 +96,7 @@ export type AdapterExecutionErrorFamily =
   | "provider_quota"
   | "model_refusal"
   | "provider_request_rejected"
+  | "prompt_too_long"
   | "refresh_token_reused"
   | "refresh_token_expired"
   | "refresh_token_invalidated";
@@ -302,6 +303,7 @@ export interface AdapterModel {
   /** Reasoning efforts this model accepts, lowest to highest. Absent when the model exposes no levels. */
   thinking?: string[];
   cost?: { input?: number; output?: number };
+  contextWindow?: number;
 }
 
 export type AdapterEnvironmentCheckLevel = "info" | "warn" | "error";

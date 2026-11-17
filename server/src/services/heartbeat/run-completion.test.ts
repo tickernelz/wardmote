@@ -13,6 +13,7 @@ import { createHeartbeatRunState, getAdapterSessionCodec } from "./run-state.js"
 import { buildEffectiveRunSessionConfigMetadata } from "./workspaces.js";
 import { LegacyControllerLeaseLostError } from "../legacy-controller-lease.js";
 import { createHeartbeatRunCompletion, type CompleteHeartbeatRunInput, type FailHeartbeatRunInput, type HeartbeatRunCompletionDependencies } from "./run-completion.js";
+import { resumeIssuesBlockedByPromptTooLong } from "./provider-request-rejection.js";
 
 vi.mock("../live-events.js", () => ({ publishLiveEvent: vi.fn() }));
 
@@ -277,6 +278,46 @@ describe.skipIf(!support.supported)("heartbeat run completion boundary", () => {
     expect(comments[0]).toMatchObject({ authorType: "system", body: expect.stringContaining("vision-capable target") });
     expect(activity.filter((row) => (row.details as Record<string, unknown> | null)?.source === "heartbeat.provider_request_rejected")).toHaveLength(1);
     expect(f.deps.enqueueWakeup).toHaveBeenCalledWith(manager.id, expect.objectContaining({ reason: "issue_unblock_requested" }));
+  });
+
+  const PROMPT_TOO_LONG = '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1194922 tokens > 1000000 maximum"}}';
+
+  it("blocks with the token counts instead of a model-configuration hint when the prompt stays too long after every history window", async () => {
+    const { current, comments, activity } = await rejectedRunFixture({
+      result: { errorCode: "omp_prompt_too_long", errorFamily: "prompt_too_long", errorMessage: PROMPT_TOO_LONG },
+    });
+    expect(current.status).toBe("blocked");
+    expect(current.unblockDescriptor?.action).toContain("1194922 tokens against a 1000000-token maximum");
+    expect(current.unblockDescriptor?.action).not.toContain("Fix the model or provider configuration");
+    expect(comments).toHaveLength(1);
+    expect(activity.filter((row) => (row.details as Record<string, unknown> | null)?.source === "heartbeat.prompt_too_long")).toHaveLength(1);
+  });
+
+  it("resumes an issue blocked by an earlier prompt-too-long rejection once and wakes its assignee", async () => {
+    const { f, issue, current } = await rejectedRunFixture({ result: { errorMessage: PROMPT_TOO_LONG } });
+    expect(current.status).toBe("blocked");
+    const wakeup = vi.fn(async () => null);
+    const deps = { db, issuesSvc: issueService(db), getAgent: async () => null, wakeup };
+    expect(await resumeIssuesBlockedByPromptTooLong(deps)).toEqual({ resumed: 1 });
+    const resumed = (await db.select().from(issues).where(eq(issues.id, issue.id)))[0]!;
+    expect(resumed).toMatchObject({ status: "in_progress", unblockDescriptor: null });
+    expect(wakeup).toHaveBeenCalledOnce();
+    expect(wakeup).toHaveBeenCalledWith(f.agent.id, expect.objectContaining({
+      reason: "issue_status_changed",
+      payload: expect.objectContaining({ issueId: issue.id, rejectedRunId: f.run.id }),
+    }));
+
+    await db.update(issues).set({ status: "blocked", unblockDescriptor: current.unblockDescriptor }).where(eq(issues.id, issue.id));
+    expect(await resumeIssuesBlockedByPromptTooLong(deps)).toEqual({ resumed: 0 });
+    expect(wakeup).toHaveBeenCalledOnce();
+  });
+
+  it("leaves an issue blocked by another provider rejection to its unblock owner", async () => {
+    const { issue } = await rejectedRunFixture();
+    const wakeup = vi.fn(async () => null);
+    expect(await resumeIssuesBlockedByPromptTooLong({ db, issuesSvc: issueService(db), getAgent: async () => null, wakeup })).toEqual({ resumed: 0 });
+    expect((await db.select().from(issues).where(eq(issues.id, issue.id)))[0]!.status).toBe("blocked");
+    expect(wakeup).not.toHaveBeenCalled();
   });
 
   it("still explains the block in the thread when the assignee has no manager", async () => {

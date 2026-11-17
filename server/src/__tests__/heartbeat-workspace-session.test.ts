@@ -2247,6 +2247,15 @@ describe("effective run session config freshness", () => {
       expect(decision).toMatchObject({ reset: false, reasons: [], changedCategories: [] });
     });
 
+    it("resumes an omp_local session when a model's fallback probation adds or drops the first-event timeout", async () => {
+      const probation = ompConfig({ ompSettings: { "retry.maxRetries": 3, "providers.streamFirstEventTimeoutSeconds": 60 } });
+      const steady = ompConfig({ ompSettings: { "retry.maxRetries": 3 } });
+      for (const [first, next] of [[steady, probation], [probation, steady]]) {
+        const decision = await freshness({ adapterType: "omp_local", first, next });
+        expect(decision).toMatchObject({ reset: false, reasons: [], changedCategories: [] });
+      }
+    });
+
     it("still resets an omp_local session when a pinned OMP setting outside model and thinking changes", async () => {
       const decision = await freshness({
         adapterType: "omp_local",

@@ -3,6 +3,7 @@ import { prepareHeartbeatWorkspace } from "./heartbeat/workspace-preparation.js"
 import { executeHeartbeatRuntime, NativeSessionResumeScheduledError, NativeWorkspaceFinalizeScheduledError } from "./heartbeat/runtime-execution.js";
 import { selectHeartbeatRuntime } from "./heartbeat/runtime-selection.js";
 import { createHeartbeatRunCompletion } from "./heartbeat/run-completion.js";
+import { resumeIssuesBlockedByPromptTooLong } from "./heartbeat/provider-request-rejection.js";
 export {
   MAX_TURN_CONTINUATION_WAKE_REASON,
   parseSandboxProviderPluginNotReadyFailureMessage,
@@ -2009,6 +2010,15 @@ export function heartbeatService(
     companyId?: string | null;
   }) {
     return recovery.reconcileResolvedDependencyWakeBackstop(opts);
+  }
+
+  async function resumePromptTooLongBlockedIssues() {
+    return resumeIssuesBlockedByPromptTooLong({
+      db,
+      issuesSvc,
+      getAgent: (agentId) => getAgent(agentId),
+      wakeup: (agentId, options) => enqueueWakeup(agentId, options),
+    });
   }
 
   // Await every background heartbeat execution that is currently in flight. A
@@ -5590,6 +5600,7 @@ export function heartbeatService(
     sweepStaleIssueLocks,
 
     reconcileResolvedDependencyWakes,
+    resumePromptTooLongBlockedIssues,
 
     scanSilentActiveRuns,
 

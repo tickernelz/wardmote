@@ -21,10 +21,12 @@ export const OMP_MODEL_SWITCH_ADAPTER_CONFIG_KEYS = [
 ] as const;
 
 export const OMP_MODEL_SWITCH_OMP_SETTINGS = ["defaultThinkingLevel"] as const;
+export const OMP_FIRST_EVENT_TIMEOUT_SETTING = "providers.streamFirstEventTimeoutSeconds";
+export const OMP_SESSION_KEEPING_OMP_SETTINGS = [...OMP_MODEL_SWITCH_OMP_SETTINGS, OMP_FIRST_EVENT_TIMEOUT_SETTING] as const;
 
 export const OMP_SESSION_KEEPING_ADAPTER_CONFIG_KEYS: readonly string[] = [
   ...OMP_MODEL_SWITCH_ADAPTER_CONFIG_KEYS,
-  ...OMP_MODEL_SWITCH_OMP_SETTINGS.map((key) => `${OMP_SETTINGS_PATH_PREFIX}${key}`),
+  ...OMP_SESSION_KEEPING_OMP_SETTINGS.map((key) => `${OMP_SETTINGS_PATH_PREFIX}${key}`),
   ...OMP_SESSION_NEUTRAL_ADAPTER_CONFIG_KEYS,
 ];
 

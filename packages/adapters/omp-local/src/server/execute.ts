@@ -73,6 +73,13 @@ import { createOmpProgressReporter } from "./progress.js";
 import { createOmpRpcSteerSession, runOmpRpcSession } from "./rpc-session.js";
 import { registerAdapterSteerTarget } from "@tickernelz/wardmote-adapter-utils/adapter-steer-registry";
 import { runToolProfile } from "@tickernelz/wardmote-adapter-utils/tool-profile";
+import {
+  historyTokenBudget,
+  wakeHistoryTokens,
+  windowWakeHistory,
+  type ContinuationHistoryWindow,
+} from "@tickernelz/wardmote-adapter-utils/continuation-history-window";
+import { resolveOmpModelContextWindow } from "./models.js";
 import { ensureOmpSkills } from "./skills.js";
 import { writeOmpSettingsOverlay, type OmpSettingsOverlay } from "./settings-overlay.js";
 import { createOmpModelFallbackTracker, ompFallbackChain, type OmpModelFallbackTracker } from "./model-fallback.js";
@@ -183,14 +190,21 @@ type ProcessAttempt = {
   accounting: OmpAccounting;
 };
 
-function isProviderRequestRejected(attempt: ProcessAttempt): boolean {
+const PROMPT_TOO_LONG_RETRIES = 3;
+const HISTORY_TOKENS_WITHOUT_WINDOW_LOOKUP = 50_000;
+
+function attemptFailureFamily(attempt: ProcessAttempt) {
   return classifyOmpFailure({
     parsedError: attempt.rpcPromptError || attempt.parsed.errors.find((error) => error.trim()) || "",
     stderr: attempt.proc.stderr,
     timedOut: attempt.proc.timedOut,
     exitCode: attempt.proc.exitCode ?? 1,
     signal: attempt.proc.signal,
-  }).errorFamily === "provider_request_rejected";
+  }).errorFamily;
+}
+
+function attemptFailed(attempt: ProcessAttempt): boolean {
+  return !attempt.proc.timedOut && ((attempt.proc.exitCode ?? 0) !== 0 || attempt.parsed.errors.length > 0);
 }
 
 function stringList(value: unknown, commaSeparated = false): string[] {
@@ -464,12 +478,14 @@ async function buildPrompts(input: {
   resumedSession: boolean;
   cwd: string;
   wardmoteAccess: WardmoteAccessMode;
+  historyTokenBudget: number | null;
   onLog: AdapterExecutionContext["onLog"];
 }): Promise<{
   systemPrompt: string;
   userPrompt: string;
   promptMetrics: Record<string, number>;
   notes: string[];
+  historyWindow: ContinuationHistoryWindow | null;
 }> {
   const templateData = {
     agentId: input.agent.id,
@@ -506,7 +522,10 @@ async function buildPrompts(input: {
     ? renderTemplate(bootstrapTemplate, templateData).trim()
     : "";
   const taskContextNote = selectWardmoteTaskMarkdown(input.context, { resumedSession: input.resumedSession });
-  const wakePrompt = renderWardmoteWakePrompt(input.context.wardmoteWake, {
+  const windowed = input.historyTokenBudget !== null && !input.resumedSession
+    ? windowWakeHistory(input.context.wardmoteWake, input.historyTokenBudget)
+    : { wake: input.context.wardmoteWake, window: null };
+  const wakePrompt = renderWardmoteWakePrompt(windowed.wake, {
     resumedSession: input.resumedSession,
     suppressIssueDescription: taskContextNote.length > 0,
     wardmoteAccess: input.wardmoteAccess,
@@ -542,6 +561,7 @@ async function buildPrompts(input: {
       heartbeatPromptChars: heartbeatPrompt.length,
     },
     notes,
+    historyWindow: windowed.window,
   };
 }
 
@@ -944,24 +964,48 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const mcpArmed = mcpEnabled && mcpExtension !== null;
     const wardmoteAccess: WardmoteAccessMode = mcpArmed ? "mcp" : "rest";
 
-    const prompts = await buildPrompts({
-      config: executionConfig,
-      context,
-      agent,
-      runId,
-      resumedSession: canResume,
-      cwd,
-      wardmoteAccess,
-      onLog,
-    });
-    prompts.systemPrompt = joinPromptSections([
-      prompts.systemPrompt,
-      runtimeToolGuidance,
-      mcpArmed
-        ? wardmoteMcpGuidance(mcpToolsets, mcpProbe?.toolCount ?? null)
-        : wardmoteRestGuidance(),
-    ]);
-    prompts.promptMetrics.systemPromptChars = prompts.systemPrompt.length;
+    const historyWindows: Array<ContinuationHistoryWindow & { attempt: number; contextWindow: number | null }> = [];
+    let contextWindowLookup: Promise<number | null> | null = null;
+    const modelContextWindow = () => contextWindowLookup ??= remote
+      ? Promise.resolve(null)
+      : resolveOmpModelContextWindow(asString(executionConfig.model, ""), {
+          command,
+          cwd,
+          env: invocationEnv,
+          profile: preparedConfig.profile,
+          configFiles: executionConfig.configFiles,
+          extensions: executionConfig.extensions,
+        });
+    const buildRunPrompts = async (resumedSession: boolean, budget: number | null) => {
+      const built = await buildPrompts({
+        config: executionConfig,
+        context,
+        agent,
+        runId,
+        resumedSession,
+        cwd,
+        wardmoteAccess,
+        historyTokenBudget: budget,
+        onLog,
+      });
+      built.systemPrompt = joinPromptSections([
+        built.systemPrompt,
+        runtimeToolGuidance,
+        mcpArmed
+          ? wardmoteMcpGuidance(mcpToolsets, mcpProbe?.toolCount ?? null)
+          : wardmoteRestGuidance(),
+      ]);
+      built.promptMetrics.systemPromptChars = built.systemPrompt.length;
+      return built;
+    };
+    const recordHistoryWindow = async (built: Awaited<ReturnType<typeof buildRunPrompts>>, attempt: number) => {
+      if (built.historyWindow) historyWindows.push({ attempt, contextWindow: await modelContextWindow(), ...built.historyWindow });
+    };
+    const initialHistoryBudget = !canResume && wakeHistoryTokens(context.wardmoteWake) > HISTORY_TOKENS_WITHOUT_WINDOW_LOOKUP
+      ? historyTokenBudget(await modelContextWindow())
+      : null;
+    let prompts = await buildRunPrompts(canResume, initialHistoryBudget);
+    await recordHistoryWindow(prompts, 0);
     const commandNotes = [
       ...preparedConfig.notes,
       ...prompts.notes,
@@ -1296,6 +1340,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             ? { executionCancellation: { state: "acknowledged" } }
             : {}),
           ...(attempt.modelFallback ? { modelFallback: attempt.modelFallback } : {}),
+          ...(historyWindows.length > 0 ? { historyWindows } : {}),
           stdout: attempt.stdoutTranscript,
           stderr: attempt.proc.stderr,
           errors: rpcPromptError ? [...attempt.parsed.errors, rpcPromptError] : attempt.parsed.errors,
@@ -1328,9 +1373,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
 
     const initial = await runAttempt(canResume ? savedSessionId : null);
-    const initialFailed = !initial.proc.timedOut && (
-      (initial.proc.exitCode ?? 0) !== 0 || initial.parsed.errors.length > 0
-    );
+    const initialFailed = attemptFailed(initial);
     if (
       canResume &&
       initialFailed &&
@@ -1343,7 +1386,30 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const retry = await runAttempt(null);
       return attachSessionBytes(toResult(retry, true, initial));
     }
-    if (initialFailed && !ctx.signal?.aborted && isProviderRequestRejected(initial)) {
+    if (initialFailed && !ctx.signal?.aborted && attemptFailureFamily(initial) === "prompt_too_long") {
+      const baseBudget = historyTokenBudget(await modelContextWindow());
+      let latest = initial;
+      let sentHistoryTokens = canResume
+        ? null
+        : prompts.historyWindow?.historyTokensAfter ?? wakeHistoryTokens(context.wardmoteWake);
+      for (let retry = 1; retry <= PROMPT_TOO_LONG_RETRIES; retry += 1) {
+        const budget = sentHistoryTokens === null ? baseBudget : Math.floor(Math.min(baseBudget, sentHistoryTokens) / 2);
+        const nextPrompts = await buildRunPrompts(false, budget);
+        const nextHistoryTokens = nextPrompts.historyWindow?.historyTokensAfter ?? wakeHistoryTokens(context.wardmoteWake);
+        if (sentHistoryTokens !== null && nextHistoryTokens >= sentHistoryTokens) break;
+        await onLog(
+          "stdout",
+          `[wardmote] The provider rejected the prompt as too long; retrying on a fresh session with about ${nextHistoryTokens} history tokens (budget ${budget}, retry ${retry}/${PROMPT_TOO_LONG_RETRIES}).\n`,
+        );
+        prompts = nextPrompts;
+        await recordHistoryWindow(prompts, retry);
+        sentHistoryTokens = nextHistoryTokens;
+        latest = await runAttempt(null);
+        if (ctx.signal?.aborted || !attemptFailed(latest) || attemptFailureFamily(latest) !== "prompt_too_long") break;
+      }
+      return attachSessionBytes(latest === initial ? toResult(initial, false) : toResult(latest, true, initial));
+    }
+    if (initialFailed && !ctx.signal?.aborted && attemptFailureFamily(initial) === "provider_request_rejected") {
       await onLog(
         "stdout",
         "[wardmote] The provider rejected the request as invalid; the same session would resend the rejected content, so retrying once with a fresh session.\n",

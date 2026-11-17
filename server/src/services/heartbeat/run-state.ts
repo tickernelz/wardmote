@@ -18,7 +18,7 @@ import {
 import type { Db } from "@tickernelz/wardmote-db";
 import {
   OMP_MODEL_SWITCH_ADAPTER_CONFIG_KEYS,
-  OMP_MODEL_SWITCH_OMP_SETTINGS,
+  OMP_SESSION_KEEPING_OMP_SETTINGS,
   OMP_SESSION_NEUTRAL_ADAPTER_CONFIG_KEYS,
   type BillingType,
   type CostStatus,
@@ -1002,8 +1002,8 @@ export function createHeartbeatRunState(db: Db) {
     options?: { ignoreModelSwitchOnly?: boolean },
   ) {
     const modelSwitchKeys = sql.raw(`'{${MODEL_SWITCH_ADAPTER_CONFIG_KEYS.join(",")}}'::text[]`);
-    const modelSwitchSettings = sql.raw(`'{${OMP_MODEL_SWITCH_OMP_SETTINGS.join(",")}}'::text[]`);
-    const modelSwitchSettingPaths = sql.raw(OMP_MODEL_SWITCH_OMP_SETTINGS.map((key) => ` #- '{ompSettings,${key}}'`).join(""));
+    const modelSwitchSettings = sql.raw(`'{${OMP_SESSION_KEEPING_OMP_SETTINGS.join(",")}}'::text[]`);
+    const modelSwitchSettingPaths = sql.raw(OMP_SESSION_KEEPING_OMP_SETTINGS.map((key) => ` #- '{ompSettings,${key}}'`).join(""));
     const sessionShape = (column: typeof agentConfigRevisions.afterConfig | typeof agentConfigRevisions.beforeConfig) => {
       const config = sql`(coalesce(${column} -> 'adapterConfig', '{}'::jsonb) - ${modelSwitchKeys})`;
       return sql`((${config}${modelSwitchSettingPaths}) - (case when (${config} -> 'ompSettings') - ${modelSwitchSettings} = '{}'::jsonb then 'ompSettings' else '' end))`;

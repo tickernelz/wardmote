@@ -6,6 +6,7 @@ import {
   AGENT_FALLBACK_MODELS_KEY,
   adapterSupportsFallbackModels,
   fitAgentFallbackEfforts,
+  OMP_FIRST_EVENT_TIMEOUT_SETTING,
   readAgentFallbackEfforts,
   readAgentFallbackModels,
   validateAgentFallbackModels,
@@ -39,7 +40,6 @@ export const MODEL_FALLBACK_PROBATION_EVENT = "model.primary_probation";
 export const MODEL_FALLBACK_PROBATION_MS = 10 * 60_000;
 /** First-response limit for a run on a model a probe just released; OMP's own default is 300 s. */
 export const MODEL_FALLBACK_PROBATION_FIRST_EVENT_TIMEOUT_SEC = 60;
-export const OMP_FIRST_EVENT_TIMEOUT_SETTING = "providers.streamFirstEventTimeoutSeconds";
 
 export interface ModelCooldown {
   selector: string;

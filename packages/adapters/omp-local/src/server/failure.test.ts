@@ -54,6 +54,13 @@ describe("classifyOmpFailure", () => {
     ).toBe("provider_request_rejected");
   });
 
+  it("separates a context-window overflow from other rejected requests", () => {
+    expect(
+      classify('400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1194922 tokens > 1000000 maximum"}}'),
+    ).toEqual({ errorCode: "omp_prompt_too_long", errorFamily: "prompt_too_long", retryNotBefore: null });
+    expect(classify("400 This model's maximum context length is 128000 tokens (code=context_length_exceeded)").errorFamily).toBe("prompt_too_long");
+  });
+
   it("keeps a 429 invalid_request_error on the quota path", () => {
     expect(classify("429 Too many requests (type=invalid_request_error)").errorFamily).toBe("provider_quota");
   });

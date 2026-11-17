@@ -21,9 +21,9 @@ import {
   createModelCooldownProber,
   type ModelCooldownProber,
 } from "../services/model-cooldown-prober.ts";
+import { OMP_FIRST_EVENT_TIMEOUT_SETTING } from "@tickernelz/wardmote-shared";
 import {
   MODEL_FALLBACK_DEFAULT_COOLDOWN_MS,
-  OMP_FIRST_EVENT_TIMEOUT_SETTING,
   prepareRunModelFallback,
   recordModelCooldown,
 } from "../services/model-fallback.ts";
