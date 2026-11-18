@@ -1722,8 +1722,11 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
         const blockedTaskCount = blockedWorkCounts.get(terminalIssueId) ?? 0;
         const taskLabel = blockedTaskCount === 1 ? "task" : "tasks";
         const dedupKey = `blocker:${terminalIssueId}`;
+        const terminalBlocked = blockedIssueById.get(terminalIssueId);
         const reasonDetail = blockerReasonDetail(
-          blockedIssueById.has(terminalIssueId) ? terminalIssueId : candidate.issue.id,
+          terminalBlocked && (terminalBlocked.blockedReason || !candidate.issue.blockedReason)
+            ? terminalIssueId
+            : candidate.issue.id,
         );
         const blockedWorkText = blockedTaskCount > 0 ? `Blocks ${blockedTaskCount} ${taskLabel}. ` : "";
         add(createItem({
