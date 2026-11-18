@@ -14,7 +14,7 @@ import { validate } from "../middleware/validate.js";
 import { authorizationDeniedDetails, issueReadSqlCondition } from "../services/authorization.js";
 import { accessService, heartbeatService, instanceSettingsService, issueService, logActivity, statusCardService } from "../services/index.js";
 import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "../services/issue-assignment-wakeup.js";
-import { assertCompanyAccess, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
+import { assertCompanyAccess, getAccessibleResource, getActorInfo, hasCompanyAccess, isCompanyOwnerAgentActor } from "./authz.js";
 
 export function statusCardRoutes(db: Db, opts: { heartbeat?: IssueAssignmentWakeupDeps } = {}) {
   const router = Router();
@@ -49,7 +49,7 @@ export function statusCardRoutes(db: Db, opts: { heartbeat?: IssueAssignmentWake
 
   async function assertCanManageCard(req: Request, card: { companyId: string; createdByAgentId: string | null }) {
     await assertCanMutate(req, card.companyId);
-    if (req.actor.type === "agent" && card.createdByAgentId !== req.actor.agentId) {
+    if (req.actor.type === "agent" && !isCompanyOwnerAgentActor(req) && card.createdByAgentId !== req.actor.agentId) {
       throw forbidden("Agents can only manage status cards they authored");
     }
   }

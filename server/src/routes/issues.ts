@@ -7312,7 +7312,7 @@ export function issueRoutes(
     const hasStructuredFields =
       input.presentation !== undefined || input.metadata !== undefined;
     if (!hasStructuredFields) return true;
-    if (req.actor.type === "board") return true;
+    if (req.actor.type === "board" || isCompanyOwnerAgentActor(req)) return true;
     res.status(403).json({
       error:
         "Only board users may set structured comment presentation or metadata",
@@ -9423,6 +9423,7 @@ export function issueRoutes(
       if (!issue) return;
       if (
         req.actor.type === "agent" &&
+        !isCompanyOwnerAgentActor(req) &&
         req.actor.agentId !== req.body.agentId
       ) {
         res.status(403).json({
@@ -13296,7 +13297,8 @@ export function issueRoutes(
           createAssignmentScope.projectId,
           createBody.executionPolicy,
         ),
-        actor.actorType,
+        actor,
+        createBody.assigneeAgentId ?? null,
       );
       await assertCanManageIssueMonitor(
         access,
@@ -13692,7 +13694,8 @@ export function issueRoutes(
           childAssignmentScope.projectId,
           createBody.executionPolicy,
         ),
-        actor.actorType,
+        actor,
+        createBody.assigneeAgentId ?? null,
       );
       await assertCanManageIssueMonitor(
         access,
@@ -13930,7 +13933,8 @@ export function issueRoutes(
       for (const child of requestedChildren) {
         const executionPolicy = applyActorMonitorScheduledBy(
           normalizeIssueExecutionPolicy(child.executionPolicy),
-          actor.actorType,
+          actor,
+          child.assigneeAgentId ?? null,
         );
         await assertCanManageIssueMonitor(
           access,
@@ -14131,6 +14135,7 @@ export function issueRoutes(
       issue.companyId,
       issue.assigneeAgentId,
       true,
+      issue.id,
     );
 
     const actor = getActorInfo(req);
@@ -14933,7 +14938,8 @@ export function issueRoutes(
       if (req.body.executionPolicy !== undefined) {
         updateFields.executionPolicy = applyActorMonitorScheduledBy(
           normalizeIssueExecutionPolicy(req.body.executionPolicy),
-          actor.actorType,
+          actor,
+          existing.assigneeAgentId,
         );
       }
       const previousExecutionPolicy = normalizeIssueExecutionPolicy(
@@ -14955,6 +14961,7 @@ export function issueRoutes(
         existing.companyId,
         existing.assigneeAgentId,
         req.body.executionPolicy !== undefined && monitorChanged,
+        existing.id,
       );
 
       const transition = applyIssueExecutionPolicyTransition({
@@ -17253,12 +17260,14 @@ export function issueRoutes(
   });
 
   router.post("/issues/:id/admin/force-release", async (req, res) => {
-    if (req.actor.type !== "board") {
-      res.status(403).json({ error: "Board access required" });
-      return;
-    }
-    if (!req.actor.userId) {
-      throw forbidden("Board user context required");
+    if (!isCompanyOwnerAgentActor(req)) {
+      if (req.actor.type !== "board") {
+        res.status(403).json({ error: "Board access required" });
+        return;
+      }
+      if (!req.actor.userId) {
+        throw forbidden("Board user context required");
+      }
     }
 
     const id = req.params.id as string;
@@ -17290,7 +17299,7 @@ export function issueRoutes(
       entityId: result.issue.id,
       details: {
         issueId: result.issue.id,
-        actorUserId: req.actor.userId,
+        actorUserId: req.actor.userId ?? null,
         prevCheckoutRunId: result.previous.checkoutRunId,
         prevExecutionRunId: result.previous.executionRunId,
         clearAssignee,

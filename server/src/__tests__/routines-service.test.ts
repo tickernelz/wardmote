@@ -1169,6 +1169,28 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     });
   });
 
+  it("lets an agent with company-wide assignment authority restore a revision assigned to another agent", async () => {
+    const { companyId, routine, svc } = await seedFixture();
+    const otherAgentId = randomUUID();
+    await db.insert(agents).values({
+      id: otherAgentId,
+      companyId,
+      name: "OtherCoder",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    const revision1Id = routine.latestRevisionId!;
+    await svc.update(routine.id, { assigneeAgentId: otherAgentId }, {});
+
+    await svc.restoreRevision(routine.id, revision1Id, { agentId: otherAgentId, assignsAnyAgent: true });
+
+    await expect(svc.get(routine.id)).resolves.toMatchObject({ assigneeAgentId: routine.assigneeAgentId });
+  });
+
   it("blocks restoring routine revisions assigned to agents that are no longer assignable", async () => {
     const { agentId, routine, svc } = await seedFixture();
     const revision1Id = routine.latestRevisionId!;

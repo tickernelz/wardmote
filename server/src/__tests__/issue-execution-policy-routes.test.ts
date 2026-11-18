@@ -1488,6 +1488,11 @@ describe("issue execution policy routes", () => {
 
   it("rejects child monitor scheduling by a non-assignee agent even with task assignment permission", async () => {
     mockAccessService.hasPermission.mockResolvedValue(true);
+    const grantAllExceptIssueControl = mockAccessService.decide.getMockImplementation()!;
+    mockAccessService.decide.mockImplementation(async (input: { action?: string }) =>
+      input.action === "tasks:manage_active_checkouts"
+        ? { allowed: false, action: input.action, reason: "deny_missing_grant", explanation: "Missing permission: tasks:manage_active_checkouts" }
+        : grantAllExceptIssueControl(input));
     mockIssueService.getById.mockResolvedValue({
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       companyId: "company-1",
@@ -1521,8 +1526,49 @@ describe("issue execution policy routes", () => {
       });
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe("Only the assignee agent or a board user can manage issue monitors");
+    expect(res.body.error).toBe("Only the assignee agent, a CEO or manager agent of its assignee, or a board user can manage issue monitors");
     expect(mockIssueService.createChild).not.toHaveBeenCalled();
+  });
+
+  it("lets an agent with issue control over the assignee schedule a child monitor, recorded as board-scheduled", async () => {
+    mockAccessService.hasPermission.mockResolvedValue(true);
+    mockIssueService.getById.mockResolvedValue({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      companyId: "company-1",
+      status: "in_progress",
+      assigneeAgentId: "11111111-1111-4111-8111-111111111111",
+      assigneeUserId: null,
+      createdByUserId: "local-board",
+      identifier: "PAP-1001",
+      title: "Parent issue",
+      executionPolicy: null,
+      executionState: null,
+    });
+    const defaultDecide = mockAccessService.decide.getMockImplementation()!;
+    mockAccessService.decide.mockImplementation(async (input: { action?: string; resource?: { assigneeAgentId?: string | null } }) =>
+      input.action === "tasks:manage_active_checkouts" && input.resource?.assigneeAgentId === "33333333-3333-4333-8333-333333333333"
+        ? { allowed: true, action: input.action, reason: "allow_agent_role_ceo", explanation: "Allowed as owner-equivalent CEO agent access inside its own company." }
+        : defaultDecide(input));
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: "22222222-2222-4222-8222-222222222222",
+      companyId: "company-1",
+      runId: "run-1",
+    }))
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/children")
+      .send({
+        title: "Child monitor",
+        status: "in_review",
+        assigneeAgentId: "33333333-3333-4333-8333-333333333333",
+        executionPolicy: { monitor: { nextCheckAt: "2026-04-11T12:30:00.000Z" } },
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const createPayload = mockIssueService.createChild.mock.calls[0]?.[1] as {
+      executionPolicy: { monitor: { scheduledBy: string } };
+    };
+    expect(createPayload.executionPolicy.monitor.scheduledBy).toBe("board");
   });
 
   it("normalizes spoofed child monitor scheduledBy to the assignee actor", async () => {

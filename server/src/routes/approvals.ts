@@ -18,7 +18,7 @@ import {
   logActivity,
   secretService,
 } from "../services/index.js";
-import { assertBoard, assertBoardOrAgentAuthority, assertCompanyAccess, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
+import { assertBoard, assertBoardOrAgentAuthority, assertCompanyAccess, getAccessibleResource, getActorInfo, hasCompanyAccess, isCompanyOwnerAgentActor } from "./authz.js";
 import { redactEventPayload } from "../redaction.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 import { issueService } from "../services/issues.js";
@@ -508,7 +508,7 @@ export function approvalRoutes(
     if (!existing) return;
     if (!(await assertApprovalMutationAllowedByRunContext(req, res, existing.companyId))) return;
 
-    if (req.actor.type === "agent" && req.actor.agentId !== existing.requestedByAgentId) {
+    if (req.actor.type === "agent" && !isCompanyOwnerAgentActor(req) && req.actor.agentId !== existing.requestedByAgentId) {
       res.status(403).json({ error: "Only requesting agent can resubmit this approval" });
       return;
     }

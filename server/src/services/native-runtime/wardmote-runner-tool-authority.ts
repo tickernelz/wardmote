@@ -1550,10 +1550,10 @@ export class WardmoteRunnerToolAuthority {
         } });
         if (!decision.allowed) throw forbidden(decision.explanation);
       }
-      await assertCanManageIssueMonitor(access, { actor }, target.companyId, target.assigneeAgentId, true);
-      if (target.assigneeAgentId !== this.binding.agentId || target.assigneeUserId ||
+      await assertCanManageIssueMonitor(access, { actor }, target.companyId, target.assigneeAgentId, true, target.id);
+      if (!target.assigneeAgentId || target.assigneeUserId ||
           !["in_progress", "in_review"].includes(target.status)) {
-        throw forbidden("Monitors require an in-progress or in-review task assigned to this agent");
+        throw forbidden("Monitors require an in-progress or in-review task assigned to an agent");
       }
       return { target, actor };
     };
