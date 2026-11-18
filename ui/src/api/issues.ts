@@ -1,4 +1,4 @@
-import type { SetIssueTitle } from "@tickernelz/wardmote-shared";
+import type { RestorePrimaryModelResult, SetIssueTitle } from "@tickernelz/wardmote-shared";
 import type { ExecutionReconciliation } from "@tickernelz/wardmote-shared";
 import type {
   AcceptedPlanDecompositionSummary,
@@ -560,6 +560,8 @@ export const issuesApi = {
       allowSharing?: boolean;
     },
   ) => api.post<FeedbackVote>(`/issues/${id}/feedback-votes`, data),
+  restorePrimaryModel: (id: string) =>
+    api.post<RestorePrimaryModelResult>(`/issues/${id}/restore-primary-model`, {}),
   addComment: (
     id: string,
     body: string,

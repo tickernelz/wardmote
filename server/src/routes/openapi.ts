@@ -5316,6 +5316,23 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "post",
+  path: "/api/issues/{id}/restore-primary-model",
+  tags: ["issues"],
+  summary: "Force the assignee back to its primary model",
+  description:
+    "Board users only. Stops the task's runs on a fallback model, ends the company-wide cooldowns of the primary model and every chain model ahead of the fallback in use, posts the comment \"Kembali ke model utama.\", and wakes the assignee with the primary model forced for its next run and a fresh attempt budget. Probes leave the reset cooldowns alone until a real run failure writes them again.",
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: r.ok(),
+    401: r.unauthorized,
+    403: r.forbidden,
+    404: r.notFound,
+    409: r.conflict,
+  },
+});
+
+registry.registerPath({
   method: "delete",
   path: "/api/issues/{id}",
   tags: ["issues"],

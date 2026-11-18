@@ -1387,6 +1387,7 @@ export type {
   HeartbeatRunStatusPhase,
   RunModelFallbackReason,
   RunModelFallbackState,
+  RestorePrimaryModelResult,
   ProviderTraceDebugRequest,
   ProviderTraceDirection,
   ProviderTraceDisposition,
