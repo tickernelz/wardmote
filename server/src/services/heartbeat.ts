@@ -239,6 +239,7 @@ import {
   startupCancellationFence,
 } from "./native-runtime/native-cancellation-request.js";
 import {
+  NoChatCompletionToReportError,
   prepareChatCompletionTurn,
   chatCompletionInstruction,
   openwaTaskChatOrigin,
@@ -2456,7 +2457,18 @@ export function heartbeatService(
         await finalizeAgentStatus(agent.id, "cancelled");
         return;
       }
-      run = await prepareChatCompletionTurn(db, run);
+      try {
+        run = await prepareChatCompletionTurn(db, run);
+      } catch (error) {
+        if (!(error instanceof NoChatCompletionToReportError)) throw error;
+        await setRunStatus(run.id, "succeeded", { finishedAt: new Date(), resultJson: { chatCompletionNothingToReport: true }, issueCommentStatus: "not_applicable" });
+        await setWakeupStatus(run.wakeupRequestId, "completed", { finishedAt: new Date() });
+        const noopRun = (await getRun(run.id))!;
+        await appendRunEvent(noopRun, { eventType: "lifecycle", stream: "system", level: "info", message: "No chat completion left to report" });
+        await releaseIssueExecutionAndPromote(noopRun, { suppressImmediateRecovery: true });
+        await finalizeAgentStatus(agent.id, "succeeded");
+        return;
+      }
       const preparedConversation = await prepareConversationTurn(db, run);
       run = { ...run, contextSnapshot: preparedConversation.context };
       if (preparedConversation.reset) {
