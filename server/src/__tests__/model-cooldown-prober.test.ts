@@ -17,6 +17,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import {
+  MODEL_COOLDOWN_PROBE_EXTENSION_MARGIN_MS,
   MODEL_COOLDOWN_PROBE_HOURLY_LIMIT,
   createModelCooldownProber,
   type ModelCooldownProber,
@@ -26,6 +27,7 @@ import {
   MODEL_FALLBACK_DEFAULT_COOLDOWN_MS,
   prepareRunModelFallback,
   recordModelCooldown,
+  resetModelCooldownsByUser,
 } from "../services/model-fallback.ts";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
@@ -33,9 +35,10 @@ const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : 
 
 const PRIMARY = "fake/primary";
 const BACKUP = "fake/backup";
+const LIVE = "fake/live";
 const T0 = Date.parse("2026-11-17T08:00:00.000Z");
 
-type Script = (call: number) => Promise<AdapterModelProbeResult> | AdapterModelProbeResult;
+type Script = (call: number, selector: string) => Promise<AdapterModelProbeResult> | AdapterModelProbeResult;
 const ok: AdapterModelProbeResult = { ok: true, latencyMs: 40, costUsd: 0.0001 };
 const down: AdapterModelProbeResult = { ok: false, latencyMs: 40, costUsd: null, error: "503 upstream unavailable" };
 
@@ -95,9 +98,9 @@ describeEmbeddedPostgres("model cooldown prober", () => {
       },
       resolveTarget: async (cooldown: { companyId: string }) =>
         cooldown.companyId === companyId ? { agentId: "agent", adapterType: "omp_local", config: {} } : null,
-      probe: async () => {
+      probe: async (_target: unknown, selector: string) => {
         calls.push(nowMs);
-        return script(calls.length);
+        return script(calls.length, selector);
       },
     };
     async function advance(ms: number) {
@@ -116,20 +119,31 @@ describeEmbeddedPostgres("model cooldown prober", () => {
     return { prober, deps, advance, calls, pending, now: () => new Date(nowMs) };
   }
 
-  async function cool(target: { companyId: string; runId: string }, at: Date, options: { probeAfter?: Date | null; until?: Date } = {}) {
+  async function cool(
+    target: { companyId: string; runId: string },
+    at: Date,
+    options: { probeAfter?: Date | null; until?: Date; selector?: string; reason?: "rate_limit" | "upstream" } = {},
+  ) {
     await recordModelCooldown(db, {
       companyId: target.companyId,
-      selector: PRIMARY,
+      selector: options.selector ?? PRIMARY,
       until: options.until ?? new Date(at.getTime() + MODEL_FALLBACK_DEFAULT_COOLDOWN_MS),
-      reason: "upstream",
+      reason: options.reason ?? "upstream",
       sourceRunId: target.runId,
       probeAfter: options.probeAfter === undefined ? at : options.probeAfter,
+      now: at,
     });
   }
 
-  async function row(companyId: string) {
-    const [cooldown] = await db.select().from(modelCooldowns).where(and(eq(modelCooldowns.companyId, companyId), eq(modelCooldowns.selector, PRIMARY)));
+  async function row(companyId: string, selector = PRIMARY) {
+    const [cooldown] = await db.select().from(modelCooldowns).where(and(eq(modelCooldowns.companyId, companyId), eq(modelCooldowns.selector, selector)));
     return cooldown!;
+  }
+
+  async function startModel(companyId: string, now: Date, chain: string[] = [PRIMARY, BACKUP, LIVE]) {
+    const config: Record<string, unknown> = { model: chain[0], fallbackModels: chain.slice(1) };
+    const prepared = await prepareRunModelFallback({ db, companyId, adapterType: "omp_local", config, context: {}, now });
+    return prepared!;
   }
 
   it("releases after two successful probes in a row and the next fresh run starts on the primary under probation", async () => {
@@ -197,7 +211,7 @@ describeEmbeddedPostgres("model cooldown prober", () => {
     h.prober.stop();
   });
 
-  it("never probes before the provider's own retry-after and stops when the cooldown ends", async () => {
+  it("never probes before the provider's own retry-after", async () => {
     const target = await seed();
     const h = harness(target.companyId, () => down);
     await h.prober.start(h.deps);
@@ -214,9 +228,6 @@ describeEmbeddedPostgres("model cooldown prober", () => {
     expect(h.calls).toHaveLength(0);
     await h.advance(1_000);
     expect(h.calls).toEqual([startedAt + 90_000]);
-    await h.advance(MODEL_FALLBACK_DEFAULT_COOLDOWN_MS);
-    expect(h.pending()).toBe(0);
-    expect(h.prober.armed()).toEqual([]);
     h.prober.stop();
   });
 
@@ -294,6 +305,137 @@ describeEmbeddedPostgres("model cooldown prober", () => {
     expect(h.calls).toHaveLength(MODEL_COOLDOWN_PROBE_HOURLY_LIMIT);
     expect((await row(target.companyId)).releasedAt).toBeNull();
     h.prober.stop();
+  });
+
+  it("keeps two dead models cooling while their probes fail, so runs more than five minutes apart start on the live model", async () => {
+    const target = await seed();
+    const h = harness(target.companyId, (_call, selector) => (selector === LIVE ? ok : down));
+    await h.prober.start(h.deps);
+    await cool(target, h.now(), { selector: PRIMARY });
+    await cool(target, h.now(), { selector: BACKUP });
+    h.prober.arm(target.companyId, PRIMARY);
+    h.prober.arm(target.companyId, BACKUP);
+
+    expect((await startModel(target.companyId, new Date(T0 + 1_000))).selection.start).toBe(LIVE);
+    for (const minutes of [6, 12, 30]) {
+      await h.advance(T0 + minutes * 60_000 - h.now().getTime());
+      const run = await startModel(target.companyId, h.now());
+      expect(run.selection.start, `run at minute ${minutes}`).toBe(LIVE);
+      expect(run.selection.cooling.map((model) => model.selector)).toEqual([PRIMARY, BACKUP]);
+      expect(run.selection.cooling[0]).toMatchObject({ probeFailingSince: new Date(T0 + 15_000), lastProbeError: "503 upstream unavailable" });
+    }
+    const primary = await row(target.companyId, PRIMARY);
+    expect(primary.releasedAt).toBeNull();
+    expect(primary.cooldownUntil.getTime()).toBeGreaterThan(T0 + 30 * 60_000);
+    expect(primary.updatedAt.getTime()).toBe(T0);
+    h.prober.stop();
+  });
+
+  it("hands the primary back within two successful probes once it recovers after failing", async () => {
+    const target = await seed();
+    let alive = false;
+    const h = harness(target.companyId, () => (alive ? ok : down));
+    await h.prober.start(h.deps);
+    await cool(target, h.now());
+    h.prober.arm(target.companyId, PRIMARY);
+    await h.advance(10 * 60_000);
+    expect((await startModel(target.companyId, h.now(), [PRIMARY, BACKUP])).selection.start).toBe(BACKUP);
+
+    alive = true;
+    const recoveredAt = h.now().getTime();
+    const before = h.calls.length;
+    await h.advance(6 * 60_000);
+    const released = await row(target.companyId);
+    expect(released.releasedAt).not.toBeNull();
+    expect(released.releasedBy).toBe("probe");
+    expect(h.calls.length - before).toBe(2);
+    expect(released.releasedAt!.getTime()).toBe(h.calls[h.calls.length - 1]);
+    expect(released.releasedAt!.getTime() - recoveredAt).toBeLessThanOrEqual(6 * 60_000 + 15_000);
+    expect((await startModel(target.companyId, h.now(), [PRIMARY, BACKUP])).selection.start).toBe(PRIMARY);
+    h.prober.stop();
+  });
+
+  it("picks up a cooldown that expired while the server was down and keeps it while the model is still dead", async () => {
+    const target = await seed();
+    const before = harness(target.companyId, () => down);
+    await before.prober.start(before.deps);
+    await cool(target, before.now());
+    before.prober.arm(target.companyId, PRIMARY);
+    await before.advance(4 * 60_000);
+    before.prober.stop();
+    const downUntil = (await row(target.companyId)).cooldownUntil.getTime();
+
+    const after = harness(target.companyId, () => down);
+    await after.advance(downUntil + 3 * 60_000 - after.now().getTime());
+    expect((await startModel(target.companyId, after.now(), [PRIMARY, BACKUP])).selection.start).toBe(PRIMARY);
+    await after.prober.start(after.deps);
+    expect(after.prober.armed()).toContain(`${target.companyId}:${PRIMARY}`);
+    await after.advance(15_000);
+    expect(after.calls).toHaveLength(1);
+    expect((await startModel(target.companyId, after.now(), [PRIMARY, BACKUP])).selection.start).toBe(BACKUP);
+    after.prober.stop();
+  });
+
+  it("never shortens or re-arms a cooldown a real run rewrote during a failing probe", async () => {
+    const target = await seed();
+    const quotaUntil = new Date(T0 + 60 * 60_000);
+    const h = harness(target.companyId, async (call) => {
+      if (call === 4) await cool(target, h.now(), { until: quotaUntil, probeAfter: null, reason: "rate_limit" });
+      return down;
+    });
+    await h.prober.start(h.deps);
+    await cool(target, h.now());
+    h.prober.arm(target.companyId, PRIMARY);
+    await h.advance(3 * 60_000);
+    expect(h.calls).toHaveLength(3);
+    await cool(target, h.now(), { until: new Date(h.now().getTime() + 60_000) });
+    const realWrite = await row(target.companyId);
+    expect(realWrite.cooldownUntil.getTime()).toBe(T0 + 105_000 + 120_000 + MODEL_COOLDOWN_PROBE_EXTENSION_MARGIN_MS);
+    expect(realWrite.updatedAt.getTime()).toBe(h.now().getTime());
+
+    await h.advance(60_000);
+    expect(h.calls).toHaveLength(4);
+    const quota = await row(target.companyId);
+    expect(quota.cooldownUntil.getTime()).toBe(quotaUntil.getTime());
+    expect(quota.reason).toBe("rate_limit");
+    expect(quota.probeAfter).toBeNull();
+    expect(h.prober.armed()).not.toContain(`${target.companyId}:${PRIMARY}`);
+    await h.advance(30 * 60_000);
+    expect(h.calls).toHaveLength(4);
+    h.prober.stop();
+  });
+
+  it("leaves a cooldown a user reset alone, even when a failing probe was in flight or the server restarts", async () => {
+    const target = await seed();
+    const h = harness(target.companyId, async (call) => {
+      if (call === 2) await resetModelCooldownsByUser(db, { companyId: target.companyId, selectors: [PRIMARY], now: h.now() });
+      return down;
+    });
+    await h.prober.start(h.deps);
+    await cool(target, h.now());
+    h.prober.arm(target.companyId, PRIMARY);
+    await h.advance(45_000);
+    expect(h.calls).toHaveLength(2);
+    const reset = await row(target.companyId);
+    expect(reset.releasedBy).toBe("user");
+    expect(reset.cooldownUntil.getTime()).toBe(T0 + 45_000);
+    expect(h.prober.armed()).not.toContain(`${target.companyId}:${PRIMARY}`);
+    h.prober.stop();
+
+    const after = harness(target.companyId, () => down);
+    await after.advance(60_000);
+    await after.prober.start(after.deps);
+    expect(after.prober.armed()).not.toContain(`${target.companyId}:${PRIMARY}`);
+    await after.advance(10 * 60_000);
+    expect(after.calls).toHaveLength(0);
+    expect((await row(target.companyId)).cooldownUntil.getTime()).toBe(T0 + 45_000);
+    expect((await startModel(target.companyId, after.now(), [PRIMARY, BACKUP])).selection.start).toBe(PRIMARY);
+
+    await cool(target, after.now());
+    expect((await row(target.companyId)).releasedAt).toBeNull();
+    after.prober.arm(target.companyId, PRIMARY);
+    expect(after.prober.armed()).toContain(`${target.companyId}:${PRIMARY}`);
+    after.prober.stop();
   });
 
   it("pulls forward a retry that waited only for the released cooldown", async () => {

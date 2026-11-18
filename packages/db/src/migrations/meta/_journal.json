@@ -2759,6 +2759,13 @@
       "when": 1794907767698,
       "tag": "0395_wardmote_openwa_bot_number_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 396,
+      "version": "7",
+      "when": 1794959542678,
+      "tag": "0396_wardmote_model_cooldown_probe_audit",
+      "breakpoints": true
     }
   ]
 }

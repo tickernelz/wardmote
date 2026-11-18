@@ -9,15 +9,19 @@ import { environmentService } from "./environments.js";
 import { appendHeartbeatRunEvent } from "./heartbeat-run-events.js";
 import {
   MODEL_FALLBACK_FORCED_MODEL_KEY,
+  extendModelCooldownAfterFailedProbe,
   listProbeableModelCooldowns,
   readProbeableModelCooldown,
+  recordModelCooldownProbeOk,
   releaseModelCooldown,
   type ProbeableModelCooldown,
 } from "./model-fallback.js";
 import { secretService } from "./secrets.js";
 
-/** Wait before each probe after a failed one: 15 s, 30 s, 60 s, 2 min, then 5 min for as long as the cooldown lasts. */
+/** Wait before each probe after a failed one: 15 s, 30 s, 60 s, 2 min, then 5 min for as long as probes keep failing. */
 export const MODEL_COOLDOWN_PROBE_DELAYS_MS = [15_000, 30_000, 60_000, 120_000, 300_000] as const;
+/** Life a failed probe gives its cooldown past the next probe: one probe (62 s with grace) plus one wait for a busy slot. */
+export const MODEL_COOLDOWN_PROBE_EXTENSION_MARGIN_MS = 150_000;
 /** Wait before the probe that confirms a successful one. */
 export const MODEL_COOLDOWN_PROBE_CONFIRM_DELAY_MS = 15_000;
 export const MODEL_COOLDOWN_PROBE_JITTER = 0.2;
@@ -115,7 +119,7 @@ export function createModelCooldownProber(db: Db): ModelCooldownProber {
     state.timer = deps.setTimer(() => {
       state.timer = null;
       const work = tick(state).catch((error) => {
-        logger.warn({ err: error, selector: state.selector, companyId: state.companyId }, "model cooldown probe failed");
+        logger.warn({ err: error, selector: state.selector, companyId: state.companyId }, "model cooldown probe tick threw");
         drop(state);
       });
       inFlight.add(work);
@@ -170,9 +174,31 @@ export function createModelCooldownProber(db: Db): ModelCooldownProber {
     state.lastLatencyMs = result.latencyMs;
     if (!result.ok) {
       resetStreak(state);
+      const failedStep = state.step;
       state.step = Math.min(state.step + 1, MODEL_COOLDOWN_PROBE_DELAYS_MS.length - 1);
-      return schedule(state, jittered(MODEL_COOLDOWN_PROBE_DELAYS_MS[state.step]!, deps.random));
+      const delayMs = jittered(MODEL_COOLDOWN_PROBE_DELAYS_MS[state.step]!, deps.random);
+      const until = await extendModelCooldownAfterFailedProbe(db, {
+        companyId: state.companyId,
+        selector: state.selector,
+        until: new Date(probedAt.getTime() + delayMs + MODEL_COOLDOWN_PROBE_EXTENSION_MARGIN_MS),
+        probedAt,
+        error: result.error,
+      });
+      logger.warn({
+        companyId: state.companyId,
+        selector: state.selector,
+        step: failedStep,
+        pings: state.pings,
+        latencyMs: result.latencyMs,
+        error: (result.error ?? "probe failed").slice(0, 200),
+        cooldownUntil: until?.toISOString() ?? null,
+        nextProbeInMs: until ? delayMs : null,
+      }, "model cooldown probe failed");
+      if (!until) return drop(state);
+      return schedule(state, delayMs);
     }
+    await recordModelCooldownProbeOk(db, { companyId: state.companyId, selector: state.selector, probedAt });
+    if (cooldown.until.getTime() <= probedAt.getTime()) return drop(state);
     state.streak += 1;
     state.streakBase = streakBase;
     if (state.streak >= MODEL_COOLDOWN_PROBE_SUCCESSES) {
