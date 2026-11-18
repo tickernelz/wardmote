@@ -37,6 +37,14 @@ import {
   REQUEST_ITEM_VERDICTS_ITEM_LIMIT,
 } from "../constants.js";
 import { multilineTextSchema } from "./text.js";
+import {
+  assignIssueDecisionEffectSchema,
+  commentOnIssueDecisionEffectSchema,
+  createIssueDecisionEffectSchema,
+  decisionEffectStalenessSchema,
+  resolveBlockerDecisionEffectSchema,
+  updateIssueStatusDecisionEffectSchema,
+} from "./decision.js";
 import { autoAcceptResolutionDetailsSchema } from "../autonomy-windows.js";
 import {
   lowTrustReviewPresetPolicySchema,
@@ -962,6 +970,225 @@ const issueCommentAttachmentIdsSchema = z
     message: "Attachment ids must be unique",
   });
 
+const wardmoteQuestionOptionSchema = z.object({
+  id: z.string().min(1).max(160),
+  label: z.string().min(1).max(1000),
+  description: z.string().max(4000).optional(),
+  recommended: z.boolean().optional(),
+});
+
+const wardmoteQuestionSchema = z
+  .object({
+    id: z.string().min(1).max(160),
+    header: z.string().max(1000).optional(),
+    prompt: z.string().min(1).max(4000),
+    helpText: z.string().max(4000).optional(),
+    required: z.boolean(),
+    answerMode: z.enum(["single_select", "multi_select", "text"]),
+    initialText: z.string().refine(value => value.length <= 200000 && Array.from(value).length <= 100000, "initial text exceeds 100000 Unicode code points").optional(),
+    options: z.array(wardmoteQuestionOptionSchema).max(128).optional(),
+    customAnswer: z
+      .object({
+        enabled: z.literal(true),
+        label: z.string().max(1000).optional(),
+        placeholder: z.string().max(1000).optional(),
+      })
+      .optional(),
+    textValidation: z
+      .object({
+        minLength: z.number().int().min(0).max(100000).optional(),
+        maxLength: z.number().int().min(0).max(100000).optional(),
+        pattern: z.string().max(1000).optional(),
+        inputType: z.enum(["text", "number", "integer"]).optional(),
+        minimum: z.number().finite().optional(),
+        maximum: z.number().finite().optional(),
+      })
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.initialText !== undefined && value.answerMode !== "text") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "only text questions can define initial text", path: ["initialText"] });
+    }
+    if (
+      value.answerMode === "text" &&
+      value.options &&
+      value.options.length > 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "text questions cannot define options",
+        path: ["options"],
+      });
+    }
+    if (
+      value.answerMode !== "text" &&
+      (!value.options || value.options.length === 0)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "select questions require options",
+        path: ["options"],
+      });
+    }
+    if (value.answerMode === "text" && value.customAnswer) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "text questions cannot define customAnswer",
+        path: ["customAnswer"],
+      });
+    }
+    if (
+      value.textValidation?.minLength !== undefined &&
+      value.textValidation.maxLength !== undefined &&
+      value.textValidation.minLength > value.textValidation.maxLength
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "minLength cannot exceed maxLength",
+        path: ["textValidation"],
+      });
+    }
+    if (
+      value.textValidation?.minimum !== undefined &&
+      value.textValidation.maximum !== undefined &&
+      value.textValidation.minimum > value.textValidation.maximum
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "minimum cannot exceed maximum",
+        path: ["textValidation"],
+      });
+    }
+    if (value.textValidation?.pattern !== undefined) {
+      try {
+        new RegExp(value.textValidation.pattern);
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "pattern must be a valid regular expression",
+          path: ["textValidation", "pattern"],
+        });
+      }
+    }
+    const optionIds = value.options?.map((option) => option.id) ?? [];
+    if (new Set(optionIds).size !== optionIds.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "option ids must be unique",
+        path: ["options"],
+      });
+    }
+  });
+
+const blockedReasonEffectTargetShape = {
+  targetIssueId: z.string().guid().optional().describe("Defaults to the blocked issue"),
+  staleness: decisionEffectStalenessSchema.optional().describe("Defaults to lenient"),
+};
+
+export const issueBlockedReasonEffectSchema = z.discriminatedUnion("type", [
+  commentOnIssueDecisionEffectSchema.extend(blockedReasonEffectTargetShape),
+  createIssueDecisionEffectSchema.extend(blockedReasonEffectTargetShape),
+  updateIssueStatusDecisionEffectSchema.extend(blockedReasonEffectTargetShape),
+  assignIssueDecisionEffectSchema.extend(blockedReasonEffectTargetShape),
+  resolveBlockerDecisionEffectSchema.extend(blockedReasonEffectTargetShape),
+]);
+
+export const issueBlockedReasonActionSchema = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    label: z.string().trim().min(1).max(80),
+    description: z.string().trim().max(500).nullable().optional(),
+    style: z.enum(["default", "primary"]).optional(),
+    effects: z.array(issueBlockedReasonEffectSchema).max(5),
+  })
+  .strict();
+
+export const issueBlockedReasonInputSchema = z
+  .object({
+    reason: multilineTextSchema.pipe(z.string().trim().min(1).max(1_000)),
+    suggestion: multilineTextSchema.pipe(z.string().trim().min(1).max(2_000)),
+    actions: z.array(issueBlockedReasonActionSchema).min(1).max(4).optional(),
+    questions: z.array(wardmoteQuestionSchema).min(1).max(6).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, action] of (value.actions ?? []).entries()) {
+      if (seen.has(action.id)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Action ids must be unique", path: ["actions", index, "id"] });
+      }
+      seen.add(action.id);
+    }
+    if (value.questions && !value.actions) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "questions need at least one action the user submits them with", path: ["questions"] });
+    }
+    const questionIds = new Set<string>();
+    for (const [index, question] of (value.questions ?? []).entries()) {
+      const path = ["questions", index];
+      if (questionIds.has(question.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Question ids must be unique", path: [...path, "id"] });
+      questionIds.add(question.id);
+      if (question.prompt.length > 500) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "prompt must be at most 500 characters", path: [...path, "prompt"] });
+      if ((question.options?.length ?? 0) > 20) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "at most 20 options", path: [...path, "options"] });
+      if ((question.options ?? []).some((option) => option.label.length > 200)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "option labels must be at most 200 characters", path: [...path, "options"] });
+      if (question.customAnswer) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "customAnswer is not supported on blocked cards; add a text question instead", path: [...path, "customAnswer"] });
+      if (question.textValidation?.pattern !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "pattern is not supported on blocked cards", path: [...path, "textValidation", "pattern"] });
+      if ((question.textValidation?.maxLength ?? 0) > 4_000) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "maxLength must be at most 4000", path: [...path, "textValidation", "maxLength"] });
+    }
+  });
+
+export type IssueBlockedReasonInput = z.infer<typeof issueBlockedReasonInputSchema>;
+
+export const ISSUE_BLOCKED_REASON_EXAMPLE = {
+  status: "blocked",
+  blockedReason: {
+    reason: "The production deploy needs the owner's approval and I cannot grant it myself.",
+    suggestion: "Approve the deploy. If you agree I will run it, verify the health check, and report back on this issue.",
+    actions: [
+      {
+        id: "approve_deploy",
+        label: "Approve deploy",
+        style: "primary",
+        effects: [{ type: "update_issue_status", status: "in_progress", comment: "Approved: go ahead with the deploy." }],
+      },
+      {
+        id: "hold",
+        label: "Hold the deploy",
+        effects: [],
+      },
+    ],
+    questions: [
+      {
+        id: "window",
+        prompt: "When may I deploy?",
+        required: true,
+        answerMode: "single_select",
+        options: [
+          { id: "now", label: "Now", recommended: true },
+          { id: "tonight", label: "Tonight after 22:00" },
+        ],
+      },
+      {
+        id: "hosts",
+        prompt: "Which hosts?",
+        required: false,
+        answerMode: "multi_select",
+        options: [
+          { id: "lab0", label: "lab0" },
+          { id: "integron", label: "integron" },
+        ],
+      },
+      {
+        id: "max_downtime",
+        prompt: "Maximum downtime in minutes",
+        required: false,
+        answerMode: "text",
+        textValidation: { inputType: "integer", minimum: 0, maximum: 60 },
+      },
+      { id: "note", prompt: "Anything else I should know?", required: false, answerMode: "text", textValidation: { maxLength: 2000 } },
+    ],
+  },
+} as const;
+
 export const updateIssueSchema = objectWithoutDefaults(
   createIssueBaseSchema.omit({
     createdByUserId: true,
@@ -990,6 +1217,7 @@ export const updateIssueSchema = objectWithoutDefaults(
     /** Assignment-only handoff; the following structured goal action owns the wake. */
     deferWakeForGoal: z.boolean().optional(),
     hiddenAt: z.string().datetime().nullable().optional(),
+    blockedReason: issueBlockedReasonInputSchema.optional(),
   });
 
 export type UpdateIssue = z.infer<typeof updateIssueSchema>;
@@ -1362,116 +1590,6 @@ export const askUserQuestionsQuestionSchema = z.object({
   allowOther: z.boolean().optional(),
   options: z.array(askUserQuestionsQuestionOptionSchema).min(1).max(129),
 });
-
-const wardmoteQuestionOptionSchema = z.object({
-  id: z.string().min(1).max(160),
-  label: z.string().min(1).max(1000),
-  description: z.string().max(4000).optional(),
-  recommended: z.boolean().optional(),
-});
-
-const wardmoteQuestionSchema = z
-  .object({
-    id: z.string().min(1).max(160),
-    header: z.string().max(1000).optional(),
-    prompt: z.string().min(1).max(4000),
-    helpText: z.string().max(4000).optional(),
-    required: z.boolean(),
-    answerMode: z.enum(["single_select", "multi_select", "text"]),
-    initialText: z.string().refine(value => value.length <= 200000 && Array.from(value).length <= 100000, "initial text exceeds 100000 Unicode code points").optional(),
-    options: z.array(wardmoteQuestionOptionSchema).max(128).optional(),
-    customAnswer: z
-      .object({
-        enabled: z.literal(true),
-        label: z.string().max(1000).optional(),
-        placeholder: z.string().max(1000).optional(),
-      })
-      .optional(),
-    textValidation: z
-      .object({
-        minLength: z.number().int().min(0).max(100000).optional(),
-        maxLength: z.number().int().min(0).max(100000).optional(),
-        pattern: z.string().max(1000).optional(),
-        inputType: z.enum(["text", "number", "integer"]).optional(),
-        minimum: z.number().finite().optional(),
-        maximum: z.number().finite().optional(),
-      })
-      .optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (value.initialText !== undefined && value.answerMode !== "text") {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "only text questions can define initial text", path: ["initialText"] });
-    }
-    if (
-      value.answerMode === "text" &&
-      value.options &&
-      value.options.length > 0
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "text questions cannot define options",
-        path: ["options"],
-      });
-    }
-    if (
-      value.answerMode !== "text" &&
-      (!value.options || value.options.length === 0)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "select questions require options",
-        path: ["options"],
-      });
-    }
-    if (value.answerMode === "text" && value.customAnswer) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "text questions cannot define customAnswer",
-        path: ["customAnswer"],
-      });
-    }
-    if (
-      value.textValidation?.minLength !== undefined &&
-      value.textValidation.maxLength !== undefined &&
-      value.textValidation.minLength > value.textValidation.maxLength
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "minLength cannot exceed maxLength",
-        path: ["textValidation"],
-      });
-    }
-    if (
-      value.textValidation?.minimum !== undefined &&
-      value.textValidation.maximum !== undefined &&
-      value.textValidation.minimum > value.textValidation.maximum
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "minimum cannot exceed maximum",
-        path: ["textValidation"],
-      });
-    }
-    if (value.textValidation?.pattern !== undefined) {
-      try {
-        new RegExp(value.textValidation.pattern);
-      } catch {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "pattern must be a valid regular expression",
-          path: ["textValidation", "pattern"],
-        });
-      }
-    }
-    const optionIds = value.options?.map((option) => option.id) ?? [];
-    if (new Set(optionIds).size !== optionIds.length) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "option ids must be unique",
-        path: ["options"],
-      });
-    }
-  });
 
 export const wardmoteQuestionSetPayloadSchema = z
   .object({

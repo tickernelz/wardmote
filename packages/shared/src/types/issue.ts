@@ -661,6 +661,15 @@ export interface IssueUnblockDescriptor {
   action: string;
 }
 
+/** Why an issue is blocked and what its author recommends; shown on the Decisions blocker card. */
+export interface IssueBlockedReason {
+  reason: string;
+  suggestion: string;
+  decisionId: string | null;
+  authorAgentId: string | null;
+  recordedAt: string;
+}
+
 export interface IssueRecoveryAction {
   /** Read-only activity of the exact native run named by the wake policy. */
   nativeRunActivity?: {
@@ -977,6 +986,7 @@ export interface Issue {
   reviewAttention?: IssueReviewAttention;
   blockedInboxAttention?: IssueBlockedInboxAttention | null;
   unblockDescriptor?: IssueUnblockDescriptor | null;
+  blockedReason?: IssueBlockedReason | null;
   blockedTransitionAt?: Date | null;
   blockedOwnerNotifiedAt?: Date | null;
   activeRecoveryAction?: IssueRecoveryAction | null;

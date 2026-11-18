@@ -87,6 +87,7 @@ import {
   toolConnections,
   workspaceOperations,
 } from "@tickernelz/wardmote-db";
+import { cancelOpenBlockedReasonDecision } from "./blocked-reason.js";
 import type {
   AcceptedPlanDecomposition,
   IssueComment,
@@ -5078,6 +5079,7 @@ const issueListSelect = {
   executionWorkspaceSettings: sql<null>`null`,
   sourceTrust: issues.sourceTrust,
   unblockDescriptor: issues.unblockDescriptor,
+  blockedReason: issues.blockedReason,
   blockedTransitionAt: issues.blockedTransitionAt,
   blockedOwnerNotifiedAt: issues.blockedOwnerNotifiedAt,
   startedAt: issues.startedAt,
@@ -11081,6 +11083,7 @@ export function issueService(db: Db) {
         issueData.status !== "blocked"
       ) {
         patch.unblockDescriptor = null;
+        patch.blockedReason = null;
         patch.blockedTransitionAt = null;
         patch.blockedOwnerNotifiedAt = null;
       }
@@ -11426,6 +11429,13 @@ export function issueService(db: Db) {
           await issueThreadInteractionService(tx).expireConnectionIntentsForOwnershipChange(updated);
         }
         if (existing.status !== updated.status) {
+          if (existing.status === "blocked" && existing.blockedReason?.decisionId) {
+            await cancelOpenBlockedReasonDecision(tx as Db, {
+              companyId: updated.companyId,
+              decisionId: existing.blockedReason.decisionId,
+              cancelledReason: "issue_left_blocked",
+            });
+          }
           if (
             (existing.status === "done" || existing.status === "cancelled") &&
             updated.status !== "done" &&

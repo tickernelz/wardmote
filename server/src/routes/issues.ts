@@ -60,6 +60,17 @@ import type { IssueRunModelOverrideInheritance } from "@tickernelz/wardmote-shar
 import { applyIssueRunModelOverrideToSubtree } from "../services/issue-model-override-inheritance.js";
 import { releaseDependencyGateRecoveryHold } from "../services/dependency-gate-recovery-hold.js";
 import { requiresExecutionReconciliation } from "@tickernelz/wardmote-shared";
+import {
+  ISSUE_BLOCKED_REASON_EXAMPLE,
+  decisionOptionsSchema,
+  type DecisionOption,
+  type IssueBlockedReason,
+  type IssueBlockedReasonInput,
+} from "@tickernelz/wardmote-shared";
+import { decisionService } from "../services/decisions.js";
+import { createDecisionWakeOriginAgent } from "../services/decision-wakeup.js";
+import { BLOCKED_REASON_DECISION_KIND, cancelOpenBlockedReasonDecision } from "../services/blocked-reason.js";
+import { parseWardmoteQuestionSet, type WardmoteQuestionSet } from "../vendor/wardmote-runner/index.js";
 import { sendIssueDocumentPdf, serveAttachmentContent } from "./content-serving.js";
 import { issueShareLinkService, toIssueShareLink } from "../services/issue-share-links.js";
 import { resolveBaseUrl } from "../lib/public-base-url.js";
@@ -3586,6 +3597,9 @@ export function issueRoutes(
   const secretProposals = createSecretProposalsService(db);
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
+  });
+  const blockedReasonDecisions = decisionService(db, {
+    wakeOriginAgent: createDecisionWakeOriginAgent((agentId, options) => heartbeat.wakeup(agentId, options)),
   });
   const commentWasCreatedByAssigneeRun = async (
     comment: { companyId: string; createdByRunId?: string | null },
@@ -14594,8 +14608,10 @@ export function issueRoutes(
         expectedExecutionPolicy,
         onBehalfOfUserId: _requestedOnBehalfOfUserId,
         modelOverride: requestedModelOverride,
+        blockedReason: rawBlockedReason,
         ...updateFields
       } = req.body;
+      const blockedReasonInput = rawBlockedReason as IssueBlockedReasonInput | undefined;
       if (requestedModelOverride !== undefined) {
         if (req.actor.type === "agent" && !isCompanyOwnerAgentActor(req)) {
           res.status(403).json({
@@ -15059,6 +15075,68 @@ export function issueRoutes(
       if (updateFields.unblockDescriptor && nextStatus !== "blocked") {
         throw unprocessable("unblockDescriptor requires blocked status");
       }
+      if (blockedReasonInput && nextStatus !== "blocked") {
+        throw unprocessable("blockedReason requires blocked status", {
+          code: "blocked_reason_requires_blocked_status",
+        });
+      }
+      let blockedReasonOptions: DecisionOption[] | null = null;
+      if (blockedReasonInput?.actions?.length) {
+        if (req.actor.type !== "agent" || !req.actor.agentId || !req.actor.runId) {
+          throw unprocessable(
+            "blockedReason.actions are posted by an agent run; omit actions or send them from the assignee's run",
+            { code: "blocked_reason_actions_require_agent_run" },
+          );
+        }
+        const parsedOptions = decisionOptionsSchema.safeParse(
+          blockedReasonInput.actions.map((action) => ({
+            ...action,
+            effects: action.effects.map((effect) => ({
+              ...effect,
+              targetIssueId: effect.targetIssueId ?? existing.id,
+              staleness: effect.staleness ?? "lenient",
+            })),
+          })),
+        );
+        if (!parsedOptions.success) {
+          throw unprocessable("blockedReason.actions are invalid", {
+            code: "blocked_reason_actions_invalid",
+            issues: parsedOptions.error.issues.map((issue) => ({
+              path: ["blockedReason", "actions", ...issue.path].join("."),
+              message: issue.message,
+            })),
+          });
+        }
+        blockedReasonOptions = parsedOptions.data as DecisionOption[];
+      }
+      let blockedReasonQuestionSet: WardmoteQuestionSet | null = null;
+      if (blockedReasonInput?.questions?.length) {
+        try {
+          blockedReasonQuestionSet = parseWardmoteQuestionSet({
+            schema: "wardmote.question_set.v1",
+            questions: blockedReasonInput.questions.map((question) =>
+              question.answerMode === "text"
+                ? { ...question, textValidation: { ...question.textValidation, maxLength: question.textValidation?.maxLength ?? 2_000 } }
+                : question,
+            ),
+          });
+        } catch (error) {
+          throw unprocessable(
+            `blockedReason.questions are invalid: ${error instanceof Error ? error.message : String(error)}`,
+            { code: "blocked_reason_questions_invalid" },
+          );
+        }
+      }
+      const storedBlockedReason: IssueBlockedReason | null = blockedReasonInput
+        ? {
+            reason: blockedReasonInput.reason,
+            suggestion: blockedReasonInput.suggestion,
+            decisionId: null,
+            authorAgentId: actor.agentId ?? null,
+            recordedAt: new Date().toISOString(),
+          }
+        : null;
+      if (storedBlockedReason) updateFields.blockedReason = storedBlockedReason;
       const descriptor = updateFields.unblockDescriptor ?? null;
       if (descriptor && typeof descriptor === "object") {
         const owner = descriptor.owner;
@@ -15118,6 +15196,19 @@ export function issueRoutes(
       }
       const enteringBlocked =
         existing.status !== "blocked" && updateFields.status === "blocked";
+      if (enteringBlocked && req.actor.type === "agent" && !storedBlockedReason) {
+        logger.warn(
+          { issueId: existing.id, agentId: req.actor.agentId, runId: req.actor.runId ?? null, code: "blocked_reason_required" },
+          "agent blocked transition rejected without blockedReason",
+        );
+        res.status(422).json({
+          error:
+            "Agents must explain a blocked status: send blockedReason { reason, suggestion } with status blocked. reason (max 1000 chars) says what holds the work; suggestion (max 2000 chars) recommends one action, why, and what you will do once the user agrees. Optional blockedReason.actions (max 4) put buttons on the Decisions card; each effect is one of comment_on_issue, create_issue, update_issue_status, assign_issue, resolve_blocker, and targetIssueId defaults to this issue.",
+          code: "blocked_reason_required",
+          example: ISSUE_BLOCKED_REASON_EXAMPLE,
+        });
+        return;
+      }
       if (enteringBlocked) {
         const requestedBlockerIds = Array.isArray(req.body.blockedByIssueIds)
           ? [...new Set(req.body.blockedByIssueIds as string[])]
@@ -15170,11 +15261,12 @@ export function issueRoutes(
           !hasUnresolvedBlocker &&
           !pendingInteraction &&
           !pendingApproval &&
-          !descriptor
+          !descriptor &&
+          !blockedReasonOptions
         ) {
           res.status(422).json({
             error:
-              "Entering blocked requires unresolved blockers, a pending interaction/approval, or unblockDescriptor",
+              "Entering blocked requires unresolved blockers, a pending interaction/approval, unblockDescriptor, or blockedReason.actions",
           });
           return;
         }
@@ -15662,6 +15754,8 @@ export function issueRoutes(
         Boolean(commentAttachmentIds?.length) ||
         commentWithAdapterOverrides ||
         Boolean(decision) ||
+        Boolean(blockedReasonOptions) ||
+        Boolean(storedBlockedReason && existing.blockedReason?.decisionId) ||
         shouldRelayStop ||
         persistReviewActivityTransactionally ||
         reviewPolicySensitiveMutationRequested;
@@ -15675,6 +15769,44 @@ export function issueRoutes(
               return null;
             const updated = await updateIssue(tx);
             if (!updated) return null;
+            if (storedBlockedReason) {
+              if (existing.blockedReason?.decisionId) {
+                await cancelOpenBlockedReasonDecision(tx as unknown as Db, {
+                  companyId: updated.companyId,
+                  decisionId: existing.blockedReason.decisionId,
+                  cancelledReason: "blocked_reason_replaced",
+                });
+              }
+              if (blockedReasonOptions && actor.agentId && actor.runId) {
+                const label = updated.identifier ?? "Task";
+                const blockedDecision = await blockedReasonDecisions.create(
+                  {
+                    companyId: updated.companyId,
+                    actor: req.actor,
+                    agentId: actor.agentId,
+                    runId: actor.runId,
+                    title: `${label} is blocked: ${storedBlockedReason.reason}`.slice(0, 500),
+                    body: `**Why it is blocked**\n\n${storedBlockedReason.reason}\n\n**Suggestion**\n\n${storedBlockedReason.suggestion}`,
+                    ruleKey: "issue.blocked_reason",
+                    options: blockedReasonOptions,
+                    inputs: null,
+                    continuationPolicy: "wake_origin_agent",
+                    metadata: {
+                      kind: BLOCKED_REASON_DECISION_KIND,
+                      blockedIssueId: updated.id,
+                      ...(blockedReasonQuestionSet ? { questionSet: blockedReasonQuestionSet } : {}),
+                    },
+                  },
+                  tx as unknown as Db,
+                );
+                const linkedBlockedReason = { ...storedBlockedReason, decisionId: blockedDecision.id };
+                await tx
+                  .update(issueRows)
+                  .set({ blockedReason: linkedBlockedReason })
+                  .where(eq(issueRows.id, updated.id));
+                updated.blockedReason = linkedBlockedReason;
+              }
+            }
             if (commentAttachmentIds?.length || commentWithAdapterOverrides) {
               // Adapter settings, reassignment, comment and upload binding commit together.
               // A failed comment or invalid receipt rolls back the issue update.

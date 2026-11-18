@@ -166,6 +166,18 @@ export type AttentionItemDetail =
         title: string | null;
       } | null;
       blockedTaskCount?: number;
+      /** The agent's explanation, read from {@link reasonIssue}; null means none was given. */
+      blockedReason?: {
+        reason: string;
+        suggestion: string;
+        decisionId: string | null;
+      } | null;
+      /** The blocked task that owes the explanation and receives a nudge. */
+      reasonIssue?: {
+        id: string;
+        identifier: string | null;
+        assigneeAgentId: string | null;
+      } | null;
       images: AttentionDetailImage[];
     }
   | {

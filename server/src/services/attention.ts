@@ -46,6 +46,7 @@ import type {
   AttentionWorkspaceRef,
   IssueThreadInteractionEffectiveResolverPolicySource,
   IssueThreadInteractionResolverPolicyProvenance,
+  IssueBlockedReason,
   IssueReviewAttention,
   IssueReviewPolicy,
 } from "@tickernelz/wardmote-shared";
@@ -64,6 +65,7 @@ import {
 import { executionIssueCondition } from "./issue-visibility.js";
 import { parseIssueExecutionState } from "./issue-execution-policy.js";
 import { isProspectiveBlockedTransition } from "./routable-blocked.js";
+import { BLOCKED_REASON_DECISION_KIND } from "./blocked-reason.js";
 import { issueReadSqlCondition, type AuthorizationActor } from "./authorization.js";
 import { evaluateAgentInvokability, type AgentOrgRow } from "./agent-invokability.js";
 import { canonicalizeStoredResolverPolicy } from "./issue-thread-interaction-resolution.js";
@@ -122,6 +124,13 @@ const ADDRESSEE_WAKE_COVERED_RUN_STATUSES = [
 const OPEN_RECOVERY_STATUSES = ["active", "escalated"] as const;
 const HUMAN_RECOVERY_OWNER_TYPES = ["user", "board"] as const;
 const DETAIL_EXCERPT_LENGTH = 160;
+const BLOCKED_REASON_MISSING_TEXT = "Reason not provided yet.";
+
+function blockedReasonDecisionLink(metadata: unknown): { blockedIssueId?: string } {
+  if (!metadata || typeof metadata !== "object") return {};
+  const { kind, blockedIssueId } = metadata as Record<string, unknown>;
+  return kind === BLOCKED_REASON_DECISION_KIND && typeof blockedIssueId === "string" ? { blockedIssueId } : {};
+}
 const PAUSE_REMINDER_AFTER_MS = [24 * 3_600_000, 72 * 3_600_000] as const;
 const DETAIL_IMAGE_LIMIT = 3;
 const OPEN_DECISION_DEFAULT_LIMIT = 500;
@@ -1194,6 +1203,8 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
       const includeDismissed = options.includeDismissed === true;
       const now = serviceOptions.now?.() ?? Date.now();
       const collected: AttentionItem[] = [];
+      const absorbedBlockedDecisionIds = new Set<string>();
+      const liveBlockedDecisionIds = new Set<string>();
 
       const add = (item: AttentionItem) => {
         const dismissal = activeDismissalState(dismissals, item.dismissalKey, item.activityAt, now);
@@ -1430,6 +1441,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
         status: decisions.status,
         expiresAt: decisions.expiresAt,
         originIssueId: decisions.originIssueId,
+        metadata: decisions.metadata,
         createdAt: decisions.createdAt,
         updatedAt: decisions.updatedAt,
       }).from(decisions).where(and(eq(decisions.companyId, companyId), eq(decisions.status, "open")))
@@ -1458,7 +1470,8 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           subject: { kind: "decision", id: decision.id, companyId, title: decision.title, identifier: null, status: decision.status,
             href: `/${prefix}/decisions?decisionId=${decision.id}`,
             metadata: { originIssueId: decision.originIssueId, originAgentId: decision.originAgentId, bundleId: decision.bundleId,
-              bundleTitle: decision.bundleId ? bundleTitleMap.get(decision.bundleId) ?? null : null } },
+              bundleTitle: decision.bundleId ? bundleTitleMap.get(decision.bundleId) ?? null : null,
+              ...blockedReasonDecisionLink(decision.metadata) } },
           whyNow: "An agent decision is waiting for a board response.",
           decisionVerbs: decisionVerbs({ id: "decide", label: "Review", description: "Review and choose an option." }),
           inlineResolvable: true,
@@ -1609,9 +1622,30 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
           terminalBlockerIssueId?: string | null;
         } | null;
         unblockDescriptor?: { owner: { userId: string } | { agentId: string } | "board"; action: string } | null;
+        blockedReason?: IssueBlockedReason | null;
         blockedTransitionAt?: Date | null;
       };
       const typedBlockedIssues = blockedIssues as BlockedAttentionIssue[];
+      const blockedIssueById = new Map(typedBlockedIssues.map((issue) => [issue.id, issue]));
+      for (const issue of typedBlockedIssues) {
+        if (issue.blockedReason?.decisionId) liveBlockedDecisionIds.add(issue.blockedReason.decisionId);
+      }
+      const blockerReasonDetail = (reasonIssueId: string) => {
+        const reasonIssue = blockedIssueById.get(reasonIssueId);
+        if (!reasonIssue) return { blockedReason: null, reasonIssue: null };
+        const stored = reasonIssue.blockedReason ?? null;
+        if (stored?.decisionId) absorbedBlockedDecisionIds.add(stored.decisionId);
+        return {
+          blockedReason: stored
+            ? { reason: stored.reason, suggestion: stored.suggestion, decisionId: stored.decisionId }
+            : null,
+          reasonIssue: {
+            id: reasonIssue.id,
+            identifier: reasonIssue.identifier,
+            assigneeAgentId: reasonIssue.assigneeAgentId,
+          },
+        };
+      };
       const terminalBlockerIssueIds = typedBlockedIssues
         .map((issue) => issue.blockerAttention?.terminalBlockerIssueId)
         .filter((issueId): issueId is string => Boolean(issueId));
@@ -1645,7 +1679,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
               { id: "unblock", label: "Unblock", description: descriptor.action },
               { id: "reassign", label: "Reassign", description: "Route this blocked issue to another owner." },
             ),
-            inlineResolvable: false,
+            inlineResolvable: true,
             entryRule: "blocked issue has a human-owned unblockDescriptor",
             exitRule: "Issue leaves blocked status.",
             dedupKey: `blocked-owner:${issue.id}:${issue.blockedTransitionAt.toISOString()}`,
@@ -1658,6 +1692,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
             detail: {
               kind: "blocker",
               blockingIssue: resolveBlockingIssue(issue, blockingIssues.get(issue.id)),
+              ...blockerReasonDetail(issue.id),
               images: issueImages(blockerImageMap, issue.id),
             },
           }));
@@ -1687,19 +1722,21 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
         const blockedTaskCount = blockedWorkCounts.get(terminalIssueId) ?? 0;
         const taskLabel = blockedTaskCount === 1 ? "task" : "tasks";
         const dedupKey = `blocker:${terminalIssueId}`;
+        const reasonDetail = blockerReasonDetail(
+          blockedIssueById.has(terminalIssueId) ? terminalIssueId : candidate.issue.id,
+        );
+        const blockedWorkText = blockedTaskCount > 0 ? `Blocks ${blockedTaskCount} ${taskLabel}. ` : "";
         add(createItem({
           companyId,
           sourceKind: "blocker_attention",
           subject: issueSubject(prefix, candidate.terminalSummary),
-          whyNow: candidate.state === "needs_attention"
-            ? `Blocks ${blockedTaskCount} ${taskLabel} and needs human attention.`
-            : `Blocks ${blockedTaskCount} ${taskLabel}; choose the next owner or action.`,
+          whyNow: reasonDetail.blockedReason?.reason ?? `${blockedWorkText}${BLOCKED_REASON_MISSING_TEXT}`,
           decisionVerbs: decisionVerbs(
             { id: "unblock", label: "Unblock", description: "Repair or replace the stalled blocker path." },
             { id: "reassign", label: "Reassign", description: "Assign the stalled blocker to a live owner." },
             { id: "nudge", label: "Nudge", description: "Wake or prompt the current owner." },
           ),
-          inlineResolvable: false,
+          inlineResolvable: true,
           entryRule: `terminal blocker has a non-live blockerAttention.state = '${candidate.state}'`,
           exitRule: "The blocking tree becomes live or no open work remains blocked.",
           dedupKey,
@@ -1713,6 +1750,7 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
             kind: "blocker",
             blockingIssue: null,
             blockedTaskCount,
+            ...reasonDetail,
             images: issueImages(blockerImageMap, terminalIssueId),
           },
         }));
@@ -2099,6 +2137,9 @@ export function attentionService(db: Db, serviceOptions: AttentionServiceOptions
 
       const deduped = new Map<string, AttentionItem>();
       for (const item of collected) {
+        const blockedIssueId = item.sourceKind === "decision" ? item.subject.metadata?.blockedIssueId : null;
+        if (typeof blockedIssueId === "string" &&
+          (absorbedBlockedDecisionIds.has(item.subject.id) || !liveBlockedDecisionIds.has(item.subject.id))) continue;
         const current = deduped.get(item.dedupKey);
         deduped.set(item.dedupKey, current ? betterDuplicate(current, item) : item);
       }
