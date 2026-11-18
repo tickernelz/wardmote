@@ -6,16 +6,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunModelFallbackState } from "@tickernelz/wardmote-shared";
-import {
-  RESTORE_PRIMARY_MODEL_COMMENT,
-  RestorePrimaryModelControl,
-} from "./RestorePrimaryModelControl";
+import { RestorePrimaryModelControl } from "./RestorePrimaryModelControl";
 
-const mockIssuesApi = vi.hoisted(() => ({ addComment: vi.fn() }));
-const mockHeartbeatsApi = vi.hoisted(() => ({ cancel: vi.fn() }));
+const mockIssuesApi = vi.hoisted(() => ({ restorePrimaryModel: vi.fn() }));
 
 vi.mock("../../api/issues", () => ({ issuesApi: mockIssuesApi }));
-vi.mock("../../api/heartbeats", () => ({ heartbeatsApi: mockHeartbeatsApi }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -82,8 +77,7 @@ async function openDialog() {
 beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
-  mockIssuesApi.addComment.mockReset();
-  mockHeartbeatsApi.cancel.mockReset();
+  mockIssuesApi.restorePrimaryModel.mockReset();
 });
 
 afterEach(() => {
@@ -101,15 +95,16 @@ describe("RestorePrimaryModelControl", () => {
     expect(container.querySelector('[data-slot="restore-primary-model"]')).toBeNull();
   });
 
-  it("asks before stopping the fallback run", async () => {
+  it("asks before forcing the switch and says the cooldown reset reaches other agents", async () => {
     render(control());
     expect(trigger().getAttribute("aria-label")).toBe("Back to the primary model on ZHA-1");
     await openDialog();
-    expect(document.body.querySelector("[role='alertdialog']")?.textContent).toContain(
-      "Back to the primary model on ZHA-1?",
-    );
-    expect(mockHeartbeatsApi.cancel).not.toHaveBeenCalled();
-    expect(mockIssuesApi.addComment).not.toHaveBeenCalled();
+    const text = document.body.querySelector("[role='alertdialog']")?.textContent ?? "";
+    expect(text).toContain("Back to the primary model on ZHA-1?");
+    expect(text).toContain("forces the switch");
+    expect(text).toContain("other agents");
+    expect(text).toContain("60 to 80 seconds");
+    expect(mockIssuesApi.restorePrimaryModel).not.toHaveBeenCalled();
   });
 
   it("does not stop the run when the confirmation is dismissed", async () => {
@@ -117,47 +112,27 @@ describe("RestorePrimaryModelControl", () => {
     await openDialog();
     flushSync(() => dialogButton("Keep running").click());
     await waitFor(() => expect(document.body.querySelector("[role='alertdialog']")).toBeNull());
-    expect(mockHeartbeatsApi.cancel).not.toHaveBeenCalled();
-    expect(mockIssuesApi.addComment).not.toHaveBeenCalled();
+    expect(mockIssuesApi.restorePrimaryModel).not.toHaveBeenCalled();
   });
 
-  it("cancels the fallback run, then wakes the assignee back to the primary model", async () => {
-    const calls: string[] = [];
-    mockHeartbeatsApi.cancel.mockImplementation(async (runId: string) => {
-      calls.push(`cancel:${runId}`);
-    });
-    mockIssuesApi.addComment.mockImplementation(async (issueId: string, body: string) => {
-      calls.push(`comment:${issueId}:${body}`);
-    });
+  it("forces the switch through one server action on the task", async () => {
+    mockIssuesApi.restorePrimaryModel.mockResolvedValue({ primary: fallback.primaryModel });
 
     render(control());
     await openDialog();
     flushSync(() => dialogButton("Stop and switch").click());
 
-    await waitFor(() => expect(calls.length).toBe(2));
-    expect(calls).toEqual([
-      "cancel:run-9",
-      `comment:issue-7:${RESTORE_PRIMARY_MODEL_COMMENT}`,
-    ]);
-    expect(mockHeartbeatsApi.cancel).toHaveBeenCalledWith("run-9");
-    expect(mockIssuesApi.addComment).toHaveBeenCalledWith(
-      "issue-7",
-      "Kembali ke model utama.",
-      undefined,
-      undefined,
-      undefined,
-      expect.any(String),
-    );
+    await waitFor(() => expect(mockIssuesApi.restorePrimaryModel).toHaveBeenCalledTimes(1));
+    expect(mockIssuesApi.restorePrimaryModel).toHaveBeenCalledWith("issue-7");
   });
 
-  it("reports a failed restore instead of stopping the run silently", async () => {
-    mockHeartbeatsApi.cancel.mockRejectedValue(new Error("Run already finished."));
+  it("reports a failed restore instead of failing silently", async () => {
+    mockIssuesApi.restorePrimaryModel.mockRejectedValue(new Error("The assignee has no fallback models."));
     render(control());
     await openDialog();
     flushSync(() => dialogButton("Stop and switch").click());
     await waitFor(() =>
-      expect(container.querySelector('[role="alert"]')?.textContent).toBe("Run already finished."),
+      expect(container.querySelector('[role="alert"]')?.textContent).toBe("The assignee has no fallback models."),
     );
-    expect(mockIssuesApi.addComment).not.toHaveBeenCalled();
   });
 });

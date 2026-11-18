@@ -2082,4 +2082,55 @@ describeEmbeddedPostgres("tool gateway service", () => {
     expect(serialized).not.toContain("sk-secret-value");
     expect(serialized).toContain("***REDACTED***");
   });
+
+  it("reports a repeated failed plugin change as a replayed failure without running the plugin again", async () => {
+    const { company, agent, run } = await createRunFixture(db);
+    let executions = 0;
+    const gateway = createTestToolGatewayService(db, {
+      pluginToolDispatcher: {
+        initialize: async () => {},
+        teardown: () => {},
+        listToolsForAgent: () => [
+          {
+            name: "fixture:create_note",
+            displayName: "Create note",
+            description: "Fails to create a note.",
+            parametersSchema: { type: "object" },
+            pluginId: "fixture-plugin",
+          },
+        ],
+        getTool: () => null,
+        executeTool: async () => {
+          executions += 1;
+          throw new Error("Note store unavailable");
+        },
+        registerPluginTools: () => {},
+        unregisterPluginTools: () => {},
+        toolCount: () => 1,
+        getRegistry: () => {
+          throw new Error("not implemented");
+        },
+      },
+    });
+    await db.insert(toolPolicies).values({
+      companyId: company.id,
+      name: "Allow note fixture",
+      policyType: "allow",
+      selectors: { toolName: "fixture:create_note" },
+    });
+    const call = () => gateway.executePluginTool({
+      actor: { type: "agent", companyId: company.id, agentId: agent.id, runId: run.id },
+      tool: "fixture:create_note",
+      parameters: { text: "hello" },
+      runContext: { companyId: company.id, agentId: agent.id, runId: run.id },
+    });
+
+    await expect(call()).rejects.toThrow("Note store unavailable");
+    await expect(call()).rejects.toMatchObject({
+      status: 409,
+      reasonCode: "replayed_failure",
+      details: { status: "failed" },
+    } satisfies Partial<ToolGatewayHttpError>);
+    expect(executions).toBe(1);
+  });
 });

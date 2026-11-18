@@ -305,6 +305,16 @@ export interface RunModelFallbackState {
   switchedAt: string;
 }
 
+/** Outcome of a user's forced switch back to an assignee's primary model. */
+export interface RestorePrimaryModelResult {
+  primary: string;
+  chain: string[];
+  cancelledRunIds: string[];
+  resetSelectors: string[];
+  commentId: string;
+  wakeRunId: string | null;
+}
+
 export interface HeartbeatRunEvent {
   id: number;
   companyId: string;

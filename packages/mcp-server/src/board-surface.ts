@@ -2,6 +2,7 @@ import { AGENT_MEMBER_AUTHORITY_PERMISSION_KEYS } from "@tickernelz/wardmote-sha
 import type { GeneratedToolSpec } from "./generated-tools.js";
 
 export const AGENT_ADMITTING_GUARDS: Readonly<Record<string, true>> = {
+  assertAgentIssueCommentAllowed: true,
   assertBoardCanManageAgentsForCompany: true,
   assertBoardOrAgent: true,
   assertBoardOrAgentAuthority: true,
@@ -67,6 +68,7 @@ export const OWNER_AGENT_ADMITTING_GUARDS: Readonly<Record<string, true>> = {
 export const ACTOR_NEUTRAL_GUARDS: Readonly<Record<string, true>> = {
   assertAccessAdminVisible: true,
   assertAdapterManagementVisible: true,
+  assertBoardCommentNotPaused: true,
   assertAuthenticated: true,
   assertCanTestAsAgent: true,
   assertCompanyScopeReadAllowed: true,

@@ -22,6 +22,7 @@ import {
   prepareRunModelFallback,
   readRunActiveModel,
   recordModelCooldown,
+  type CoolingModel,
   type ModelFallbackRetryPlan,
 } from "../model-fallback.js";
 import type { RunModelFallbackReason } from "@tickernelz/wardmote-shared";
@@ -102,6 +103,12 @@ function readTransientRetryNotBeforeFromRun(
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function coolingMessage(model: CoolingModel) {
+  const until = model.until.toISOString();
+  if (!model.probeFailingSince) return `${model.selector} cooling until ${until}`;
+  return `${model.selector} cooling until ${until} because probes still fail since ${model.probeFailingSince.toISOString()}${model.lastProbeError ? ` (${model.lastProbeError})` : ""}`;
+}
+
 export function createRunModelFallback(dependencies: RunModelFallbackDependencies): RunModelFallback {
   const { db, appendRunEvent, armModelCooldownProbe } = dependencies;
 
@@ -164,10 +171,11 @@ export function createRunModelFallback(dependencies: RunModelFallbackDependencie
         eventType: MODEL_FALLBACK_PROBATION_EVENT,
         stream: "system",
         level: "info",
-        message: `${selection.probation.selector} recovered by probe at ${selection.probation.releasedAt.toISOString()}; first response limit ${selection.probation.firstEventTimeoutSec}s for this run`,
+        message: `${selection.probation.selector} ${selection.probation.releasedBy === "user" ? "restored by a user" : "recovered by probe"} at ${selection.probation.releasedAt.toISOString()}; first response limit ${selection.probation.firstEventTimeoutSec}s for this run`,
         payload: {
           selector: selection.probation.selector,
           releasedAt: selection.probation.releasedAt.toISOString(),
+          releasedBy: selection.probation.releasedBy,
           firstEventTimeoutSec: selection.probation.firstEventTimeoutSec,
         },
       });
@@ -177,7 +185,10 @@ export function createRunModelFallback(dependencies: RunModelFallbackDependencie
       eventType: MODEL_FALLBACK_EVENT,
       stream: "system",
       level: "warn",
-      message: modelFallbackEventMessage({ to: state.activeModel, primary: state.primaryModel, reason: state.reason }),
+      message: [
+        modelFallbackEventMessage({ to: state.activeModel, primary: state.primaryModel, reason: state.reason }),
+        ...selection.cooling.map(coolingMessage),
+      ].join("; "),
       payload: {
         phase: "run_start",
         from: selection.primary,
@@ -185,6 +196,14 @@ export function createRunModelFallback(dependencies: RunModelFallbackDependencie
         primary: selection.primary,
         reason: state.reason,
         retryAfterMs: null,
+        cooling: selection.cooling.map((model) => ({
+          selector: model.selector,
+          until: model.until.toISOString(),
+          reason: model.reason,
+          probeFailingSince: model.probeFailingSince?.toISOString() ?? null,
+          lastProbeAt: model.lastProbeAt?.toISOString() ?? null,
+          lastProbeError: model.lastProbeError,
+        })),
       },
     });
     await logRunModelFallbackActivity(run, options.issueId, {

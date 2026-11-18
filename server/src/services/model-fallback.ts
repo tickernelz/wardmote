@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { heartbeatRuns, modelCooldowns, type Db } from "@tickernelz/wardmote-db";
 import { unprocessable } from "../errors.js";
 import {
@@ -15,6 +15,9 @@ import {
 } from "@tickernelz/wardmote-shared";
 
 export const MODEL_FALLBACK_DEFAULT_COOLDOWN_MS = 5 * 60_000;
+/** How long after expiry an unreleased probeable cooldown is still picked up by the prober, so a restart keeps its schedule. */
+export const MODEL_COOLDOWN_REARM_WINDOW_MS = 10 * 60_000;
+const PROBE_ERROR_MAX_CHARS = 300;
 export const MODEL_FALLBACK_STATE_KEY = "wardmoteModelFallback";
 export const MODEL_FALLBACK_PRIMARY_KEY = "wardmotePrimaryModel";
 /** Per-model attempt counts carried by a retry lineage, so a fresh wake always starts over. */
@@ -53,8 +56,20 @@ export interface RunModelSelection {
   start: string;
   overlayChain: string[];
   reason: RunModelFallbackReason | null;
-  /** Set when the run starts on a model a probe released within the probation window. */
-  probation: { selector: string; releasedAt: Date; firstEventTimeoutSec: number } | null;
+  /** Set when the run starts on a model a probe or a user released within the probation window. */
+  probation: { selector: string; releasedAt: Date; releasedBy: string | null; firstEventTimeoutSec: number } | null;
+  /** Chain models ahead of the start that were skipped because they are cooling down. */
+  cooling: CoolingModel[];
+}
+
+export interface CoolingModel {
+  selector: string;
+  until: Date;
+  reason: RunModelFallbackReason;
+  /** First failed probe of the current outage; null while no probe has failed. */
+  probeFailingSince: Date | null;
+  lastProbeAt: Date | null;
+  lastProbeError: string | null;
 }
 
 export interface ModelFallbackStepPlan {
@@ -240,11 +255,13 @@ export async function recordModelCooldown(
     reason: RunModelFallbackReason;
     sourceRunId: string | null;
     probeAfter: Date | null;
+    now?: Date;
   },
 ): Promise<boolean> {
   const selector = input.selector.trim();
   if (!selector || input.reason === "refusal") return false;
-  const writtenAt = new Date();
+  const writtenAt = input.now ?? new Date();
+  const outageContinuesAfter = new Date(writtenAt.getTime() - MODEL_COOLDOWN_REARM_WINDOW_MS).toISOString();
   await db
     .insert(modelCooldowns)
     .values({
@@ -265,7 +282,9 @@ export async function recordModelCooldown(
         sourceRunId: sql`case when excluded.cooldown_until > ${modelCooldowns.cooldownUntil} then excluded.source_run_id else ${modelCooldowns.sourceRunId} end`,
         probeAfter: sql`case when excluded.cooldown_until > ${modelCooldowns.cooldownUntil} then excluded.probe_after else ${modelCooldowns.probeAfter} end`,
         cooldownUntil: sql`greatest(${modelCooldowns.cooldownUntil}, excluded.cooldown_until)`,
+        probeFailingSince: sql`case when ${modelCooldowns.releasedAt} is null and ${modelCooldowns.cooldownUntil} > ${outageContinuesAfter}::timestamptz then ${modelCooldowns.probeFailingSince} else null end`,
         releasedAt: null,
+        releasedBy: null,
         updatedAt: writtenAt,
       },
     });
@@ -306,16 +325,20 @@ const probeableColumns = {
   updatedAt: modelCooldowns.updatedAt,
 };
 
-/** Active rate-limit and upstream cooldowns a prober may check, across every company. */
+function rearmCutoff(now: Date) {
+  return new Date(now.getTime() - MODEL_COOLDOWN_REARM_WINDOW_MS);
+}
+
+/** Unreleased rate-limit and upstream cooldowns a prober may check, across every company, including ones that expired within the rearm window. */
 export async function listProbeableModelCooldowns(db: Db, now: Date): Promise<ProbeableModelCooldown[]> {
   const rows = await db
     .select(probeableColumns)
     .from(modelCooldowns)
-    .where(and(gt(modelCooldowns.cooldownUntil, now), isNotNull(modelCooldowns.probeAfter)));
+    .where(and(gt(modelCooldowns.cooldownUntil, rearmCutoff(now)), isNotNull(modelCooldowns.probeAfter), isNull(modelCooldowns.releasedAt)));
   return rows.map(toProbeable).filter((row): row is ProbeableModelCooldown => row !== null);
 }
 
-/** The selector's cooldown when it is still active and probeable. */
+/** The selector's unreleased probeable cooldown, active or expired within the rearm window. */
 export async function readProbeableModelCooldown(
   db: Db,
   companyId: string,
@@ -328,10 +351,80 @@ export async function readProbeableModelCooldown(
     .where(and(
       eq(modelCooldowns.companyId, companyId),
       eq(modelCooldowns.selector, selector),
-      gt(modelCooldowns.cooldownUntil, now),
+      gt(modelCooldowns.cooldownUntil, rearmCutoff(now)),
+      isNull(modelCooldowns.releasedAt),
     ))
     .limit(1);
   return row ? toProbeable(row) : null;
+}
+
+function shortProbeError(error: string | undefined) {
+  const line = (error ?? "probe failed").replace(/\s+/g, " ").trim() || "probe failed";
+  return line.length > PROBE_ERROR_MAX_CHARS ? `${line.slice(0, PROBE_ERROR_MAX_CHARS - 1)}…` : line;
+}
+
+/** Keeps an unreleased probeable cooldown alive until `until` after a failed probe; null when it is no longer probeable. */
+export async function extendModelCooldownAfterFailedProbe(
+  db: Db,
+  input: { companyId: string; selector: string; until: Date; probedAt: Date; error: string | undefined },
+): Promise<Date | null> {
+  const [row] = await db
+    .update(modelCooldowns)
+    .set({
+      cooldownUntil: sql`greatest(${modelCooldowns.cooldownUntil}, ${input.until.toISOString()}::timestamptz)`,
+      probeFailingSince: sql`coalesce(${modelCooldowns.probeFailingSince}, ${input.probedAt.toISOString()}::timestamptz)`,
+      lastProbeAt: input.probedAt,
+      lastProbeError: shortProbeError(input.error),
+    })
+    .where(and(
+      eq(modelCooldowns.companyId, input.companyId),
+      eq(modelCooldowns.selector, input.selector),
+      isNull(modelCooldowns.releasedAt),
+      isNotNull(modelCooldowns.probeAfter),
+      inArray(modelCooldowns.reason, ["rate_limit", "upstream"]),
+      gt(modelCooldowns.cooldownUntil, rearmCutoff(input.probedAt)),
+    ))
+    .returning({ until: modelCooldowns.cooldownUntil });
+  return row?.until ?? null;
+}
+
+/** Records a successful probe on an unreleased cooldown; the outage is no longer "failing since" anything. */
+export async function recordModelCooldownProbeOk(
+  db: Db,
+  input: { companyId: string; selector: string; probedAt: Date },
+): Promise<void> {
+  await db
+    .update(modelCooldowns)
+    .set({ probeFailingSince: null, lastProbeAt: input.probedAt, lastProbeError: null })
+    .where(and(
+      eq(modelCooldowns.companyId, input.companyId),
+      eq(modelCooldowns.selector, input.selector),
+      isNull(modelCooldowns.releasedAt),
+    ));
+}
+
+/** Ends the given selectors' active cooldowns on a user's request; a prober leaves them alone until a real run failure writes them again. */
+export async function resetModelCooldownsByUser(
+  db: Db,
+  input: { companyId: string; selectors: readonly string[]; now: Date },
+): Promise<string[]> {
+  if (input.selectors.length === 0) return [];
+  const rows = await db
+    .update(modelCooldowns)
+    .set({
+      cooldownUntil: sql`least(${modelCooldowns.cooldownUntil}, ${input.now.toISOString()}::timestamptz)`,
+      releasedAt: input.now,
+      releasedBy: "user",
+      updatedAt: input.now,
+    })
+    .where(and(
+      eq(modelCooldowns.companyId, input.companyId),
+      inArray(modelCooldowns.selector, [...input.selectors]),
+      gt(modelCooldowns.cooldownUntil, rearmCutoff(input.now)),
+      or(gt(modelCooldowns.cooldownUntil, input.now), isNull(modelCooldowns.releasedAt)),
+    ))
+    .returning({ selector: modelCooldowns.selector });
+  return rows.map((row) => row.selector);
 }
 
 /** Ends a cooldown after successful probes unless a cooldown write happened since observedUpdatedAt. */
@@ -341,7 +434,7 @@ export async function releaseModelCooldown(
 ): Promise<boolean> {
   const released = await db
     .update(modelCooldowns)
-    .set({ cooldownUntil: input.now, releasedAt: input.now, updatedAt: input.now })
+    .set({ cooldownUntil: input.now, releasedAt: input.now, releasedBy: "probe", updatedAt: input.now })
     .where(and(
       eq(modelCooldowns.companyId, input.companyId),
       eq(modelCooldowns.selector, input.selector),
@@ -356,6 +449,10 @@ interface ModelCooldownState {
   until: Date;
   reason: RunModelFallbackReason;
   releasedAt: Date | null;
+  releasedBy: string | null;
+  probeFailingSince: Date | null;
+  lastProbeAt: Date | null;
+  lastProbeError: string | null;
 }
 
 async function loadModelCooldownStates(
@@ -369,13 +466,16 @@ async function loadModelCooldownStates(
       until: modelCooldowns.cooldownUntil,
       reason: modelCooldowns.reason,
       releasedAt: modelCooldowns.releasedAt,
+      releasedBy: modelCooldowns.releasedBy,
+      probeFailingSince: modelCooldowns.probeFailingSince,
+      lastProbeAt: modelCooldowns.lastProbeAt,
+      lastProbeError: modelCooldowns.lastProbeError,
     })
     .from(modelCooldowns)
     .where(and(eq(modelCooldowns.companyId, companyId), inArray(modelCooldowns.selector, [...selectors])));
   return new Map(rows.map((row) => [row.selector, {
-    until: row.until,
+    ...row,
     reason: isReason(row.reason) ? row.reason : "rate_limit",
-    releasedAt: row.releasedAt,
   }]));
 }
 
@@ -387,7 +487,7 @@ function probationFor(
   const releasedAt = state?.releasedAt;
   if (!releasedAt || state.until.getTime() > now.getTime()) return null;
   if (now.getTime() - releasedAt.getTime() > MODEL_FALLBACK_PROBATION_MS) return null;
-  return { selector, releasedAt, firstEventTimeoutSec: MODEL_FALLBACK_PROBATION_FIRST_EVENT_TIMEOUT_SEC };
+  return { selector, releasedAt, releasedBy: state.releasedBy, firstEventTimeoutSec: MODEL_FALLBACK_PROBATION_FIRST_EVENT_TIMEOUT_SEC };
 }
 
 /** Starts the run on its lineage's forced model, else the first chain model not cooling down, with the rest as OMP's chain. */
@@ -405,10 +505,10 @@ export async function prepareRunModelFallback(input: {
   if (chain.length < 2) return null;
   const forced = text(input.context[MODEL_FALLBACK_FORCED_MODEL_KEY]);
   const states = await loadModelCooldownStates(input.db, input.companyId, chain);
-  const cooling = (selector: string) => (states.get(selector)?.until.getTime() ?? 0) > input.now.getTime();
+  const coolingNow = (selector: string) => (states.get(selector)?.until.getTime() ?? 0) > input.now.getTime();
   const start = forced && chain.includes(forced)
     ? forced
-    : chain.find((selector) => !cooling(selector)) ?? primary;
+    : chain.find((selector) => !coolingNow(selector)) ?? primary;
   input.config.model = start;
   input.config.fallbackModels = chain.filter((selector) => selector !== start);
   const overlayChain = input.config.fallbackModels as string[];
@@ -431,7 +531,19 @@ export async function prepareRunModelFallback(input: {
       [primary]: primaryEffort,
     };
   }
-  const selection: RunModelSelection = { primary, chain, start, overlayChain, reason, probation };
+  const cooling = chain.slice(0, Math.max(0, chain.indexOf(start))).flatMap((selector): CoolingModel[] => {
+    const cooldown = states.get(selector);
+    if (!cooldown || !coolingNow(selector)) return [];
+    return [{
+      selector,
+      until: cooldown.until,
+      reason: cooldown.reason,
+      probeFailingSince: cooldown.probeFailingSince,
+      lastProbeAt: cooldown.lastProbeAt,
+      lastProbeError: cooldown.lastProbeError,
+    }];
+  });
+  const selection: RunModelSelection = { primary, chain, start, overlayChain, reason, probation, cooling };
   const state: RunModelFallbackState | null = reason
     ? { primaryModel: primary, activeModel: start, reason, switchedAt: input.now.toISOString() }
     : null;
