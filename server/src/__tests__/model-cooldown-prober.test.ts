@@ -438,6 +438,30 @@ describeEmbeddedPostgres("model cooldown prober", () => {
     after.prober.stop();
   });
 
+  it("starts on the model no probe has proven dead when every chain model is cooling", async () => {
+    const target = await seed();
+    const h = harness(target.companyId, (_call, selector) => (selector === LIVE ? ok : down));
+    await h.prober.start(h.deps);
+    await cool(target, h.now(), { selector: PRIMARY });
+    await cool(target, h.now(), { selector: BACKUP });
+    h.prober.arm(target.companyId, PRIMARY);
+    h.prober.arm(target.companyId, BACKUP);
+    await h.advance(10 * 60_000);
+    await cool(target, h.now(), { selector: LIVE, probeAfter: null });
+
+    const run = await startModel(target.companyId, h.now());
+    expect(run.selection.start).toBe(LIVE);
+    expect(run.selection.cooling.map((model) => model.selector)).toEqual([PRIMARY, BACKUP]);
+
+    const backupUntil = (await row(target.companyId, BACKUP)).cooldownUntil.getTime();
+    await db.update(modelCooldowns).set({ probeFailingSince: h.now() }).where(and(eq(modelCooldowns.companyId, target.companyId), eq(modelCooldowns.selector, LIVE)));
+    await db.update(modelCooldowns).set({ cooldownUntil: new Date(backupUntil + 60 * 60_000) }).where(and(eq(modelCooldowns.companyId, target.companyId), eq(modelCooldowns.selector, LIVE)));
+    const primaryUntil = (await row(target.companyId, PRIMARY)).cooldownUntil.getTime();
+    const soonest = primaryUntil <= backupUntil ? PRIMARY : BACKUP;
+    expect((await startModel(target.companyId, h.now())).selection.start).toBe(soonest);
+    h.prober.stop();
+  });
+
   it("pulls forward a retry that waited only for the released cooldown", async () => {
     const target = await seed();
     const h = harness(target.companyId, () => ok);

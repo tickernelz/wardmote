@@ -490,6 +490,13 @@ function probationFor(
   return { selector, releasedAt, releasedBy: state.releasedBy, firstEventTimeoutSec: MODEL_FALLBACK_PROBATION_FIRST_EVENT_TIMEOUT_SEC };
 }
 
+/** With every chain model cooling: the first one no probe has failed on, else the one whose cooldown ends first. */
+function startWhileAllCooling(chain: readonly string[], states: Map<string, ModelCooldownState>): string {
+  const unproven = chain.find((selector) => !states.get(selector)?.probeFailingSince);
+  if (unproven) return unproven;
+  return chain.reduce((best, selector) => (states.get(selector)!.until.getTime() < states.get(best)!.until.getTime() ? selector : best));
+}
+
 /** Starts the run on its lineage's forced model, else the first chain model not cooling down, with the rest as OMP's chain. */
 export async function prepareRunModelFallback(input: {
   db: Db;
@@ -508,7 +515,7 @@ export async function prepareRunModelFallback(input: {
   const coolingNow = (selector: string) => (states.get(selector)?.until.getTime() ?? 0) > input.now.getTime();
   const start = forced && chain.includes(forced)
     ? forced
-    : chain.find((selector) => !coolingNow(selector)) ?? primary;
+    : chain.find((selector) => !coolingNow(selector)) ?? startWhileAllCooling(chain, states);
   input.config.model = start;
   input.config.fallbackModels = chain.filter((selector) => selector !== start);
   const overlayChain = input.config.fallbackModels as string[];
