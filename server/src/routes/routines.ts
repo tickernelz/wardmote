@@ -15,7 +15,7 @@ import {
 import { trackRoutineCreated } from "@tickernelz/wardmote-shared/telemetry";
 import { validate, validateIssueMutationBody } from "../middleware/validate.js";
 import { accessService, documentAnnotationService, logActivity, routineService } from "../services/index.js";
-import { assertBoardOrAgentAuthority, assertCompanyAccess, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
+import { assertBoardOrAgentAuthority, assertCompanyAccess, getAccessibleResource, getActorInfo, hasCompanyAccess, isCompanyOwnerAgentActor } from "./authz.js";
 import { badRequest, forbidden, unauthorized, unsupportedMediaType } from "../errors.js";
 import { getTelemetryClient } from "../telemetry.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
@@ -386,6 +386,7 @@ export function routineRoutes(
     }
     if (
       req.actor.type === "agent" &&
+      !isCompanyOwnerAgentActor(req) &&
       req.body.assigneeAgentId !== undefined &&
       req.body.assigneeAgentId !== req.actor.agentId
     ) {
@@ -434,6 +435,7 @@ export function routineRoutes(
       agentId: req.actor.type === "agent" ? req.actor.agentId : null,
       userId: req.actor.type === "board" ? req.actor.userId ?? "board" : null,
       runId: req.actor.runId ?? null,
+      assignsAnyAgent: isCompanyOwnerAgentActor(req),
     });
     const actor = getActorInfo(req);
     await logActivity(db, {

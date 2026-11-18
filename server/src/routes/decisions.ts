@@ -12,7 +12,7 @@ import {
 } from "@tickernelz/wardmote-shared";
 import { validate } from "../middleware/validate.js";
 import { decisionService, type DecisionServiceOptions } from "../services/decisions.js";
-import { assertBoard, assertBoardOrAgent, assertBoardOrAgentAuthority, assertCompanyAccess, getAccessibleResource, getActorInfo } from "./authz.js";
+import { assertBoard, assertBoardOrAgent, assertBoardOrAgentAuthority, assertCompanyAccess, getAccessibleResource, getActorInfo, isCompanyOwnerAgentActor } from "./authz.js";
 import { attentionService } from "../services/attention.js";
 import { authorizationDeniedDetails, authorizationService } from "../services/authorization.js";
 import { canReadDecisionSource } from "../services/decision-queues.js";
@@ -165,10 +165,11 @@ export function decisionRoutes(db: Db, options: DecisionServiceOptions) {
     const companyId = req.params.companyId as string; assertBoardOrAgent(req); assertCompanyAccess(req, companyId);
     const query = statsQuerySchema.safeParse(req.query);
     if (!query.success) { res.status(400).json({ error: "Invalid decision stats filters", details: query.error.flatten() }); return; }
-    if (req.actor.type === "agent" && query.data.originAgentId && query.data.originAgentId !== req.actor.agentId) {
+    const ownStatsOnly = req.actor.type === "agent" && !isCompanyOwnerAgentActor(req);
+    if (ownStatsOnly && query.data.originAgentId && query.data.originAgentId !== req.actor.agentId) {
       res.status(403).json({ error: "Agents may only read their own decision stats" }); return;
     }
-    const originAgentId = req.actor.type === "agent" ? req.actor.agentId : query.data.originAgentId;
+    const originAgentId = ownStatsOnly ? req.actor.agentId : query.data.originAgentId;
     res.json(await svc.stats(companyId, { originAgentId, since: query.data.since }));
   });
   router.get("/decisions/:id", async (req, res) => {

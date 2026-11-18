@@ -182,7 +182,7 @@ async function resolveRoutineResponsibleUserId(db: Db, companyId: string, actorU
   return resolveCompanyDefaultResponsibleUserId(db, companyId);
 }
 
-type Actor = { agentId?: string | null; userId?: string | null; runId?: string | null };
+type Actor = { agentId?: string | null; userId?: string | null; runId?: string | null; assignsAnyAgent?: boolean };
 type RoutineRow = typeof routines.$inferSelect;
 type RoutineTriggerRow = typeof routineTriggers.$inferSelect;
 
@@ -1014,7 +1014,7 @@ export function routineService(
     actor: Actor,
   ) {
     await assertAssignableAgent(db, companyId, assigneeAgentId, { kind: "routine" });
-    if (actor.agentId && assigneeAgentId !== actor.agentId) {
+    if (actor.agentId && !actor.assignsAnyAgent && assigneeAgentId !== actor.agentId) {
       throw forbidden("Agents can only restore routine revisions assigned to themselves");
     }
   }

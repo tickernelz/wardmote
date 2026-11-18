@@ -20,13 +20,17 @@ export function monitorPoliciesEqual(
 
 export function applyActorMonitorScheduledBy(
   policy: NormalizedExecutionPolicy | null,
-  actorType: "agent" | "user",
+  actor: { actorType: "agent" | "user"; agentId: string | null },
+  assigneeAgentId: string | null,
 ) {
   return setIssueExecutionPolicyMonitorScheduledBy(
     policy,
-    actorType === "user" ? "board" : "assignee",
+    actor.actorType === "agent" && actor.agentId !== null && actor.agentId === assigneeAgentId ? "assignee" : "board",
   );
 }
+
+const ISSUE_MONITOR_FORBIDDEN =
+  "Only the assignee agent, a CEO or manager agent of its assignee, or a board user can manage issue monitors";
 
 export async function assertCanManageIssueMonitor(
   accessSvc: Pick<ReturnType<typeof accessService>, "decide">,
@@ -34,6 +38,7 @@ export async function assertCanManageIssueMonitor(
   companyId: string,
   assigneeAgentId: string | null,
   monitorChanged: boolean,
+  issueId: string | null = null,
 ) {
   if (!monitorChanged) return;
   if (req.actor.type === "board") return;
@@ -48,15 +53,17 @@ export async function assertCanManageIssueMonitor(
       authorizationDeniedDetails(runtimeDecision),
     );
   }
-  if (
-    req.actor.type === "agent" &&
-    req.actor.agentId &&
-    req.actor.agentId === assigneeAgentId
-  )
-    return;
-  throw forbidden(
-    "Only the assignee agent or a board user can manage issue monitors",
-  );
+  if (req.actor.type !== "agent" || !req.actor.agentId) {
+    throw forbidden(ISSUE_MONITOR_FORBIDDEN);
+  }
+  if (req.actor.agentId === assigneeAgentId) return;
+  const issueControl = await accessSvc.decide({
+    actor: req.actor,
+    action: "tasks:manage_active_checkouts",
+    resource: { type: "issue", companyId, issueId, assigneeAgentId },
+  });
+  if (issueControl.allowed) return;
+  throw forbidden(ISSUE_MONITOR_FORBIDDEN, authorizationDeniedDetails(issueControl));
 }
 
 export function summarizeIssueMonitor(
@@ -135,7 +142,7 @@ export function prepareIssueMonitorUpdate(
   const previousPolicy = normalizeIssueExecutionPolicy(issue.executionPolicy);
   const policy = applyActorMonitorScheduledBy(normalizeIssueExecutionPolicy({
     ...previousPolicy, monitor,
-  }), actor.type === "board" ? "user" : "agent");
+  }), { actorType: actor.type === "board" ? "user" : "agent", agentId: actor.agentId ?? null }, issue.assigneeAgentId);
   const transition = applyIssueMonitorPolicyTransition({
     issue, policy, previousPolicy, requestedAssigneePatch: {},
     actor: { agentId: actor.agentId ?? null, userId: actor.userId ?? null },
