@@ -21,6 +21,7 @@ import type { OpenwaGatewayClient } from "./gateway.js";
 import type { OpenwaIngressHooks } from "./ingress.js";
 import { openwaChatKey, type OpenwaOutboundRegistry } from "./outbound.js";
 import { openwaGroupParticipantKeys, openwaOnlyOwnersAndBot, openwaRecordOwnerGroupStatus } from "./owner-group.js";
+import { openwaForgetGroupParticipants } from "./group-participants.js";
 import {
   classifyOpenwaEvent,
   detectApprovalReply,
@@ -1012,6 +1013,7 @@ export function createOpenwaAdmission(deps: OpenwaAdmissionDeps) {
     const snapshot = await snapshotFor(runtime);
     if (!snapshot) return;
     const chatKey = openwaChatKey(event.groupId);
+    openwaForgetGroupParticipants(snapshot.endpointId, chatKey);
     await ensureLids(runtime, snapshot, event.participantIds);
     const self = event.participantIds.some((id) => isAgentJid(snapshot, id));
     if (event.event === "group.leave" && self) {

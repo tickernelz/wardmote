@@ -37,6 +37,7 @@ import { canActorReadIssuePrivacy } from "../authorization.js";
 import { instanceSettingsService } from "../instance-settings.js";
 import { claimOpenwaCompletionReport, isOpenwaCompletionTurn, openwaCompletionOwedToOwner, settleOpenwaCompletionReport } from "../chat-completion-delivery.js";
 import { openwaOwnerFacingChat, registerOpenwaGroupGateway } from "./owner-group.js";
+import { openwaGroupParticipants, openwaMentionParticipant, type OpenwaGroupParticipants } from "./group-participants.js";
 import { parseOpenwaThreadId } from "./adapter.js";
 import { openwaApprovalResolveTool, openwaApprovalWithdrawTool, openwaRequestApprovalTool } from "./approvals.js";
 import { logOpenwaActivity, recordOpenwaAudit } from "./audit.js";
@@ -629,18 +630,27 @@ function sameSender(sender: Record<string, unknown>, mention: { jid: string }): 
   return jid && jid.slice(jid.indexOf("@")) === mention.jid.slice(mention.jid.indexOf("@")) ? false : null;
 }
 
+interface MentionReceiptItem {
+  token: string;
+  ref: string;
+  name: string | null;
+  quotedSender?: boolean | null;
+  participant?: boolean | null;
+}
+
 async function mentionReceipt(
   ctx: ToolContext,
   target: Target,
   mentions: ReadonlyArray<{ jid: string; token: string }>,
   quote: string | null,
-): Promise<Array<Record<string, unknown>>> {
+  groupParticipants: Promise<OpenwaGroupParticipants | null> | null,
+): Promise<MentionReceiptItem[]> {
   const openwa = sql`${chatDeliveries.normalizedEvent}->'openwa'`;
   const senderJid = sql`lower(${openwa}->'sender'->>'jid')`;
   const senderPhone = sql`${openwa}->'sender'->>'phone'`;
   const waMessageId = sql<string | null>`${openwa}->>'waMessageId'`;
   const phones = mentions.map((mention) => phoneDigits(mention.jid)).filter((digits): digits is string => digits !== null);
-  const rows = await ctx.db
+  const lookup = ctx.db
     .select({ sender: sql<unknown>`${openwa}->'sender'`, waMessageId })
     .from(chatDeliveries)
     .where(
@@ -675,6 +685,7 @@ async function mentionReceipt(
       logger.warn({ err: error, endpointId: ctx.endpoint.id, runId: ctx.run.id }, "failed to look up OpenWA mention names");
       return [];
     });
+  const [rows, participants] = await Promise.all([lookup, groupParticipants]);
   const senders = rows.map((row) => ({ sender: record(row.sender), waMessageId: row.waMessageId }));
   const quoted = quote ? (senders.find((row) => row.waMessageId === quote)?.sender ?? null) : null;
   return mentions.map((mention) => {
@@ -684,8 +695,19 @@ async function mentionReceipt(
       ref: chatRef(ctx, openwaChatKey(mention.jid)),
       name: named ? displayName(named.sender.name) : null,
       ...(quote ? { quotedSender: quoted ? sameSender(quoted, mention) : null } : {}),
+      ...(groupParticipants ? { participant: openwaMentionParticipant(participants, mention.jid) } : {}),
     };
   });
+}
+
+function mentionWarnings(mentions: readonly MentionReceiptItem[]): Array<{ code: "mention_not_in_group"; token: string; message: string }> {
+  return mentions
+    .filter((mention) => mention.participant === false)
+    .map((mention) => ({
+      code: "mention_not_in_group",
+      token: mention.token,
+      message: "Sent, but " + mention.token + " is not a current participant of this group, so the tag reached no one. Check the number with openwa_read_chat or openwa_find.",
+    }));
 }
 
 export async function replyRequirementFailure(ctx: ToolContext, quotedMessageId: string | null = null): Promise<{ category: OpenwaGrantCategory; reason: string } | null> {
@@ -1198,10 +1220,15 @@ async function openwaSend(ctx: ToolContext, args: Args): Promise<Record<string, 
       : [];
   if (target.isOrigin) await consumeReplyGrants(ctx);
   const mentioned = mentionTargets(ctx, args.mentions);
+  const mentions = mentioned.length
+    ? await mentionReceipt(ctx, target, mentioned, quoteDropped ? null : quote, target.isGroup ? openwaGroupParticipants(ctx.endpoint.id, gateway, target.chatKey) : null)
+    : null;
+  const warnings = mentions ? mentionWarnings(mentions) : [];
   const receipt = {
     messageIds: outcome.messageIds,
     chatRef: chatRef(ctx, target.chatId),
-    ...(mentioned.length ? { mentions: await mentionReceipt(ctx, target, mentioned, quoteDropped ? null : quote) } : {}),
+    ...(mentions ? { mentions } : {}),
+    ...(warnings.length ? { warnings } : {}),
     answeredTriggerIds,
     ...(target.ownerReport ? { ownerReportChat: true } : {}),
     ...(quote && !quoteDropped ? { quotedMessageId: quote } : {}),
