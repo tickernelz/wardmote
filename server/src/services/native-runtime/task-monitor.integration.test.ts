@@ -146,6 +146,22 @@ describeEmbeddedPostgres("native task monitors", () => {
     await expect(value.call({ taskId: targetId, idempotencyKey: "other", monitor: value.monitor })).rejects.toThrow();
   });
 
+  it("lets a standard-trust CEO schedule a monitor on another agent's task, recorded as board-scheduled", async () => {
+    const value = await fixture();
+    await db.update(agents).set({ role: "ceo" }).where(eq(agents.id, value.agentId));
+    const otherAgent = randomUUID();
+    const targetId = randomUUID();
+    await db.insert(agents).values({ id: otherAgent, companyId: value.companyId, name: "Other", adapterType: "wardmote_runner", status: "active" });
+    await db.insert(issues).values({ id: targetId, companyId: value.companyId, title: "Other agent's check", status: "in_progress", assigneeAgentId: otherAgent });
+
+    const result = await value.call({ taskId: targetId, idempotencyKey: "ceo-other", monitor: value.monitor });
+
+    expect(result).toMatchObject({ taskId: targetId, monitor: { scheduledBy: "board", status: "scheduled" }, replayed: false });
+    const [target] = await db.select().from(issues).where(eq(issues.id, targetId));
+    expect(target!.assigneeAgentId).toBe(otherAgent);
+    expect(target!.monitorNextCheckAt?.toISOString()).toBe(value.monitor.nextCheckAt);
+  });
+
   it("rejects invalid schedules, exhausted bounds and ineligible tasks without writes", async () => {
     const value = await fixture();
     for (const monitor of [
