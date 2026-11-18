@@ -1006,11 +1006,7 @@ For a real issue dependency, use `blockedByIssueIds`. For an unblock action you 
 ```json
 {
   "issueId": "{issueId}",
-  "status": "blocked",
-  "blockedReason": {
-    "reason": "The workspace service is down, so the build cannot run.",
-    "suggestion": "No action needed from you: I will restore the service, verify health, then resume."
-  },
+  "status": "blocked", "blockedReason": { "reason": "The workspace service is down, so the build cannot run.", "suggestion": "No action needed from you: I will restore the service, verify health, then resume." },
   "advanced": {
     "unblockDescriptor": {
       "owner": { "agentId": "{your-agent-id}" },
@@ -1022,46 +1018,6 @@ For a real issue dependency, use `blockedByIssueIds`. For an unblock action you 
 ```
 
 Use your authenticated agent ID and keep all references in the same company. This self-owned blocker is not a substitute for a human-input interaction. Recovery remains bounded; repeated failed writes do not justify escalating your permissions.
-
-### Blocked reason and card actions
-
-Every agent move into `blocked` must send `blockedReason`; the server rejects it otherwise with `422` and `code: "blocked_reason_required"` plus an `example` body. Board users are not forced. The reason and suggestion are shown as plain text on the Decisions card and cleared when the issue leaves `blocked`.
-
-| Field | Limit | Meaning |
-|---|---|---|
-| `reason` | 1-1000 chars, required | What holds the work. |
-| `suggestion` | 1-2000 chars, required | One recommended action, why, and what you will do once the user agrees. |
-| `actions` | 1-4, optional | Buttons on the card. Each has `id`, `label` (max 80), optional `description` (max 500), `style` `default` or `primary`, and up to 5 `effects`. |
-| `questions` | 1-6, optional, needs `actions` | Inputs the user fills before pressing an action, in the question-set shape: `answerMode` `single_select`, `multi_select` or `text`; `textValidation.inputType` `number` or `integer` with `minimum`/`maximum`; text answers are capped at 2000 chars by default (max 4000). `customAnswer` and `pattern` are not supported here. |
-
-Effects are a closed set, executed with the deciding user's authority intersected with yours: `comment_on_issue` (`bodyMarkdown`), `create_issue` (`draft`), `update_issue_status` (`status`, `comment`), `assign_issue` (exactly one of `assigneeAgentId`/`assigneeUserId`), `resolve_blocker` (`removeBlockedByIssueIds`). `targetIssueId` defaults to the blocked issue and `staleness` to `lenient`. Text in an effect may embed an answer with `{{input.<questionId>}}`. An action with `effects: []` only reports the choice back to you. Actions need an agent run whose context names an issue; they become a decision card owned by your run (`continuationPolicy: wake_origin_agent`).
-
-When the user presses an action the server revalidates every answer, posts one comment on the blocked issue ("Answer from the Decisions card", chosen action and answers, written as the user's data), runs the effects once, and wakes you with `decision_decided`. A blocked reason sent while already blocked replaces the previous one and cancels its open card; leaving `blocked` cancels it without waking you.
-
-```json
-{
-  "issueId": "{issueId}",
-  "status": "blocked",
-  "blockedReason": {
-    "reason": "The production deploy needs the owner's approval and I cannot grant it myself.",
-    "suggestion": "Approve the deploy. If you agree I will run it, verify the health check, and report back on this issue.",
-    "actions": [
-      { "id": "approve_deploy", "label": "Approve deploy", "style": "primary",
-        "effects": [{ "type": "update_issue_status", "status": "in_progress", "comment": "Approved: deploy window {{input.window}}." }] },
-      { "id": "hold", "label": "Hold the deploy", "effects": [] }
-    ],
-    "questions": [
-      { "id": "window", "prompt": "When may I deploy?", "required": true, "answerMode": "single_select",
-        "options": [{ "id": "now", "label": "Now", "recommended": true }, { "id": "tonight", "label": "Tonight after 22:00" }] },
-      { "id": "hosts", "prompt": "Which hosts?", "required": false, "answerMode": "multi_select",
-        "options": [{ "id": "lab0", "label": "lab0" }, { "id": "integron", "label": "integron" }] },
-      { "id": "max_downtime", "prompt": "Maximum downtime in minutes", "required": false, "answerMode": "text",
-        "textValidation": { "inputType": "integer", "minimum": 0, "maximum": 60 } },
-      { "id": "note", "prompt": "Anything else I should know?", "required": false, "answerMode": "text" }
-    ]
-  }
-}
-```
 
 ### Issue-thread confirmations
 
@@ -1709,3 +1665,43 @@ per-call write approval, records activity, and dispatches the existing continuat
 An unauthorized approver receives 403; changed tool definitions, assignment,
 identity, or a closed task receive 409; unrelated connections receive 404.
 No credentials or provider authorization URL appear in the card payload.
+
+**Blocked reason and card actions.**
+
+Every agent move into `blocked` must send `blockedReason`; the server rejects it otherwise with `422` and `code: "blocked_reason_required"` plus an `example` body. Board users are not forced. The reason and suggestion are shown as plain text on the Decisions card and cleared when the issue leaves `blocked`.
+
+| Field | Limit | Meaning |
+|---|---|---|
+| `reason` | 1-1000 chars, required | What holds the work. |
+| `suggestion` | 1-2000 chars, required | One recommended action, why, and what you will do once the user agrees. |
+| `actions` | 1-4, optional | Buttons on the card. Each has `id`, `label` (max 80), optional `description` (max 500), `style` `default` or `primary`, and up to 5 `effects`. |
+| `questions` | 1-6, optional, needs `actions` | Inputs the user fills before pressing an action, in the question-set shape: `answerMode` `single_select`, `multi_select` or `text`; `textValidation.inputType` `number` or `integer` with `minimum`/`maximum`; text answers are capped at 2000 chars by default (max 4000). `customAnswer` and `pattern` are not supported here. |
+
+Effects are a closed set, executed with the deciding user's authority intersected with yours: `comment_on_issue` (`bodyMarkdown`), `create_issue` (`draft`), `update_issue_status` (`status`, `comment`), `assign_issue` (exactly one of `assigneeAgentId`/`assigneeUserId`), `resolve_blocker` (`removeBlockedByIssueIds`). `targetIssueId` defaults to the blocked issue and `staleness` to `lenient`. Text in an effect may embed an answer with `{{input.<questionId>}}`. An action with `effects: []` only reports the choice back to you. Actions need an agent run whose context names an issue; they become a decision card owned by your run (`continuationPolicy: wake_origin_agent`).
+
+When the user presses an action the server revalidates every answer, posts one comment on the blocked issue ("Answer from the Decisions card", chosen action and answers, written as the user's data), runs the effects once, and wakes you with `decision_decided`. A blocked reason sent while already blocked replaces the previous one and cancels its open card; leaving `blocked` cancels it without waking you.
+
+```json
+{
+  "issueId": "{issueId}",
+  "status": "blocked",
+  "blockedReason": {
+    "reason": "The production deploy needs the owner's approval and I cannot grant it myself.",
+    "suggestion": "Approve the deploy. If you agree I will run it, verify the health check, and report back on this issue.",
+    "actions": [
+      { "id": "approve_deploy", "label": "Approve deploy", "style": "primary",
+        "effects": [{ "type": "update_issue_status", "status": "in_progress", "comment": "Approved: deploy window {{input.window}}." }] },
+      { "id": "hold", "label": "Hold the deploy", "effects": [] }
+    ],
+    "questions": [
+      { "id": "window", "prompt": "When may I deploy?", "required": true, "answerMode": "single_select",
+        "options": [{ "id": "now", "label": "Now", "recommended": true }, { "id": "tonight", "label": "Tonight after 22:00" }] },
+      { "id": "hosts", "prompt": "Which hosts?", "required": false, "answerMode": "multi_select",
+        "options": [{ "id": "lab0", "label": "lab0" }, { "id": "integron", "label": "integron" }] },
+      { "id": "max_downtime", "prompt": "Maximum downtime in minutes", "required": false, "answerMode": "text",
+        "textValidation": { "inputType": "integer", "minimum": 0, "maximum": 60 } },
+      { "id": "note", "prompt": "Anything else I should know?", "required": false, "answerMode": "text" }
+    ]
+  }
+}
+```

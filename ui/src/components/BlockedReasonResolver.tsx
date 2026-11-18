@@ -50,7 +50,7 @@ export function BlockedReasonResolver({
           <p className="text-xs font-medium text-ink-3">Suggestion</p>
           <p className="whitespace-pre-wrap break-words text-sm leading-6 text-ink">{blockedReason.suggestion}</p>
         </div>
-      ) : blockedReason ? null : (
+      ) : (
         <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
           Reason not provided yet. The assignee has not said why this task is blocked or what would unblock it.
         </p>
