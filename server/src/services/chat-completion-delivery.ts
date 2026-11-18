@@ -306,6 +306,10 @@ export async function isCompletedOnboardingHandoffWake(db: Connection, input: {
     children.every(child => ["done", "cancelled"].includes(child.status));
 }
 
+export class NoChatCompletionToReportError extends Error {
+  constructor() { super("chat_completion_superseded"); this.name = "NoChatCompletionToReportError"; }
+}
+
 /** Freeze the input at turn start. New completions cannot be consumed by an already-running turn. */
 export async function prepareChatCompletionTurn(db: Db, run: Run): Promise<Run> {
   const issueId = run.contextSnapshot?.issueId;
@@ -343,7 +347,7 @@ export async function prepareChatCompletionTurn(db: Db, run: Run): Promise<Run> 
       accepted.push(delivery.id); updates.push(await taskResult(tx, row.task));
       await tx.update(deliveries).set({ status: "queued", targetRunId: run.id }).where(eq(deliveries.id, delivery.id));
     }
-    if (accepted.length === 0) throw new Error("chat_completion_superseded");
+    if (accepted.length === 0) throw new NoChatCompletionToReportError();
     const contextSnapshot = { ...run.contextSnapshot, chatCompletionDeliveryIds: accepted, chatCompletionUpdates: updates,
       ...(channel === "openwa" ? { chatCompletionChannel: channel } : {}) };
     await tx.update(heartbeatRuns).set({ contextSnapshot }).where(eq(heartbeatRuns.id, run.id));

@@ -60,6 +60,16 @@ describe("delivery work coordinator", () => {
     expect(t.run).toHaveBeenCalledTimes(3);
     expect(s.coordinator.nextWakeAt()).toBeNull();
   });
+  it("keeps a restored deadline exact while the clock advances during scheduling", async () => {
+    const s = setup(), t = task();
+    const deadline = Date.now() + 60_000;
+    let clock = Date.now();
+    const now = vi.spyOn(Date, "now").mockImplementation(() => ++clock);
+    try {
+      await s.coordinator.register(DELIVERY_QUEUES.email, { ...t, nextRunAt: () => deadline }).ready;
+      expect(s.coordinator.nextWakeAt()).toBe(deadline);
+    } finally { now.mockRestore(); }
+  });
   it("does not postpone an already committed wake when another producer starts writing", async () => {
     const s = setup(), t = task();
     await s.coordinator.register(DELIVERY_QUEUES.feedback, t).ready;
