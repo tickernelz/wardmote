@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 export const WARDMOTE_MCP_SERVER_NAME = "wardmote";
+export const WARDMOTE_ASSIGNED_MCP_SERVER_NAME = "wardmote-assigned";
 export const WARDMOTE_MCP_PACKAGE = "@tickernelz/wardmote-mcp-server";
 export const WARDMOTE_MCP_BIN = "wardmote-mcp-server";
 export const WARDMOTE_MCP_DEFAULT_TOOLSETS = "core";

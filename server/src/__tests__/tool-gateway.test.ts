@@ -4726,14 +4726,20 @@ rl.on("line", (line) => {
       .get("/api/tool-gateway/tools")
       .query({ sessionToken: session.token });
     expect(listWithQueryToken.status).toBe(401);
-    expect(listWithQueryToken.body).toEqual({ error: "Tool gateway session token is required" });
+    expect(listWithQueryToken.body).toEqual({
+      error: "Tool gateway session token is required",
+      hint: expect.stringContaining("wardmote-assigned"),
+    });
 
     const callWithQueryToken = await request(app)
       .post("/api/tool-gateway/tools/call")
       .query({ sessionToken: session.token })
       .send({ tool: "mcp-remote-fixture:add", parameters: { a: 1, b: 2 } });
     expect(callWithQueryToken.status).toBe(401);
-    expect(callWithQueryToken.body).toEqual({ error: "Tool gateway session token is required" });
+    expect(callWithQueryToken.body).toEqual({
+      error: "Tool gateway session token is required",
+      hint: expect.stringContaining("wardmote-assigned"),
+    });
 
     const listWithHeaderToken = await request(app)
       .get("/api/tool-gateway/tools")

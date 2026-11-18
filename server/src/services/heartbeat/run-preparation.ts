@@ -2,7 +2,7 @@ import { spekoToolsForSession } from "../voice/speko-agent-tools.js";
 import type { ExplicitContinuationOwnerRelay } from "../explicit-native-continuation.js";
 import { githubConfiguredInstructionSources } from "../chat-github-review-policy.js";
 import { CONFIGURED_ENVIRONMENT_KEYS } from "../../vendor/wardmote-runner/index.js";
-import { ASSIGNED_MCP_SERVER_NAME } from "../mcp-tool-names.js";
+import { WARDMOTE_ASSIGNED_MCP_SERVER_NAME } from "@tickernelz/wardmote-adapter-utils/wardmote-mcp";
 import { externalConversationStateSql } from "../slack-conversation-state.js";
 import { githubBotConnectionIdsForRun } from "../chat-github-tools.js";
 import { isGatewayRestConnection } from "../gateway-rest-connections.js";
@@ -1158,7 +1158,7 @@ export async function buildWardmoteRuntimeMcpServers(input: {
 
   return [
     {
-      name: ASSIGNED_MCP_SERVER_NAME,
+      name: WARDMOTE_ASSIGNED_MCP_SERVER_NAME,
       url: `${wardmoteApiBaseUrl()}/mcp/gateways/${gateway!.gatewayPublicId}`,
       token: token.token,
       connectionId: `assignment:${assignmentDigest}`,
