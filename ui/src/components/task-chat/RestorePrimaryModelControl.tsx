@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw } from "lucide-react";
 import type { RunModelFallbackState } from "@tickernelz/wardmote-shared";
-import { heartbeatsApi } from "../../api/heartbeats";
 import { issuesApi } from "../../api/issues";
 import { queryKeys } from "../../lib/queryKeys";
 import { cn } from "../../lib/utils";
@@ -22,8 +21,6 @@ export interface RestorePrimaryModelRun {
   id: string;
   modelFallback?: RunModelFallbackState | null;
 }
-
-export const RESTORE_PRIMARY_MODEL_COMMENT = "Kembali ke model utama.";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -48,15 +45,7 @@ export function RestorePrimaryModelControl({
   const restore = useMutation({
     mutationFn: async () => {
       if (!issueId || !run) throw new Error("This task has no run on a fallback model.");
-      await heartbeatsApi.cancel(run.id);
-      return issuesApi.addComment(
-        issueId,
-        RESTORE_PRIMARY_MODEL_COMMENT,
-        undefined,
-        undefined,
-        undefined,
-        crypto.randomUUID(),
-      );
+      return issuesApi.restorePrimaryModel(issueId);
     },
     onSuccess: () => {
       if (companyId) void queryClient.invalidateQueries({ queryKey: queryKeys.liveRuns(companyId) });
@@ -79,7 +68,7 @@ export function RestorePrimaryModelControl({
         size="xs"
         disabled={restore.isPending}
         aria-label={`Back to the primary model${task}`}
-        title={`Back to the primary model — stops this fallback run and wakes the assignee on ${fallback.primaryModel}`}
+        title={`Back to the primary model — forces the next run onto ${fallback.primaryModel} and clears its cooldown`}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -99,8 +88,10 @@ export function RestorePrimaryModelControl({
           <AlertDialogHeader>
             <AlertDialogTitle>Back to the primary model{task}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This stops the run on {fallback.activeModel} now, so any unsaved work in that turn is lost, and wakes the
-              assignee again on {fallback.primaryModel}.
+              This forces the switch. It stops the run on {fallback.activeModel} now, so any unsaved work in that turn is
+              lost, and wakes the assignee on {fallback.primaryModel}. Cooldowns are shared across the company, so other
+              agents&apos; next runs try {fallback.primaryModel} again too. If it is still down, one run spends about 60 to
+              80 seconds finding out before the cooldown comes back.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

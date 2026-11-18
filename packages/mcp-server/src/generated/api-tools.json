@@ -1579,7 +1579,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:19875",
+    "boardGuard": "assertBoard@issues.ts:19882",
     "authorityCapability": null,
     "parameters": [
       {
@@ -14511,7 +14511,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:18598",
+    "boardGuard": "assertBoard@issues.ts:18605",
     "authorityCapability": null,
     "parameters": [
       {
@@ -26771,7 +26771,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:17458",
+    "boardGuard": "assertBoard@issues.ts:17465",
     "authorityCapability": null,
     "parameters": [
       {
@@ -38694,6 +38694,43 @@
     ]
   },
   {
+    "name": "wardmoteRestorePrimaryModelIssue",
+    "operationId": "POST /api/issues/{id}/restore-primary-model",
+    "method": "POST",
+    "path": "/issues/{issueId}/restore-primary-model",
+    "description": "Force the assignee back to its primary model. Board users only. Stops the task's runs on a fallback model, ends the company-wide cooldowns of the primary model and every chain model ahead of the fallback in use, posts the comment \"Kembali ke model utama.\", and wakes the assignee with the primary model forced for its next run and a fresh attempt budget. Probes leave the reset cooldowns alone until a real run failure writes them again.",
+    "toolset": "extended",
+    "authority": "board",
+    "authoritySource": "handler",
+    "tags": [
+      "issues"
+    ],
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    },
+    "guards": [
+      "assertAgentIssueCommentAllowed",
+      "assertBoard",
+      "assertBoardCommentNotPaused",
+      "requireBoardUserId"
+    ],
+    "permissions": [],
+    "boardGuard": "assertBoard@issues.ts:21829",
+    "authorityCapability": null,
+    "parameters": [
+      {
+        "name": "issueId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ]
+  },
+  {
     "name": "wardmoteRestoreRoutineRevision",
     "operationId": "POST /api/routines/{id}/revisions/{revisionId}/restore",
     "method": "POST",
@@ -39043,7 +39080,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:10233",
+    "boardGuard": "assertBoard@issues.ts:10240",
     "authorityCapability": null,
     "parameters": [
       {
@@ -41675,7 +41712,7 @@
       "assertIssueWriteInfluenceAllowed"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:9560",
+    "boardGuard": "assertBoard@issues.ts:9567",
     "authorityCapability": null,
     "parameters": [
       {
@@ -41736,7 +41773,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:17428",
+    "boardGuard": "assertBoard@issues.ts:17435",
     "authorityCapability": null,
     "parameters": [
       {
@@ -43984,7 +44021,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:19815",
+    "boardGuard": "assertBoard@issues.ts:19822",
     "authorityCapability": null,
     "parameters": [
       {
@@ -44450,7 +44487,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:18550",
+    "boardGuard": "assertBoard@issues.ts:18557",
     "authorityCapability": null,
     "parameters": [
       {
@@ -48654,7 +48691,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:10997",
+    "boardGuard": "assertBoard@issues.ts:11004",
     "authorityCapability": null,
     "parameters": [
       {
@@ -48780,7 +48817,7 @@
       "getActorInfo"
     ],
     "permissions": [],
-    "boardGuard": "assertBoard@issues.ts:17396",
+    "boardGuard": "assertBoard@issues.ts:17403",
     "authorityCapability": null,
     "parameters": [
       {

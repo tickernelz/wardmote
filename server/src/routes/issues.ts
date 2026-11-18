@@ -436,6 +436,7 @@ import {
   type PostedCommentSteerRequest,
 } from "../services/message-steering.js";
 import { setTimeout as sleep } from "node:timers/promises";
+import { restoreIssuePrimaryModel } from "../services/restore-primary-model.js";
 
 type QueueActor = ReturnType<typeof getActorInfo> | OpenwaSystemSteerActor;
 export type SteeringRetryPolicy = { delaysMs: readonly number[]; budgetMs: number; minAttemptMs: number };
@@ -3522,6 +3523,12 @@ function logIssueListRequest(input: {
       "safe authenticated GET observed",
     );
   });
+}
+
+function requireBoardUserId(req: Request): string {
+  const userId = req.actor.type === "board" ? req.actor.userId : null;
+  if (!userId) throw forbidden("Board user access required");
+  return userId;
 }
 
 export function issueRoutes(
@@ -21816,6 +21823,21 @@ export function issueRoutes(
     });
 
     res.json({ ok: true });
+  });
+
+  router.post("/issues/:id/restore-primary-model", async (req, res) => {
+    assertBoard(req);
+    const userId = requireBoardUserId(req);
+    const issue = await getAccessibleResource(req, res, svc.getById(req.params.id as string), "Issue not found");
+    if (!issue) return;
+    if (!(await assertAgentIssueCommentAllowed(req, res, issue))) return;
+    if (!(await assertBoardCommentNotPaused(req, res, issue))) return;
+    const result = await restoreIssuePrimaryModel(db, {
+      cancelRun: (runId, reason, options) => heartbeat.cancelRun(runId, reason, options),
+      addComment: (issueId, body, actor) => svc.addComment(issueId, body, actor),
+      wakeup: (agentId, options) => heartbeat.wakeup(agentId, options),
+    }, { issue, userId });
+    res.json(result);
   });
 
   return router;
