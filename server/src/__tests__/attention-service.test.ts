@@ -1807,8 +1807,8 @@ describeEmbeddedPostgres("attention service", () => {
     expect(rows[0]).toMatchObject({
       subject: { id: terminalId, identifier: "ATC-1", title: "Choose migration owner" },
       relatedIssue: { id: blockedId },
-      whyNow: "Blocks 3 tasks and needs human attention.",
-      detail: { kind: "blocker", blockingIssue: null, blockedTaskCount: 3 },
+      whyNow: "Blocks 3 tasks. Reason not provided yet.",
+      detail: { kind: "blocker", blockingIssue: null, blockedTaskCount: 3, blockedReason: null, reasonIssue: { id: blockedId } },
     });
     expect(rows[0]?.subject.id).not.toBe(blockedId);
   });

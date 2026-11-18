@@ -189,7 +189,7 @@ describe("DecisionCard", () => {
     const onDecide = vi.fn();
     const el = render({ onDecide });
     clickButtonWithText(el, "Comment and snooze");
-    expect(onDecide).toHaveBeenCalledWith("comment", expect.any(Object));
+    expect(onDecide).toHaveBeenCalledWith("comment", expect.any(Object), undefined);
   });
 
   it("fires onDismiss from the always-present zero-effect dismiss", () => {

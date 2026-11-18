@@ -76,7 +76,7 @@ function answerHasValue(answer: Answer | undefined): boolean {
   );
 }
 
-function answerError(
+export function answerError(
   question: Question,
   answer: Answer | undefined,
 ): string | null {

@@ -2913,7 +2913,10 @@ describe("agent issue mutation checkout ownership", () => {
       }));
 
       const app = await createApp(watchdogActor(), createWatchdogDb());
-      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status });
+      const blockedReason = status === "blocked"
+        ? { blockedReason: { reason: "The watched run stalled.", suggestion: "Reassign the task; I will hand over my notes." } }
+        : {};
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status, ...blockedReason });
 
       expect(res.status, JSON.stringify(res.body)).toBe(200);
       expect(mockIssueService.update).toHaveBeenCalledWith(issueId, expect.objectContaining({ status }));

@@ -26,6 +26,7 @@ export type AttentionListOptions = AttentionFeedQuery;
  */
 export const INLINE_RESOLVABLE_SOURCE_KINDS: ReadonlySet<AttentionSourceKind> = new Set<AttentionSourceKind>([
   "approval",
+  "blocker_attention",
   "decision",
   "issue_thread_interaction",
   "join_request",
@@ -235,6 +236,7 @@ export function attentionDetailLine(item: AttentionItem): string | null {
       return detail.agentName ?? reason;
     }
     case "blocker": {
+      if (detail.blockedReason) return detail.blockedReason.reason;
       const b = detail.blockingIssue;
       if (!b) return null;
       const id = b.identifier ? `${b.identifier} ` : "";

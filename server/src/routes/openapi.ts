@@ -7659,6 +7659,16 @@ registerCurrentRoute({
     .object({
       optionId: z.string().trim().min(1).max(120),
       inputValues: z.record(z.string(), z.string().max(20_000)).optional(),
+      questionResponse: z
+        .object({
+          schema: z.literal("wardmote.question_response.v1"),
+          answers: z.record(
+            z.string(),
+            z.object({ selectedOptionIds: z.array(z.string()).optional(), text: z.string().optional() }),
+          ),
+        })
+        .optional()
+        .describe("Answers to the decision's questionSet, revalidated by the server"),
       idempotencyKey: z.string().trim().min(1).max(500).nullable().optional(),
     })
     .strict(),

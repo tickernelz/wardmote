@@ -22,6 +22,14 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { MarkdownBody } from "./MarkdownBody";
+import type { WardmoteQuestionResponse } from "@tickernelz/wardmote-adapter-utils";
+import {
+  DecisionQuestionFields,
+  decisionQuestionResponse,
+  decisionQuestionSet,
+  decisionQuestionsComplete,
+  type DecisionQuestionAnswers,
+} from "./DecisionQuestionFields";
 
 /**
  * Presentational card for a single Decisions-v1 decision (PAP-14966 / PAP-14939
@@ -56,7 +64,7 @@ export interface DecisionCardProps {
   runHref?: string | null;
   busy?: boolean;
   errorMessage?: string | null;
-  onDecide?: (optionId: string, inputValues: Record<string, string>) => void;
+  onDecide?: (optionId: string, inputValues: Record<string, string>, questionResponse?: WardmoteQuestionResponse) => void;
   onDismiss?: (reason?: string) => void;
   className?: string;
 }
@@ -240,6 +248,10 @@ export function DecisionCard({
   className,
 }: DecisionCardProps) {
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const questionSet = decisionQuestionSet(decision.metadata);
+  const [questionAnswers, setQuestionAnswers] = useState<DecisionQuestionAnswers>({});
+  const questionsIncomplete = questionSet ? !decisionQuestionsComplete(questionSet, questionAnswers) : false;
+  const questionResponse = questionSet ? decisionQuestionResponse(questionAnswers) : undefined;
   const [confirmOptionId, setConfirmOptionId] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState("");
 
@@ -296,7 +308,7 @@ export function DecisionCard({
       setConfirmText("");
       return;
     }
-    onDecide?.(option.id, inputValues);
+    onDecide?.(option.id, inputValues, questionResponse);
   };
 
   const dimmed = decision.status === "expired" || decision.status === "cancelled";
@@ -433,6 +445,15 @@ export function DecisionCard({
         </div>
       )}
 
+      {open && questionSet && (
+        <DecisionQuestionFields
+          questionSet={questionSet}
+          answers={questionAnswers}
+          disabled={busy}
+          onChange={setQuestionAnswers}
+        />
+      )}
+
       {/* Options (open only) */}
       {open && (
         <div className="mt-3 space-y-2">
@@ -441,7 +462,7 @@ export function DecisionCard({
             const blockedStale = option.effects.some(
               (effect) => effect.staleness === "strict" && decisionEffectTargetIssueIds(effect).some((id) => staleTargetIdSet.has(id)),
             );
-            const disabled = busy || requiredUnmet || blockedStale;
+            const disabled = busy || requiredUnmet || questionsIncomplete || blockedStale;
             const cancelTree = cancelTreeEffect(option);
             const confirming = confirmOptionId === option.id;
             const previewRows = cancelTree && cancelTreePreview ? cancelTreePreview(cancelTree.targetIssueId) : null;
@@ -546,7 +567,7 @@ export function DecisionCard({
                         variant="danger"
                         size="sm"
                         disabled={busy || confirmText.trim() !== confirmToken}
-                        onClick={() => onDecide?.(option.id, inputValues)}
+                        onClick={() => onDecide?.(option.id, inputValues, questionResponse)}
                       >
                         {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                         {previewRows ? `Cancel ${pluralize(previewRows.length, "issue")}` : "Cancel tree"}

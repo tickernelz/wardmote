@@ -135,6 +135,10 @@ export const runnerApiReference: Record<string, { section: string; description?:
       {
         "body": {
           "status": "blocked",
+          "blockedReason": {
+            "reason": "The workspace service is down, so the build cannot run.",
+            "suggestion": "No action needed from you: I will restore the service, verify health, then resume."
+          },
           "unblockDescriptor": {
             "owner": {
               "agentId": "{your-agent-id}"

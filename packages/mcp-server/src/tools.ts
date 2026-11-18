@@ -254,7 +254,7 @@ const updateIssueToolSchema = z
       resume: true,
       interrupt: true,
     }),
-  );
+  ).extend({ blockedReason: z.object({ reason: z.string(), suggestion: z.string(), actions: z.array(z.unknown()).optional(), questions: z.array(z.unknown()).optional() }).optional() });
 
 const checkoutIssueToolSchema = z.object({
   issueId: issueIdSchema,
