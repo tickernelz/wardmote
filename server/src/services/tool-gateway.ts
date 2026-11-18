@@ -372,6 +372,16 @@ export class ToolGatewayHttpError extends Error {
   }
 }
 
+function replayedFailure(invocation: typeof toolInvocations.$inferSelect): ToolGatewayHttpError | null {
+  if (!REPLAYED_FAILURE_STATUSES.has(invocation.status)) return null;
+  return new ToolGatewayHttpError(
+    409,
+    `This identical call already ended as ${invocation.status} in this run and is not sent again: ${invocation.errorMessage ?? "no message"}`,
+    "replayed_failure",
+    { invocationId: invocation.id, status: invocation.status, errorCode: invocation.errorCode ?? null },
+  );
+}
+
 interface ExecuteGatewayToolInput {
   sessionToken: string;
   gatewayId?: string | null;
@@ -5767,6 +5777,7 @@ export function createToolGatewayService(
     const reasonCode = error.code === "google_error" ? error.code : `google_${error.code}`;
     return new ToolGatewayHttpError(GOOGLE_ERROR_STATUS[error.code], `${error.message}. ${error.hint}`, reasonCode, {
       code: error.code,
+      message: error.message,
       hint: error.hint,
       ...error.details,
     });
@@ -10486,14 +10497,8 @@ export function createToolGatewayService(
           ? await claimSlackRateLimitRetry(db, { companyId: session.companyId, agentId: session.agentId, runId: session.runId, issueId: session.issueId, endpointId: String(asRecord(tool.providerMetadata)?.endpointId ?? ""), identityContextId: session.identityContextId }, invocationId)
           : false;
         const slackSettlesOwnFailures = tool.providerType === "wardmote_slack_chat";
-        if (recorded.replayed && !retryingSlackRateLimit && !slackSettlesOwnFailures && REPLAYED_FAILURE_STATUSES.has(recorded.invocation.status)) {
-          throw new ToolGatewayHttpError(
-            409,
-            `This identical call already ended as ${recorded.invocation.status} in this run and is not sent again: ${recorded.invocation.errorMessage ?? "no message"}`,
-            "replayed_failure",
-            { invocationId, status: recorded.invocation.status, errorCode: recorded.invocation.errorCode ?? null },
-          );
-        }
+        const failure = recorded.replayed && !retryingSlackRateLimit && !slackSettlesOwnFailures ? replayedFailure(recorded.invocation) : null;
+        if (failure) throw failure;
         if (recorded.replayed && !retryingSlackRateLimit) {
           await writeAudit({
             session,
@@ -10983,6 +10988,8 @@ export function createToolGatewayService(
       invocationId = recorded.invocation.id;
 
       if (recorded.replayed) {
+        const failure = replayedFailure(recorded.invocation);
+        if (failure) throw failure;
         return recorded.invocation.resultSummary;
       }
 
