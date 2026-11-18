@@ -332,8 +332,8 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     });
     expect(result).toMatchObject({ state: "delivered", chatRef: c.chatRef, quotedMessageId: first.waMessageId, answeredTriggerIds: [first.id] });
     expect(result.mentions).toEqual([
-      { token: "@628333000111", ref: "openwa:" + SESSION_ID + ":628333000111@c.us", name: null, quotedSender: false },
-      { token: "@628555000444", ref: "openwa:" + SESSION_ID + ":628555000444@c.us", name: "Rina", quotedSender: true },
+      { token: "@628333000111", ref: "openwa:" + SESSION_ID + ":628333000111@c.us", name: null, quotedSender: false, participant: null },
+      { token: "@628555000444", ref: "openwa:" + SESSION_ID + ":628555000444@c.us", name: "Rina", quotedSender: true, participant: null },
     ]);
     const sent = t.gateway.sends.at(-1)!;
     expect(sent.text).toBe("@628555000444 Thanks *both*, see @628333000111");
@@ -358,7 +358,7 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     const result = await executeOpenwaTool(db, binding, "openwa_send", { text: "answer", mentions: ["+628222000333"], quoteMessageId: first.id, idempotencyKey });
     expect(result).toMatchObject({ state: "delivered", quoteDropped: true, answeredTriggerIds: [first.id] });
     expect(result).not.toHaveProperty("quotedMessageId");
-    expect(result.mentions).toEqual([{ token: "@628222000333", ref: "openwa:" + SESSION_ID + ":628222000333@c.us", name: null }]);
+    expect(result.mentions).toEqual([{ token: "@628222000333", ref: "openwa:" + SESSION_ID + ":628222000333@c.us", name: null, participant: null }]);
     const sends = t.gateway.sends.slice(sendsBefore);
     expect(sends).toHaveLength(2);
     expect(sends[1]).toMatchObject({ text: "@628222000333 answer" });
@@ -906,9 +906,57 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     const byLid = await executeOpenwaTool(db, binding, "openwa_send", { text: "ya", mentions: ["openwa:" + SESSION_ID + ":555000111777@lid"], quoteMessageId: unknown.id, idempotencyKey: randomUUID() });
     expect(byLid).toMatchObject({ mentions: [{ token: "@555000111777", ref: "openwa:" + SESSION_ID + ":555000111777@lid", name: "Nia", quotedSender: true }] });
     const unquoted = await executeOpenwaTool(db, binding, "openwa_send", { text: "hi", mentions: ["+628555000588"], idempotencyKey: randomUUID() });
-    expect(unquoted.mentions).toEqual([{ token: "@628555000588", ref: "openwa:" + SESSION_ID + ":628555000588@c.us", name: "Sari" }]);
+    expect(unquoted.mentions).toEqual([{ token: "@628555000588", ref: "openwa:" + SESSION_ID + ":628555000588@c.us", name: "Sari", participant: null }]);
     const plain = await executeOpenwaTool(db, binding, "openwa_send", { text: "no tags", quoteMessageId: other.id, idempotencyKey: randomUUID() });
     expect(plain).not.toHaveProperty("mentions");
+  });
+
+  it("flags a tagged number that is not a current group participant and still delivers the send", async () => {
+    const t = await setup();
+    t.gateway.groups.set(GROUP, { id: GROUP, name: "Dev", participants: [{ id: OWN_PHONE + "@c.us" }, { id: "628555000444@c.us" }] });
+    const c = await conversation(t, GROUP);
+    await trigger(t, c, { triggerClass: "other", role: "allowed" });
+    const binding = await run(t, c, { triggerClass: "other" });
+    const groupReads = () => t.gateway.requests.filter((request) => request.path.endsWith("/groups/" + encodeURIComponent(GROUP))).length;
+    const result = await executeOpenwaTool(db, binding, "openwa_send", { text: "cek", mentions: ["+628555000444", "+628555000999"], idempotencyKey: randomUUID() });
+    const readsAfterFirst = groupReads();
+    expect(result.state).toBe("delivered");
+    expect(t.gateway.sends.at(-1)!.mentions).toEqual(["628555000444@c.us", "628555000999@c.us"]);
+    expect(result.mentions).toEqual([
+      { token: "@628555000444", ref: "openwa:" + SESSION_ID + ":628555000444@c.us", name: null, participant: true },
+      { token: "@628555000999", ref: "openwa:" + SESSION_ID + ":628555000999@c.us", name: null, participant: false },
+    ]);
+    expect(result.warnings).toEqual([{ code: "mention_not_in_group", token: "@628555000999", message: expect.stringContaining("@628555000999") }]);
+    const member = await executeOpenwaTool(db, binding, "openwa_send", { text: "ok", mentions: ["+628555000444"], idempotencyKey: randomUUID() });
+    expect(member).toMatchObject({ state: "delivered", mentions: [{ token: "@628555000444", participant: true }] });
+    expect(member).not.toHaveProperty("warnings");
+    await executeOpenwaTool(db, binding, "openwa_send", { text: "no tags", idempotencyKey: randomUUID() });
+    expect(groupReads()).toBe(readsAfterFirst);
+  });
+
+  it("leaves participant null when the member list is unreadable or a member's phone is unknown, and omits it in a DM", async () => {
+    const t = await setup();
+    const unreadable = await conversation(t, GROUP);
+    await trigger(t, unreadable, { triggerClass: "other", role: "allowed" });
+    const unreadableRun = await run(t, unreadable, { triggerClass: "other" });
+    const failed = await executeOpenwaTool(db, unreadableRun, "openwa_send", { text: "cek", mentions: ["+628555000999"], idempotencyKey: randomUUID() });
+    expect(failed).toMatchObject({ state: "delivered", mentions: [{ token: "@628555000999", participant: null }] });
+    expect(failed).not.toHaveProperty("warnings");
+    const lidGroup = "120363000000000999@g.us";
+    t.gateway.groups.set(lidGroup, { id: lidGroup, name: "Lid", participants: [{ id: OWN_PHONE + "@c.us" }, { id: "555000111222@lid" }] });
+    const partial = await conversation(t, lidGroup, { activation: "on" });
+    await trigger(t, partial, { triggerClass: "other", role: "allowed" });
+    const partialRun = await run(t, partial, { triggerClass: "other" });
+    const unknown = await executeOpenwaTool(db, partialRun, "openwa_send", { text: "cek", mentions: ["+628555000999", "openwa:" + SESSION_ID + ":555000111222@lid"], idempotencyKey: randomUUID() });
+    expect(unknown).toMatchObject({ state: "delivered", mentions: [{ token: "@628555000999", participant: null }, { token: "@555000111222", participant: true }] });
+    expect(unknown).not.toHaveProperty("warnings");
+    const dm = await conversation(t, MEMBER);
+    await trigger(t, dm, { triggerClass: "other", role: "allowed" });
+    const dmRun = await run(t, dm, { triggerClass: "other" });
+    const direct = await executeOpenwaTool(db, dmRun, "openwa_send", { text: "cek", mentions: ["+628555000999"], idempotencyKey: randomUUID() });
+    expect(direct.state).toBe("delivered");
+    expect(direct.mentions).toEqual([{ token: "@628555000999", ref: "openwa:" + SESSION_ID + ":628555000999@c.us", name: null }]);
+    expect(direct).not.toHaveProperty("warnings");
   });
 
   it("names group members in read_chat from the gateway's push name and leaves an unnamed member null", async () => {

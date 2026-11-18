@@ -148,7 +148,13 @@ act beyond the run's facts. Silence never approves anything.
 - The send receipt lists who was tagged: `mentions[]` with `token`, `ref`,
   `name` (null when unknown) and, when you quoted a message, `quotedSender`
   (`true` it is the quoted sender, `false` someone else, `null` unknown).
-  Check it after the send; tagging someone else is fine when you meant to.
+  In a group each item also has `participant`: `true` the number is a current
+  member, `false` it is not, `null` the member list could not be read. A
+  `false` adds `warnings[]` with code `mention_not_in_group` and the token:
+  the message was sent but the tag reached no one, often an old number. Take
+  the person's current number from `openwa_read_chat` (`sender.ref`) or
+  `openwa_find` in this run, never from memory, and send the correction.
+  Check both after the send; tagging someone else is fine when you meant to.
 - `quoteMessageId` is a WhatsApp message id (`messages[].id`) or a trigger id
   (`messages[].triggerId`). In groups, quote the message you answer. An unknown
   quote fails with `quote_unresolvable`; it is never sent unquoted, except when
