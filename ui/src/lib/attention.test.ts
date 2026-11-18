@@ -86,7 +86,7 @@ describe("attention group preference persistence", () => {
 
 describe("isInlineResolvable", () => {
   it("is true for approvals/interactions/join when server flags inlineResolvable", () => {
-    for (const kind of ["approval", "issue_thread_interaction", "join_request"] as AttentionSourceKind[]) {
+    for (const kind of ["approval", "issue_thread_interaction", "join_request", "blocker_attention"] as AttentionSourceKind[]) {
       expect(isInlineResolvable(buildItem({ sourceKind: kind, inlineResolvable: true }))).toBe(true);
     }
   });
@@ -104,7 +104,7 @@ describe("isInlineResolvable", () => {
   });
 
   it("deep-links recovery/failure/budget rows rather than inlining", () => {
-    for (const kind of ["recovery_action", "failed_run", "budget_alert", "blocker_attention"] as AttentionSourceKind[]) {
+    for (const kind of ["recovery_action", "failed_run", "budget_alert"] as AttentionSourceKind[]) {
       expect(isInlineResolvable(buildItem({ sourceKind: kind, inlineResolvable: true }))).toBe(false);
     }
   });

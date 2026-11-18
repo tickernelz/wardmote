@@ -1,4 +1,5 @@
 import type { DecisionInput, DecisionOption } from "@tickernelz/wardmote-shared";
+import type { WardmoteQuestionResponse } from "@tickernelz/wardmote-adapter-utils";
 import { api } from "./client";
 
 /**
@@ -88,6 +89,7 @@ export interface DecisionListFilter {
 export interface DecideInput {
   optionId: string;
   inputValues?: Record<string, string>;
+  questionResponse?: WardmoteQuestionResponse;
   idempotencyKey?: string | null;
 }
 

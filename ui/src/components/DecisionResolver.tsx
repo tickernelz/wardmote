@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { decisionEffectTargetIssueIds, type Agent, type AttentionSubject } from "@tickernelz/wardmote-shared";
-import { decisionsApi, type DecisionOutcome } from "../api/decisions";
+import { decisionsApi, type DecideInput, type DecisionOutcome } from "../api/decisions";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
 import { useCompany } from "../context/CompanyContext";
@@ -146,7 +146,7 @@ export function DecisionResolver({ companyId, decisionId, originIssue, agentMap,
   };
 
   const decideMutation = useMutation({
-    mutationFn: (input: { optionId: string; inputValues: Record<string, string>; idempotencyKey?: string | null }) =>
+    mutationFn: (input: DecideInput) =>
       decisionsApi.decide(decisionId, input),
     retry: 2,
     onSuccess: (data) => {
@@ -206,7 +206,8 @@ export function DecisionResolver({ companyId, decisionId, originIssue, agentMap,
       }
       busy={busy}
       errorMessage={errorMessage}
-      onDecide={(optionId, inputValues) => decideMutation.mutate({ optionId, inputValues, idempotencyKey: crypto.randomUUID() })}
+      onDecide={(optionId, inputValues, questionResponse) =>
+        decideMutation.mutate({ optionId, inputValues, questionResponse, idempotencyKey: crypto.randomUUID() })}
       onDismiss={(reason) => dismissMutation.mutate(reason)}
     />
   );

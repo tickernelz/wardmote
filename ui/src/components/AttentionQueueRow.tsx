@@ -50,6 +50,7 @@ import {
 } from "./ui/dropdown-menu";
 import { AttentionInteractionResolver } from "./AttentionInteractionResolver";
 import { DecisionResolver } from "./DecisionResolver";
+import { BlockedReasonResolver } from "./BlockedReasonResolver";
 import { StalledReviewActions } from "./StalledReviewActions";
 import { AttentionRetryButton } from "./AttentionRetryButton";
 import type { LiveRunForIssue } from "../api/heartbeats";
@@ -815,6 +816,10 @@ function InlineResolver({
 
   if (item.sourceKind === "approval") {
     return <ApprovalResolver item={item} companyId={companyId} toggle={toggle} />;
+  }
+
+  if (item.sourceKind === "blocker_attention") {
+    return <BlockedReasonResolver item={item} companyId={companyId} agentMap={agentMap} toggle={toggle} />;
   }
 
   if (item.sourceKind === "join_request") {
