@@ -19,6 +19,7 @@ import { buildLiveNowEntries, buildLiveNowHeartbeats } from "./live-now/useLiveN
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
   addComment: vi.fn(),
+  restorePrimaryModel: vi.fn(),
   listPausedTasks: vi.fn(),
   createTreeHold: vi.fn(),
   releaseTreeHold: vi.fn(),
@@ -123,6 +124,7 @@ beforeEach(() => {
   localStorage.clear();
   mockIssuesApi.get.mockReset();
   mockIssuesApi.addComment.mockReset();
+  mockIssuesApi.restorePrimaryModel.mockReset();
   mockIssuesApi.listPausedTasks.mockReset().mockResolvedValue([]);
   mockIssuesApi.createTreeHold.mockReset();
   mockIssuesApi.releaseTreeHold.mockReset();
@@ -453,21 +455,15 @@ describe("Live now cards", () => {
     expect(control.textContent).toContain("Back to primary model");
     flushSync(() => control.querySelector<HTMLButtonElement>("button")!.click());
     await waitFor(() => expect(document.body.querySelector("[role='alertdialog']")).not.toBeNull());
-    expect(mockHeartbeatsApi.cancel).not.toHaveBeenCalled();
+    expect(mockIssuesApi.restorePrimaryModel).not.toHaveBeenCalled();
 
     const confirm = [...document.body.querySelectorAll<HTMLButtonElement>("[role='alertdialog'] button")].find(
       (button) => button.textContent === "Stop and switch",
     )!;
     flushSync(() => confirm.click());
-    await waitFor(() => expect(mockHeartbeatsApi.cancel).toHaveBeenCalledWith("run-1"));
-    expect(mockIssuesApi.addComment).toHaveBeenCalledWith(
-      "issue-1",
-      "Kembali ke model utama.",
-      undefined,
-      undefined,
-      undefined,
-      expect.any(String),
-    );
+    await waitFor(() => expect(mockIssuesApi.restorePrimaryModel).toHaveBeenCalledWith("issue-1"));
+    expect(mockHeartbeatsApi.cancel).not.toHaveBeenCalled();
+    expect(mockIssuesApi.addComment).not.toHaveBeenCalled();
   });
 
   it("links to the task from the row and to the live run transcript from the More menu", async () => {
