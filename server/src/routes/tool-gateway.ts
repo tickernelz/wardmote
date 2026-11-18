@@ -18,6 +18,7 @@ import { forbidden, HttpError } from "../errors.js";
 import { accessService } from "../services/index.js";
 import { listConnectionLifecycleEvents } from "../services/tool-connection-activity.js";
 import { logger } from "../middleware/logger.js";
+import { WARDMOTE_ASSIGNED_MCP_SERVER_NAME } from "@tickernelz/wardmote-adapter-utils/wardmote-mcp";
 
 const TOOL_ACTIVITY_EVENT_TYPES = [
   "call_completed",
@@ -36,6 +37,11 @@ const TOOL_GATEWAY_WINDOWS: Record<string, number | null> = {
 };
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const MISSING_GATEWAY_TOKEN_ERROR = {
+  error: "Tool gateway session token is required",
+  hint: `Agent runs do not get a gateway session token. Call assigned connector tools through the run's MCP server "${WARDMOTE_ASSIGNED_MCP_SERVER_NAME}": POST JSON-RPC {"jsonrpc":"2.0","id":1,"method":"tools/list"} and then {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"<full name from tools/list>","arguments":{}}} to its url in $WARDMOTE_RUNTIME_MCP_SERVERS with "Authorization: Bearer <its token in $WARDMOTE_RUNTIME_MCP_TOKENS>". omp_local runs can use "$WARDMOTE_TOOL_CLI" call <tool> '<json arguments>'.`,
+};
 
 function gatewayToken(req: { header(name: string): string | undefined }) {
   return req.header("x-wardmote-tool-gateway-token")?.trim() || null;
@@ -577,7 +583,7 @@ export function toolGatewayRoutes(db: Db, toolGateway: ToolGatewayService) {
     try {
       const token = gatewayToken(req);
       if (!token) {
-        res.status(401).json({ error: "Tool gateway session token is required" });
+        res.status(401).json(MISSING_GATEWAY_TOKEN_ERROR);
         return;
       }
       const tools = await discoveryRequest(req, res, (signal) => toolGateway.listToolsForSession(token, { signal }));
@@ -591,7 +597,7 @@ export function toolGatewayRoutes(db: Db, toolGateway: ToolGatewayService) {
     try {
       const token = gatewayToken(req);
       if (!token) {
-        res.status(401).json({ error: "Tool gateway session token is required" });
+        res.status(401).json(MISSING_GATEWAY_TOKEN_ERROR);
         return;
       }
       const body = (req.body ?? {}) as {

@@ -16,7 +16,7 @@ import { buildSshSpawnTarget, type SshRemoteExecutionSpec } from "./ssh.js";
 import { redactCommandText } from "./command-redaction.js";
 import { applyRunOomScoreAdj } from "./run-oom-score.js";
 import { wardmoteChatFilePreparationDelivery } from "./chat-file-delivery.js";
-import type { WardmoteAccessMode } from "./wardmote-mcp.js";
+import { WARDMOTE_ASSIGNED_MCP_SERVER_NAME, type WardmoteAccessMode } from "./wardmote-mcp.js";
 import {
   WARDMOTE_RUNNER_PERMISSION_CAPABILITIES,
   resolveWardmoteRunnerModel,
@@ -2226,17 +2226,38 @@ export function selectWardmotePromptSections(
   };
 }
 
+/** For runtimes that receive the assigned-tools MCP server without loading it; `cliEnv` names the helper's env var. */
+export function renderAssignedToolsOverHttpGuidance(cliEnv: string): string {
+  const server = WARDMOTE_ASSIGNED_MCP_SERVER_NAME;
+  const cli = `"$${cliEnv}"`;
+  return [
+    "### Calling assigned connector tools",
+    "",
+    `This runtime does not load the run's MCP server \`${server}\`, so the connector tools it serves are not in your tool list.`,
+    "Connector tools that are in your tool list are called directly. Call every other tool named in these skills, and any assigned MCP connection tool, through it:",
+    "",
+    `- Helper: \`${cli} list\` prints the tools with their short names, \`${cli} schema <tool>\` their arguments, and \`${cli} call google_search_methods '{"query":"create form"}'\` calls one (arguments as JSON, or \`-\` to read them from stdin). From fabric_exec run it with \`omp.bash\`.`,
+    `- JSON-RPC over HTTP: POST to the \`url\` of the \`${server}\` entry in \`$WARDMOTE_RUNTIME_MCP_SERVERS\` with \`Authorization: Bearer <token>\`, where the token is the \`${server}\` key of \`$WARDMOTE_RUNTIME_MCP_TOKENS\`. \`initialize\` is optional because the server keeps no session. Send \`{"jsonrpc":"2.0","id":1,"method":"tools/list"}\`, then \`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"<name>","arguments":{}}}\`.`,
+    `- \`tools/call\` takes the full \`name\` from \`tools/list\`, which carries a connection prefix (for example \`app.app-gallery-google-workspace-<id>:google-search-methods\`); the short name (\`google_search_methods\`) is its \`title\`.`,
+    `- Wrong paths: a fabric provider named after the connector (\`google_workspace.*\`), fabric \`mcp.*\` (it does not carry \`${server}\`), and \`/api/tool-gateway/*\` (it needs a gateway session token that runs do not get).`,
+    "- Never print the token.",
+  ].join("\n");
+}
+
 // Runtime-only connector skills are supplied by the server after assignment resolution.
 // Shared-home adapters consume them here on fresh and resumed runs without installing
 // files into a user-wide skills directory. They are not part of serialized wake data.
 export function renderWardmoteWakePrompt(
   value: unknown,
-  options: Parameters<typeof renderWardmoteWakePromptBody>[1] = {},
+  options: Parameters<typeof renderWardmoteWakePromptBody>[1] & { assignedToolsCliEnv?: string | null } = {},
 ): string {
-  const instructions = asString(parseObject(value).connectorSkillInstructions, "").trim();
+  const connectorSkills = joinPromptSections([
+    options.assignedToolsCliEnv ? renderAssignedToolsOverHttpGuidance(options.assignedToolsCliEnv) : "",
+    asString(parseObject(value).connectorSkillInstructions, "").trim(),
+  ]);
   return joinPromptSections([
     renderWardmoteWakePromptBody(value, options),
-    instructions ? `## Assigned connector skills\n\n${instructions}` : "",
+    connectorSkills ? `## Assigned connector skills\n\n${connectorSkills}` : "",
     asString(parseObject(parseObject(value).connectionInstructions).text, "").trim(),
   ]);
 }

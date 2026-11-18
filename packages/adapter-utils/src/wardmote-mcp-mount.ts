@@ -92,6 +92,7 @@ export async function writeWardmoteMcpMount(input: {
   remote: boolean;
   content: string;
   fileName: string;
+  mode?: number;
   localPrefix: string;
   remoteDir: string | null;
   cwd: string;
@@ -99,11 +100,12 @@ export async function writeWardmoteMcpMount(input: {
   timeoutSec: number;
   graceSec: number;
 }): Promise<WardmoteMcpMount> {
+  const mode = input.mode ?? 0o600;
   if (!input.remote) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), input.localPrefix));
     await fs.chmod(dir, 0o700);
     const filePath = path.join(dir, input.fileName);
-    await fs.writeFile(filePath, input.content, { encoding: "utf8", mode: 0o600 });
+    await fs.writeFile(filePath, input.content, { encoding: "utf8", mode });
     return {
       dir,
       filePath,
@@ -128,7 +130,7 @@ export async function writeWardmoteMcpMount(input: {
     `cat > ${quotedFile} <<'WARDMOTE_MCP_MOUNT'`,
     input.content.replace(/\n$/, ""),
     "WARDMOTE_MCP_MOUNT",
-    `chmod 600 ${quotedFile}`,
+    `chmod ${mode.toString(8)} ${quotedFile}`,
   ].join("\n");
   await runAdapterExecutionTargetShellCommand(input.runId, input.target, heredoc, shellOptions);
   return {

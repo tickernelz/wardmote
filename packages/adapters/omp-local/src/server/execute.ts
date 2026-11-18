@@ -51,9 +51,11 @@ import {
   selectWardmoteTaskMarkdown,
 } from "@tickernelz/wardmote-adapter-utils/server-utils";
 import {
+  WARDMOTE_ASSIGNED_MCP_SERVER_NAME,
   wardmoteRestGuidance,
   type WardmoteAccessMode,
 } from "@tickernelz/wardmote-adapter-utils/wardmote-mcp";
+import { ASSIGNED_TOOLS_CLI_ENV, writeAssignedToolsCli, type AssignedToolsCli } from "./assigned-tools-cli.js";
 import { OMP_INSTALL_COMMAND } from "../metadata.js";
 import {
   prepareOmpRuntimeConfig,
@@ -478,6 +480,7 @@ async function buildPrompts(input: {
   resumedSession: boolean;
   cwd: string;
   wardmoteAccess: WardmoteAccessMode;
+  assignedToolsCliEnv: string | null;
   historyTokenBudget: number | null;
   onLog: AdapterExecutionContext["onLog"];
 }): Promise<{
@@ -529,6 +532,7 @@ async function buildPrompts(input: {
     resumedSession: input.resumedSession,
     suppressIssueDescription: taskContextNote.length > 0,
     wardmoteAccess: input.wardmoteAccess,
+    assignedToolsCliEnv: input.assignedToolsCliEnv,
   });
   const wakePayload = parseObject(input.context.wardmoteWake);
   const recoveryWake = Object.keys(parseObject(wakePayload.recovery)).length > 0 ||
@@ -607,7 +611,8 @@ export function applyRuntimeToolAccess(
       [
         `Wardmote provisioned ${servers.length} MCP server(s) for this run: ${servers.map((s) => s.name).join(", ")}.`,
         "Endpoints are in $WARDMOTE_RUNTIME_MCP_SERVERS and their bearer tokens in $WARDMOTE_RUNTIME_MCP_TOKENS, keyed by server name.",
-        "OMP loads MCP servers from its agent directory, so reach these over HTTP for this run instead of expecting them in the tool list.",
+        "OMP does not load these servers, so their tools are not in your tool list or in fabric `mcp.*`.",
+        `Call them with "$${ASSIGNED_TOOLS_CLI_ENV}" [--server <name>] list | schema <tool> | call <tool> '<json arguments>' (default server ${WARDMOTE_ASSIGNED_MCP_SERVER_NAME}).`,
       ].join("\n"),
     );
   }
@@ -649,6 +654,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let mcpExtension: WardmoteMcpExtension | null = null;
   let toolGuardExtension: OmpToolGuardExtension | null = null;
   let pythonEnvBridge: OmpPythonEnvBridge | null = null;
+  let assignedToolsCli: AssignedToolsCli | null = null;
   try {
     await ensureOmpSkills(config, preparedConfig.agentDir ?? undefined);
 
@@ -960,6 +966,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (!remote) {
       invocationEnv.PYTHONPATH = prependPythonPath(pythonEnvBridge.dir, invocationEnv.PYTHONPATH, path.delimiter);
     }
+    const runtimeMcpServers = ctx.runtimeMcp?.getServers() ?? [];
+    if (runtimeMcpServers.length > 0) {
+      assignedToolsCli = await writeAssignedToolsCli({
+        runId,
+        target: runtimeTarget,
+        remote,
+        env: invocationEnv,
+        remoteRootDir: runtimeRootDir,
+        cwd: remote ? effectiveExecutionCwd : cwd,
+        timeoutSec,
+        graceSec,
+      });
+      invocationEnv[ASSIGNED_TOOLS_CLI_ENV] = assignedToolsCli.path;
+    }
+    const assignedToolsCliEnv = runtimeMcpServers.some((server) => server.name === WARDMOTE_ASSIGNED_MCP_SERVER_NAME)
+      ? ASSIGNED_TOOLS_CLI_ENV
+      : null;
     const launchOmp = pythonEnvBridge.launch;
     const mcpArmed = mcpEnabled && mcpExtension !== null;
     const wardmoteAccess: WardmoteAccessMode = mcpArmed ? "mcp" : "rest";
@@ -985,6 +1008,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         resumedSession,
         cwd,
         wardmoteAccess,
+        assignedToolsCliEnv,
         historyTokenBudget: budget,
         onLog,
       });
@@ -1433,6 +1457,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       await mcpExtension?.cleanup().catch(() => {});
       await toolGuardExtension?.cleanup().catch(() => {});
       await pythonEnvBridge?.cleanup().catch(() => {});
+      await assignedToolsCli?.cleanup().catch(() => {});
       await preparedConfig.cleanup();
     }
   }
