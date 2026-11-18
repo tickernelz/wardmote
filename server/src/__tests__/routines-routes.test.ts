@@ -512,6 +512,7 @@ describe("routine routes", () => {
       agentId,
       userId: null,
       runId: "88888888-8888-4888-8888-888888888888",
+      assignsAnyAgent: false,
     });
     expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       action: "routine.revision_restored",

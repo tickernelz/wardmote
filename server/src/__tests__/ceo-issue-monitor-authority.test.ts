@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
-import { and, eq, sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { and, eq } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
   agents,
@@ -62,10 +62,6 @@ describeEmbeddedPostgres("CEO agent issue monitor authority", () => {
     tempDb = await startEmbeddedPostgresTestDatabase("wardmote-ceo-issue-monitor-");
     db = createDb(tempDb.connectionString);
   }, 20_000);
-
-  afterEach(async () => {
-    await db.execute(sql`TRUNCATE ${companies}, ${authUsers} CASCADE`);
-  });
 
   afterAll(async () => {
     await tempDb?.cleanup();
@@ -129,10 +125,13 @@ describeEmbeddedPostgres("CEO agent issue monitor authority", () => {
     ));
     expect(scheduledActivity).toMatchObject({ actorType: "agent", actorId: f.ceo.agent.id, agentId: f.ceo.agent.id });
 
+    await db.update(agents).set({ status: "paused" }).where(eq(agents.id, f.assignee.agent.id));
     const checkNow = await request(app)
       .post(`/api/issues/${f.issue.id}/monitor/check-now`)
       .set("authorization", `Bearer ${f.ceo.token}`);
-    expect(checkNow.status, JSON.stringify(checkNow.body)).toBe(200);
+    expect(checkNow.status, JSON.stringify(checkNow.body)).toBe(409);
+    expect(checkNow.body.error).toBe("Agent is not invokable in its current state");
+    await db.update(agents).set({ status: "idle" }).where(eq(agents.id, f.assignee.agent.id));
 
     const cleared = await request(app)
       .patch(`/api/issues/${f.issue.id}`)
