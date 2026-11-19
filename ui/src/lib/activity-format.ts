@@ -1,6 +1,7 @@
 import type { Agent } from "@tickernelz/wardmote-shared";
 import type { CompanyUserProfile } from "./company-members";
 import { formatReviewPolicyValue } from "./review-policy";
+import { meaningfulTreeHoldReason } from "./tree-hold-reason";
 
 type ActivityDetails = Record<string, unknown> | null | undefined;
 
@@ -239,6 +240,34 @@ function formatInteractionOutcomeLabel(action: string, details: ActivityDetails)
   if (!table) return null;
   const kind = typeof details?.interactionKind === "string" ? details.interactionKind : null;
   return kind ? table[kind] ?? null : null;
+}
+
+const TREE_HOLD_CREATED_VERBS: Record<string, string> = {
+  pause: "paused",
+  resume: "resumed",
+  cancel: "cancelled",
+  restore: "restored",
+};
+const TREE_HOLD_REASON_PREVIEW_LENGTH = 200;
+
+function formatTreeHoldActivity(action: string, details: ActivityDetails, forIssueDetail: boolean): string | null {
+  if (action === "issue.tree_hold_reason_rejected") {
+    return forIssueDetail ? "was refused a pause or resume without a reason" : "was refused a pause or resume without a reason on";
+  }
+  if (action !== "issue.tree_hold_created" && action !== "issue.tree_hold_released") return null;
+  const mode = typeof details?.mode === "string" ? details.mode : null;
+  const verb = action === "issue.tree_hold_released"
+    ? mode === "pause" ? "ended the pause on" : "released the hold on"
+    : mode ? TREE_HOLD_CREATED_VERBS[mode] : undefined;
+  if (!verb) return null;
+  if (!forIssueDetail) return verb;
+  const reason = meaningfulTreeHoldReason(typeof details?.reason === "string" ? details.reason : null);
+  const base = verb.endsWith(" on") ? verb.slice(0, -3) : `${verb} the task`;
+  if (!reason) return base;
+  const preview = reason.length > TREE_HOLD_REASON_PREVIEW_LENGTH
+    ? `${reason.slice(0, TREE_HOLD_REASON_PREVIEW_LENGTH - 1)}…`
+    : reason;
+  return `${base}: “${preview}”`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -481,6 +510,9 @@ export function formatActivityVerb(
   const outcomeLabel = formatInteractionOutcomeLabel(action, details);
   if (outcomeLabel) return `${outcomeLabel} on`;
 
+  const treeHoldVerb = formatTreeHoldActivity(action, details, false);
+  if (treeHoldVerb) return treeHoldVerb;
+
   const structuredChange = formatStructuredIssueChange({
     action,
     details,
@@ -523,6 +555,9 @@ export function formatIssueActivityAction(
 
   const outcomeLabel = formatInteractionOutcomeLabel(action, details);
   if (outcomeLabel) return outcomeLabel;
+
+  const treeHoldAction = formatTreeHoldActivity(action, details, true);
+  if (treeHoldAction) return treeHoldAction;
 
   if (action.startsWith("issue.monitor_") && details) {
     const serviceName = typeof details.serviceName === "string" && details.serviceName.trim()

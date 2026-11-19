@@ -185,7 +185,7 @@ function RecentTasksList({
         const restartIssue = await issuesApi.get(entry.id);
         setRestartWakeRetryPending(restartRetryStorageKey, entry.id, true);
         await issuesApi.releaseTreeHold(entry.id, state.activePauseHold.holdId, {
-          reason: "Restarted from Recent Tasks.",
+          reason: null,
         });
         if (restartIssue.assigneeAgentId) {
           const wakeResult = await agentsApi.wakeup(
@@ -228,7 +228,7 @@ function RecentTasksList({
       } else {
         await issuesApi.createTreeHold(entry.id, {
           mode: "pause",
-          reason: "Paused from Recent Tasks.",
+          reason: null,
           releasePolicy: { strategy: "manual" },
         });
         toastActions?.pushToast({ title: "Task paused", tone: "success" });

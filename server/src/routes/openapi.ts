@@ -9496,12 +9496,12 @@ registry.registerPath({
   path: "/api/issues/{id}/tree-holds",
   tags: ["issues"],
   summary: "Create an issue tree hold",
-  description: "A pause with scope task holds only this task; subtree (the default) holds its descendants too. stopAt safe_point lets a running omp_local step finish (up to 120 s) before the run stops; now (the default) stops it at once. Persistent conversations cannot pause at a safe point.",
+  description: "A pause with scope task holds only this task; subtree (the default) holds its descendants too. stopAt safe_point lets a running omp_local step finish (up to 120 s) before the run stops; now (the default) stops it at once. Persistent conversations cannot pause at a safe point. Agents must send reason (at least 10 characters after trimming, max 1000) for every mode, saying why they pause, resume, cancel or restore and what happens next; without it the call fails with 422 code tree_hold_reason_required. Board users may omit reason.",
   request: {
     params: z.object({ id: z.string() }),
     body: jsonBody(createIssueTreeHoldSchema),
   },
-  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized },
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 422: r.unprocessable },
 });
 
 registry.registerPath({
@@ -9518,11 +9518,12 @@ registry.registerPath({
   path: "/api/issues/{id}/tree-holds/{holdId}/release",
   tags: ["issues"],
   summary: "Release an issue tree hold",
+  description: "Releasing a pause resumes the task tree. Agents must send reason (at least 10 characters after trimming, max 1000) saying why the task may continue; without it the call fails with 422 code tree_hold_reason_required. Board users may omit reason.",
   request: {
     params: z.object({ id: z.string(), holdId: z.string() }),
     body: jsonBody(releaseIssueTreeHoldSchema),
   },
-  responses: { 200: r.ok(), 401: r.unauthorized },
+  responses: { 200: r.ok(), 401: r.unauthorized, 422: r.unprocessable },
 });
 
 // ─── Attachments ──────────────────────────────────────────────────────────────

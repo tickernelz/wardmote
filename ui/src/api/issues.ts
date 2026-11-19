@@ -364,6 +364,9 @@ export const issuesApi = {
         isRoot: boolean;
         mode: "pause";
         reason: string | null;
+        pausedAt: string;
+        pausedByAgentId: string | null;
+        pausedByUserId: string | null;
         releasePolicy: {
           strategy: "manual" | "after_active_runs_finish";
           note?: string | null;

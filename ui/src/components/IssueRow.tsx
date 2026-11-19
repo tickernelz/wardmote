@@ -57,6 +57,8 @@ export interface IssueRowProps {
   externalObjectSummary?: ExternalObjectSummary | null;
   trailingMeta?: ReactNode;
   titleSuffix?: ReactNode;
+  /** One-line note beside the title on desktop and under it on mobile. */
+  titleNote?: ReactNode;
   titleClassName?: string;
   checklistStepNumber?: number | string | null;
   checklistCurrentStep?: boolean;
@@ -136,6 +138,7 @@ export function IssueRow({
   externalObjectSummary,
   trailingMeta,
   titleSuffix,
+  titleNote,
   titleClassName,
   checklistStepNumber = null,
   checklistCurrentStep = false,
@@ -313,6 +316,9 @@ export function IssueRow({
               </span>
             ) : null}
           </span>
+          {titleNote ? (
+            <span data-slot="task-row-title-note" className="flex min-w-0 sm:max-w-[40%]">{titleNote}</span>
+          ) : null}
           {checklistDependencyChips ? (
             <span className="flex flex-wrap gap-1">{checklistDependencyChips}</span>
           ) : null}
@@ -398,6 +404,9 @@ export function IssueRow({
           </span>
           {recoveryIndicator}
         </span>
+        {titleNote ? (
+          <span data-slot="task-row-title-note" className="flex min-w-0 sm:order-2 sm:max-w-[40%]">{titleNote}</span>
+        ) : null}
         {checklistDependencyChips ? (
           <span className="flex flex-wrap gap-1 sm:order-3 sm:ml-(--sz-calc-13)">
             {checklistDependencyChips}

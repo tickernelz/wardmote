@@ -661,8 +661,13 @@ function createTimelineEventMessage(args: {
       : (formatAssigneeUserLabel(event.actorId, currentUserId, userLabelMap) ?? "Board");
 
   const lines: string[] = [
-    event.followUpRequested ? `${actorName} requested follow-up` : `${actorName} updated this issue`,
+    event.holdChange
+      ? `${actorName} ${event.holdChange.action} this issue`
+      : event.followUpRequested ? `${actorName} requested follow-up` : `${actorName} updated this issue`,
   ];
+  if (event.holdChange?.reason) {
+    lines.push(`Reason: ${event.holdChange.reason}`);
+  }
   if (event.statusChange) {
     lines.push(
       `Status: ${event.statusChange.from ?? "none"} -> ${event.statusChange.to ?? "none"}`,
@@ -699,6 +704,7 @@ function createTimelineEventMessage(args: {
         statusChange: event.statusChange ?? null,
         assigneeChange: event.assigneeChange ?? null,
         workspaceChange: event.workspaceChange ?? null,
+        holdChange: event.holdChange ?? null,
         followUpRequested: event.followUpRequested === true,
       },
     },

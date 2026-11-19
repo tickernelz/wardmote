@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { Loader2, Pause, Play } from "lucide-react";
 import { Link } from "@/lib/router";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ export interface TaskComposerPause {
   resumeHref?: string;
   pending?: boolean;
   error?: string | null;
+  note?: ReactNode;
 }
 
 /** Pause notice for the composer: a task keeps accepting messages that wait for Resume; a conversation replaces its input. */
@@ -20,6 +21,7 @@ export function TaskChatPausedTakeover({
   error,
   onResume,
   acceptsMessages = false,
+  note,
 }: {
   hasDraft?: boolean;
   acceptsMessages?: boolean;
@@ -39,6 +41,7 @@ export function TaskChatPausedTakeover({
           <span id={headingId}>{subtree ? "Subtree is paused." : "Task is paused."}</span>{" "}
           <span className="text-ink-3">Your message waits until Resume.</span>
         </p>
+        {note ? <div className="flex w-full min-w-0">{note}</div> : null}
         {error ? (
           <p role="alert" className="w-full text-sm text-bad">
             {error}
@@ -75,6 +78,7 @@ export function TaskChatPausedTakeover({
               ? "Resume this subtree to send a message."
               : "Resume this task to send a message."}
           </p>
+          {note ? <div className="flex min-w-0">{note}</div> : null}
         </div>
       </div>
       {error ? (

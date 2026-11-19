@@ -27,7 +27,7 @@ export type PreviewIssueTreeControl = z.infer<typeof previewIssueTreeControlSche
 export const createIssueTreeHoldSchema = z
   .object({
     mode: issueTreeControlModeSchema,
-    reason: z.string().trim().min(1).max(1000).optional().nullable(),
+    reason: z.string().trim().max(1000).optional().nullable(),
     releasePolicy: issueTreeHoldReleasePolicySchema.optional().nullable(),
     metadata: z.record(z.string(), z.unknown()).optional().nullable(),
     scope: z.enum(ISSUE_TREE_HOLD_SCOPES).optional(),
@@ -39,7 +39,7 @@ export type CreateIssueTreeHold = z.infer<typeof createIssueTreeHoldSchema>;
 
 export const releaseIssueTreeHoldSchema = z
   .object({
-    reason: z.string().trim().min(1).max(1000).optional().nullable(),
+    reason: z.string().trim().max(1000).optional().nullable(),
     releasePolicy: issueTreeHoldReleasePolicySchema.optional().nullable(),
     metadata: z.record(z.string(), z.unknown()).optional().nullable(),
   })

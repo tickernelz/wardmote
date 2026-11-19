@@ -161,4 +161,20 @@ describe("activity formatting", () => {
       "Run finished without a next step - recovery escalated",
     );
   });
+
+  it("shows pause and resume reasons in task activity, and button-made texts as no reason", () => {
+    expect(formatIssueActivityAction("issue.tree_hold_created", { mode: "pause", reason: "Waiting for the deploy window" }))
+      .toBe("paused the task: “Waiting for the deploy window”");
+    expect(formatIssueActivityAction("issue.tree_hold_released", { mode: "pause", reason: "Deploy window is open" }))
+      .toBe("ended the pause: “Deploy window is open”");
+    expect(formatIssueActivityAction("issue.tree_hold_created", { mode: "resume", reason: "Subtree resume applied." }))
+      .toBe("resumed the task");
+    expect(formatIssueActivityAction("issue.tree_hold_released", { mode: "pause", reason: null }))
+      .toBe("ended the pause");
+    expect(formatIssueActivityAction("issue.tree_hold_reason_rejected", { operation: "pause" }))
+      .toBe("was refused a pause or resume without a reason");
+    expect(formatIssueActivityAction("issue.tree_hold_created", { mode: "pause", reason: "x".repeat(300) }))
+      .toHaveLength("paused the task: “".length + 200 + 1);
+    expect(formatActivityVerb("issue.tree_hold_created", { mode: "pause", reason: "Waiting for the deploy window" })).toBe("paused");
+  });
 });

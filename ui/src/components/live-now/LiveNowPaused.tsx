@@ -8,10 +8,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { usePauseNoteBuilder } from "../../hooks/usePauseNoteBuilder";
 import { useTaskPause } from "../../hooks/useTaskPause";
 import { createIssueDetailPath, withIssueDetailHeaderSeed } from "../../lib/issueDetailBreadcrumb";
 import { cn, relativeTime } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
+import { PauseReasonNote } from "../PauseReasonNote";
 import { LiveNowHealthChip, type LiveNowDensity } from "./LiveNowRow";
 import { LIVE_NOW_HEALTH_POSE, pauseSignal } from "./live-now-health";
 import type { LiveNowPausedItem } from "./useLiveNowModel";
@@ -104,6 +106,7 @@ export function LiveNowPausedRow({
   issueLinkState?: unknown;
 }) {
   const actions = usePausedTaskActions(companyId, item, issueLinkState);
+  const note = usePauseNoteBuilder(companyId)(item.pause);
   const { pause, identifier } = item;
   const signal = pausedSignal(item);
   const comfortable = density === "comfortable";
@@ -148,7 +151,7 @@ export function LiveNowPausedRow({
             {pause.scope === "subtree" ? <span className="shrink-0">· with subtasks</span> : null}
           </span>
         ) : null}
-        <span className="live-now-row-status flex min-w-0 items-center gap-2 [grid-area:status]">
+        <span className="live-now-row-status flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 [grid-area:status]">
           <LiveNowHealthChip signal={signal} className="[grid-area:chip] sm:justify-self-start" />
           <time
             dateTime={new Date(pause.pausedAt).toISOString()}
@@ -156,7 +159,10 @@ export function LiveNowPausedRow({
           >
             paused {relativeTime(pause.pausedAt)}
           </time>
-          <span className="min-w-0 truncate text-xs text-ink-2 [grid-area:activity]">{pausedLastRunText(item)}</span>
+          <span className="flex min-w-0 basis-full flex-col items-start [grid-area:activity]">
+            <PauseReasonNote note={note} identifier={identifier} />
+            <span className="min-w-0 max-w-full truncate text-xs text-ink-3">{pausedLastRunText(item)}</span>
+          </span>
         </span>
         <span
           className={cn(
@@ -193,6 +199,7 @@ export function LiveNowPausedCard({
   issueLinkState?: unknown;
 }) {
   const actions = usePausedTaskActions(companyId, item, issueLinkState);
+  const note = usePauseNoteBuilder(companyId)(item.pause);
   const { pause, identifier } = item;
   const signal = pausedSignal(item);
   return (
@@ -214,6 +221,7 @@ export function LiveNowPausedCard({
         {actions.title}
       </Link>
       <span className="text-xs text-ink-2">{pausedLastRunText(item)}</span>
+      <PauseReasonNote note={note} identifier={identifier} className="relative z-10" />
       <span className="flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
         <span className="min-w-0 truncate">{pause.assigneeAgentName ?? "Unassigned"}</span>
         <span className="ml-auto shrink-0">paused {relativeTime(pause.pausedAt)}</span>

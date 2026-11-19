@@ -11,6 +11,8 @@ import { conflict } from "../errors.js";
 import {
   createIssueTreeHoldSchema,
   type CreateIssueTreeHold,
+  ISSUE_TREE_HOLD_AGENT_REASON_MIN_LENGTH,
+  ISSUE_TREE_HOLD_REASON_REQUIRED_CODE,
   isUuidLike,
   previewIssueTreeControlSchema,
   releaseIssueTreeHoldSchema,
@@ -30,6 +32,18 @@ import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 const TREE_RUN_CANCELLATION_RESPONSE_WAIT_MS = 1_000;
 const RESUME_EXECUTABLE_STATUSES = ["todo", "in_progress", "in_review"];
 const RESUME_WAKE_COMMENT_LIMIT = 50;
+
+const AGENT_TREE_HOLD_VERB = {
+  pause: "pause",
+  resume: "resume",
+  cancel: "cancel",
+  restore: "restore",
+  release: "release the hold on",
+} as const;
+
+function treeHoldReason(reason: string | null | undefined) {
+  return reason ? reason : null;
+}
 
 function errorToMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -89,6 +103,45 @@ export function issueTreeControlRoutes(
     return false;
   }
 
+  async function rejectAgentTreeHoldWithoutReason(
+    req: Request,
+    res: Response,
+    input: {
+      companyId: string;
+      issueId: string;
+      operation: keyof typeof AGENT_TREE_HOLD_VERB;
+      holdId: string | null;
+      reason: string | null;
+    },
+  ) {
+    const reasonLength = input.reason?.length ?? 0;
+    if (req.actor.type !== "agent" || reasonLength >= ISSUE_TREE_HOLD_AGENT_REASON_MIN_LENGTH) return false;
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: input.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      agentApiKeyId: actor.agentApiKeyId,
+      action: "issue.tree_hold_reason_rejected",
+      entityType: "issue",
+      entityId: input.issueId,
+      details: {
+        code: ISSUE_TREE_HOLD_REASON_REQUIRED_CODE,
+        operation: input.operation,
+        holdId: input.holdId,
+        reasonLength,
+      },
+    });
+    res.status(422).json({
+      error: `Agents must say why they ${AGENT_TREE_HOLD_VERB[input.operation]} a task: send reason with at least ${ISSUE_TREE_HOLD_AGENT_REASON_MIN_LENGTH} characters after trimming (max 1000). Name what made you do it and what should happen next, in your own words; people see it on the paused task and in its activity.`,
+      code: ISSUE_TREE_HOLD_REASON_REQUIRED_CODE,
+      minLength: ISSUE_TREE_HOLD_AGENT_REASON_MIN_LENGTH,
+    });
+    return true;
+  }
+
   async function resolveRootIssue(req: Request) {
     const rootIssueId = req.params.id as string;
     const root = await issuesSvc.getById(rootIssueId);
@@ -138,6 +191,14 @@ export function issueTreeControlRoutes(
       runId: actor.runId,
     };
     const { stopAt = "now", ...holdInput } = req.body as CreateIssueTreeHold;
+    const reason = treeHoldReason(holdInput.reason);
+    if (await rejectAgentTreeHoldWithoutReason(req, res, {
+      companyId: root.companyId,
+      issueId: root.id,
+      operation: holdInput.mode,
+      holdId: null,
+      reason,
+    })) return;
     if (stopAt === "safe_point" && (holdInput.mode !== "pause" || root.conversationAgentId)) {
       res.status(422).json({
         error: holdInput.mode !== "pause"
@@ -148,6 +209,7 @@ export function issueTreeControlRoutes(
     }
     let result = await treeControlSvc.createHold(root.companyId, root.id, {
       ...holdInput,
+      reason,
       actor: actorInput,
     });
     await logActivity(db, {
@@ -477,6 +539,14 @@ export function issueTreeControlRoutes(
         res.status(400).json({ error: "Invalid hold ID" });
         return;
       }
+      const reason = treeHoldReason(req.body.reason);
+      if (await rejectAgentTreeHoldWithoutReason(req, res, {
+        companyId: root.companyId,
+        issueId: root.id,
+        operation: "release",
+        holdId,
+        reason,
+      })) return;
 
       // Releasing a pause does not authorize replay of uncertain provider actions.
       // Check before release so a rejected wake leaves the subtree paused.
@@ -507,6 +577,7 @@ export function issueTreeControlRoutes(
         holdId,
         {
           ...req.body,
+          reason,
           actor: {
             actorType: actor.actorType,
             actorId: actor.actorId,

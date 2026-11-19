@@ -458,6 +458,8 @@ export type IssueRelationType = (typeof ISSUE_RELATION_TYPES)[number];
 
 export const ISSUE_TREE_CONTROL_MODES = ["pause", "resume", "cancel", "restore"] as const;
 export type IssueTreeControlMode = (typeof ISSUE_TREE_CONTROL_MODES)[number];
+export const ISSUE_TREE_HOLD_AGENT_REASON_MIN_LENGTH = 10;
+export const ISSUE_TREE_HOLD_REASON_REQUIRED_CODE = "tree_hold_reason_required";
 
 export const ISSUE_TREE_HOLD_STATUSES = ["active", "released"] as const;
 export type IssueTreeHoldStatus = (typeof ISSUE_TREE_HOLD_STATUSES)[number];

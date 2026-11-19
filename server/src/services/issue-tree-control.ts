@@ -38,6 +38,9 @@ export type ActiveIssueTreePauseHoldGate = {
   mode: "pause";
   reason: string | null;
   releasePolicy: IssueTreeHoldReleasePolicy | null;
+  pausedAt: Date;
+  pausedByAgentId: string | null;
+  pausedByUserId: string | null;
 };
 type ActorInput = {
   actorType: "user" | "agent" | "system";
@@ -565,6 +568,9 @@ export function issueTreeControlService(db: Db) {
         scope: issueTreeHolds.scope,
         reason: issueTreeHolds.reason,
         releasePolicy: issueTreeHolds.releasePolicy,
+        createdAt: issueTreeHolds.createdAt,
+        createdByAgentId: issueTreeHolds.createdByAgentId,
+        createdByUserId: issueTreeHolds.createdByUserId,
       })
       .from(issueTreeHolds)
       .where(
@@ -601,6 +607,9 @@ export function issueTreeControlService(db: Db) {
           mode: "pause",
           reason: hold.reason,
           releasePolicy: (hold.releasePolicy as IssueTreeHoldReleasePolicy | null) ?? null,
+          pausedAt: hold.createdAt,
+          pausedByAgentId: hold.createdByAgentId,
+          pausedByUserId: hold.createdByUserId,
         };
       }
 

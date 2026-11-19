@@ -1,5 +1,6 @@
 import type { ActivityEvent, IssueWorkMode } from "@tickernelz/wardmote-shared";
 import { isIssueWorkMode } from "@/lib/work-mode-meta";
+import { meaningfulTreeHoldReason } from "@/lib/tree-hold-reason";
 
 export interface IssueTimelineAssignee {
   agentId: string | null;
@@ -26,6 +27,10 @@ export interface IssueTimelineEvent {
   };
   commentId?: string | null;
   followUpRequested?: boolean;
+  holdChange?: {
+    action: "paused" | "resumed";
+    reason: string | null;
+  };
 }
 
 export interface IssueTimelineWorkspace {
@@ -51,6 +56,12 @@ function hasOwn(record: Record<string, unknown>, key: string) {
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function treeHoldTimelineAction(action: string, mode: unknown): "paused" | "resumed" | null {
+  if (action === "issue.tree_hold_created") return mode === "pause" ? "paused" : mode === "resume" ? "resumed" : null;
+  if (action === "issue.tree_hold_released") return mode === "pause" ? "resumed" : null;
+  return null;
 }
 
 function toTimestamp(value: Date | string) {
@@ -174,6 +185,19 @@ export function extractIssueTimelineEvents(activity: ActivityEvent[] | null | un
         runId: event.runId ?? null,
         commentId,
         followUpRequested: true,
+      });
+      continue;
+    }
+
+    const holdAction = treeHoldTimelineAction(event.action, details.mode);
+    if (holdAction) {
+      events.push({
+        id: event.id,
+        createdAt: event.createdAt,
+        actorType: event.actorType,
+        actorId: event.actorId,
+        runId: event.runId ?? null,
+        holdChange: { action: holdAction, reason: meaningfulTreeHoldReason(nullableString(details.reason)) },
       });
       continue;
     }

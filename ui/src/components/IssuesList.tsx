@@ -7,6 +7,8 @@ import { accessApi } from "../api/access";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { usePausedTasks } from "../hooks/usePausedTasks";
+import { usePauseNoteBuilder } from "../hooks/usePauseNoteBuilder";
+import { PauseReasonNote } from "./PauseReasonNote";
 import { Link, useLocation, useNavigate } from "@/lib/router";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { issuesApi } from "../api/issues";
@@ -1455,10 +1457,11 @@ function StreamlinedIssuesList({
     const statusById = new Map(sourceIssues.map((issue) => [issue.id, issue.status]));
     return new Map(buildLiveNowEntries(liveRuns, statusById).map((entry) => [entry.issueId, entry.runs]));
   }, [liveRuns, sourceIssues, viewState.viewMode]);
-  const boardPausedTasks = usePausedTasks(selectedCompanyId, viewState.viewMode === "board");
-  const boardPauseStateByIssueId = useMemo(
-    () => new Map(boardPausedTasks.map((task) => [task.issueId, task.state])),
-    [boardPausedTasks],
+  const pausedTasks = usePausedTasks(selectedCompanyId);
+  const buildPauseNote = usePauseNoteBuilder(selectedCompanyId, pausedTasks.length > 0);
+  const pausedTaskByIssueId = useMemo(
+    () => new Map(pausedTasks.map((pause) => [pause.issueId, { pause, note: buildPauseNote(pause) }])),
+    [buildPauseNote, pausedTasks],
   );
   const boardHighVolume = viewState.viewMode === "board" && filtered.length > KANBAN_BOARD_HIGH_VOLUME_THRESHOLD;
   const boardCompactCards =
@@ -2418,7 +2421,7 @@ function StreamlinedIssuesList({
           agents={agents}
           liveIssueIds={liveIssueIds}
           liveRunsByIssueId={boardLiveRunsByIssueId}
-          pauseStateByIssueId={boardPauseStateByIssueId}
+          pausedTaskByIssueId={pausedTaskByIssueId}
           compactCards={boardCompactCards}
           collapsedStatuses={boardCollapsedStatuses}
           initialVisibleCount={viewState.boardColumnPageSize}
@@ -2493,6 +2496,7 @@ function StreamlinedIssuesList({
                   const issueProject = issue.projectId ? projectById.get(issue.projectId) ?? null : null;
                   const parentIssue = issue.parentId ? issueById.get(issue.parentId) ?? null : null;
                   const issueBadge = issueBadgeById?.get(issue.id);
+                  const pausedTask = pausedTaskByIssueId.get(issue.id);
                   const isMutedIssue = mutedIssueIds?.has(issue.id) === true;
                   const assigneeUserProfile = issue.assigneeUserId
                     ? companyUserProfileMap.get(issue.assigneeUserId) ?? null
@@ -2637,6 +2641,9 @@ function StreamlinedIssuesList({
                             ) : null}
                           </>
                         )}
+                        titleNote={pausedTask ? (
+                          <PauseReasonNote note={pausedTask.note} identifier={issue.identifier ?? issue.id.slice(0, 8)} showTime />
+                        ) : undefined}
                         className={cn(isMutedIssue && "opacity-70", selectedNavKey === `issue:${issue.id}` && "bg-bg-3/50 hover:bg-bg-3/50")}
                         leadingControl={rowPresentation === "task" ? (
                           hasChildren ? (

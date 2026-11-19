@@ -25,6 +25,8 @@ import { Identity } from "./Identity";
 import type { Issue, IssueStatus, PausedTaskState } from "@tickernelz/wardmote-shared";
 import { AlertTriangle, PauseCircle } from "lucide-react";
 import { isSuccessfulRunHandoffRequired } from "../lib/successful-run-handoff";
+import type { PausedTaskNote } from "../lib/tree-hold-reason";
+import { PauseReasonNote } from "./PauseReasonNote";
 import { collectSubtreeLiveCounts } from "../lib/liveIssueIds";
 import type { LiveRunForIssue } from "../api/heartbeats";
 import { classifyLiveNowHealth, mostSevereSignal } from "./live-now/live-now-health";
@@ -155,7 +157,7 @@ interface KanbanBoardProps {
   agents?: Agent[];
   liveIssueIds?: Set<string>;
   liveRunsByIssueId?: ReadonlyMap<string, readonly LiveRunForIssue[]>;
-  pauseStateByIssueId?: ReadonlyMap<string, PausedTaskState>;
+  pausedTaskByIssueId?: ReadonlyMap<string, PausedTaskNote>;
   compactCards?: boolean;
   collapsedStatuses?: string[];
   initialVisibleCount?: number;
@@ -171,7 +173,7 @@ function KanbanColumn({
   agents,
   liveIssueIds,
   liveRunsByIssueId,
-  pauseStateByIssueId,
+  pausedTaskByIssueId,
   subtreeLiveCounts,
   compactCards = false,
   collapsed = false,
@@ -184,7 +186,7 @@ function KanbanColumn({
   agents?: Agent[];
   liveIssueIds?: Set<string>;
   liveRunsByIssueId?: ReadonlyMap<string, readonly LiveRunForIssue[]>;
-  pauseStateByIssueId?: ReadonlyMap<string, PausedTaskState>;
+  pausedTaskByIssueId?: ReadonlyMap<string, PausedTaskNote>;
   subtreeLiveCounts?: ReadonlyMap<string, number>;
   compactCards?: boolean;
   collapsed?: boolean;
@@ -252,7 +254,7 @@ function KanbanColumn({
               agents={agents}
               isLive={liveIssueIds?.has(issue.id)}
               liveRuns={liveRunsByIssueId?.get(issue.id)}
-              pauseState={pauseStateByIssueId?.get(issue.id)}
+              pausedTask={pausedTaskByIssueId?.get(issue.id)}
               subtreeLiveCount={subtreeLiveCounts?.get(issue.id) ?? 0}
               compact={compactCards}
               className={tone.card}
@@ -285,7 +287,7 @@ function KanbanCard({
   agents,
   isLive,
   liveRuns,
-  pauseState,
+  pausedTask,
   subtreeLiveCount = 0,
   isOverlay,
   compact = false,
@@ -295,7 +297,7 @@ function KanbanCard({
   agents?: Agent[];
   isLive?: boolean;
   liveRuns?: readonly LiveRunForIssue[];
-  pauseState?: PausedTaskState;
+  pausedTask?: PausedTaskNote;
   subtreeLiveCount?: number;
   isOverlay?: boolean;
   compact?: boolean;
@@ -357,7 +359,7 @@ function KanbanCard({
               Next step
             </Badge>
           ) : null}
-          {pauseState ? <KanbanPausedMarker state={pauseState} /> : isLive && <KanbanLiveMarker runs={liveRuns} />}
+          {pausedTask ? <KanbanPausedMarker state={pausedTask.pause.state} /> : isLive && <KanbanLiveMarker runs={liveRuns} />}
           {!isLive && subtreeLiveCount > 0 && (
             <Badge variant="outline"
               className="border-line px-1.5 text-(length:--text-nano) text-ink-3"
@@ -384,6 +386,14 @@ function KanbanCard({
           })()}
         </div>
       </Link>
+      {pausedTask ? (
+        <PauseReasonNote
+          note={pausedTask.note}
+          identifier={issue.identifier ?? issue.id.slice(0, 8)}
+          showTime
+          className={compact ? "mt-1" : "mt-1.5"}
+        />
+      ) : null}
     </Card>
   );
 }
@@ -444,7 +454,7 @@ export function KanbanBoard({
   agents,
   liveIssueIds,
   liveRunsByIssueId,
-  pauseStateByIssueId,
+  pausedTaskByIssueId,
   compactCards = false,
   collapsedStatuses = [],
   initialVisibleCount = KANBAN_COLUMN_INITIAL_VISIBLE_LIMIT,
@@ -529,7 +539,7 @@ export function KanbanBoard({
             agents={agents}
             liveIssueIds={liveIssueIds}
             liveRunsByIssueId={liveRunsByIssueId}
-            pauseStateByIssueId={pauseStateByIssueId}
+            pausedTaskByIssueId={pausedTaskByIssueId}
             subtreeLiveCounts={subtreeLiveCounts}
             compactCards={compactCards}
             // Compact mode (any lane explicitly collapsed) also collapses

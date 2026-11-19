@@ -392,7 +392,7 @@ describe("SidebarRecentTasks", () => {
     });
     expect(mockIssuesApi.createTreeHold).toHaveBeenCalledWith("issue-1", {
       mode: "pause",
-      reason: "Paused from Recent Tasks.",
+      reason: null,
       releasePolicy: { strategy: "manual" },
     });
 
@@ -403,7 +403,7 @@ describe("SidebarRecentTasks", () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
     expect(mockIssuesApi.releaseTreeHold).toHaveBeenCalledWith("issue-1", "hold-1", {
-      reason: "Restarted from Recent Tasks.",
+      reason: null,
     });
     expect(mockAgentsApi.wakeup).toHaveBeenCalledWith(
       "agent-1",

@@ -294,6 +294,26 @@ describe("extractIssueTimelineEvents", () => {
 
     expect(events).toEqual([]);
   });
+
+  it("turns pause and resume holds into timeline rows with their written reason", () => {
+    const hold = (id: string, action: string, actorType: "agent" | "user", details: Record<string, unknown>, minute: number) => ({
+      id, companyId: "company-1", actorType, actorId: actorType === "agent" ? "agent-1" : "local-board", action,
+      entityType: "issue", entityId: "issue-1", agentId: actorType === "agent" ? "agent-1" : null, runId: null,
+      createdAt: new Date(`2026-11-19T10:0${minute}:00.000Z`), details,
+    });
+    const events = extractIssueTimelineEvents([
+      hold("evt-pause", "issue.tree_hold_created", "agent", { mode: "pause", reason: "Waiting for the deploy window" }, 1),
+      hold("evt-release", "issue.tree_hold_released", "agent", { mode: "pause", reason: "Deploy window is open" }, 2),
+      hold("evt-button", "issue.tree_hold_created", "user", { mode: "pause", reason: "Paused from Recent Tasks." }, 3),
+      hold("evt-cancel", "issue.tree_hold_created", "user", { mode: "cancel", reason: "stop" }, 4),
+    ] satisfies ActivityEvent[]);
+
+    expect(events.map((event) => [event.id, event.holdChange])).toEqual([
+      ["evt-pause", { action: "paused", reason: "Waiting for the deploy window" }],
+      ["evt-release", { action: "resumed", reason: "Deploy window is open" }],
+      ["evt-button", { action: "paused", reason: null }],
+    ]);
+  });
 });
 
 describe("extractIssueWorkModeChanges", () => {

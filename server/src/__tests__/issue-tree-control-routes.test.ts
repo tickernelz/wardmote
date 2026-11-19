@@ -736,4 +736,108 @@ describe("issue tree control routes", () => {
     expect(mockTreeControlService.cancelIssueStatusesForHold).not.toHaveBeenCalled();
     expect(mockTreeControlService.restoreIssueStatusesForHold).not.toHaveBeenCalled();
   });
+
+  describe("hold reasons", () => {
+    const rootId = "11111111-1111-4111-8111-111111111111";
+    const holdId = "33333333-3333-4333-8333-333333333333";
+    const agentActor = {
+      type: "agent",
+      agentId: "22222222-2222-4222-8222-222222222222",
+      agentRole: "ceo",
+      companyId: "company-2",
+      runId: "55555555-5555-4555-8555-555555555555",
+      source: "agent_key",
+    };
+    const boardActor = {
+      type: "board",
+      userId: "user-1",
+      companyIds: ["company-2"],
+      source: "session",
+      isInstanceAdmin: false,
+    };
+
+    beforeEach(() => {
+      mockTreeControlService.createHold.mockImplementation(async (_companyId: string, _rootId: string, input: { mode: string; reason: string | null }) => ({
+        hold: { id: holdId, mode: input.mode, reason: input.reason },
+        preview: { mode: input.mode, totals: { affectedIssues: 1 }, warnings: [], activeRuns: [] },
+      }));
+      mockTreeControlService.releaseHold.mockResolvedValue({ id: holdId, mode: "pause", status: "released", releaseReason: null, members: [] });
+    });
+
+    function rejectionLogged() {
+      return mockLogActivity.mock.calls.some(([, entry]) =>
+        entry.action === "issue.tree_hold_reason_rejected"
+        && entry.entityId === rootId
+        && entry.details.code === "tree_hold_reason_required");
+    }
+
+    it.each([
+      ["pause without reason", { mode: "pause" }],
+      ["pause with null reason", { mode: "pause", reason: null }],
+      ["pause with empty reason", { mode: "pause", reason: "" }],
+      ["pause with blank reason", { mode: "pause", reason: "     " }],
+      ["pause with a 9 character reason", { mode: "pause", reason: "  too shrt  " }],
+      ["resume without reason", { mode: "resume" }],
+      ["cancel with a short reason", { mode: "cancel", reason: "ok" }],
+      ["restore without reason", { mode: "restore" }],
+    ])("refuses an agent %s", async (_label, body) => {
+      const app = await createApp(agentActor);
+      const res = await request(app).post(`/api/issues/${rootId}/tree-holds`).send(body);
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe("tree_hold_reason_required");
+      expect(res.body.minLength).toBe(10);
+      expect(res.body).not.toHaveProperty("example");
+      expect(mockTreeControlService.createHold).not.toHaveBeenCalled();
+      expect(rejectionLogged()).toBe(true);
+    });
+
+    it("accepts an agent hold whose trimmed reason has at least 10 characters", async () => {
+      const app = await createApp(agentActor);
+      const res = await request(app)
+        .post(`/api/issues/${rootId}/tree-holds`)
+        .send({ mode: "pause", reason: "  abcdefghij  " });
+      expect(res.status).toBe(201);
+      expect(mockTreeControlService.createHold).toHaveBeenCalledWith("company-2", rootId, expect.objectContaining({
+        mode: "pause",
+        reason: "abcdefghij",
+      }));
+      expect(rejectionLogged()).toBe(false);
+    });
+
+    it.each([
+      ["without reason", {}],
+      ["with empty reason", { reason: "" }],
+      ["with blank reason", { reason: "   " }],
+      ["with a 9 character reason", { reason: "too shrt." }],
+    ])("refuses an agent release %s", async (_label, body) => {
+      const app = await createApp(agentActor);
+      const res = await request(app).post(`/api/issues/${rootId}/tree-holds/${holdId}/release`).send(body);
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe("tree_hold_reason_required");
+      expect(mockTreeControlService.releaseHold).not.toHaveBeenCalled();
+      expect(rejectionLogged()).toBe(true);
+    });
+
+    it("accepts an agent release with a reason", async () => {
+      const app = await createApp(agentActor);
+      const res = await request(app)
+        .post(`/api/issues/${rootId}/tree-holds/${holdId}/release`)
+        .send({ reason: "Deploy window is open again" });
+      expect(res.status).toBe(200);
+      expect(mockTreeControlService.releaseHold).toHaveBeenCalledWith("company-2", rootId, holdId, expect.objectContaining({
+        reason: "Deploy window is open again",
+      }));
+    });
+
+    it("keeps reasons optional for board users and treats a blank reason as none", async () => {
+      const app = await createApp(boardActor);
+      const created = await request(app).post(`/api/issues/${rootId}/tree-holds`).send({ mode: "pause", reason: "   " });
+      const released = await request(app).post(`/api/issues/${rootId}/tree-holds/${holdId}/release`).send({});
+      expect(created.status).toBe(201);
+      expect(released.status).toBe(200);
+      expect(mockTreeControlService.createHold).toHaveBeenCalledWith("company-2", rootId, expect.objectContaining({ reason: null }));
+      expect(mockTreeControlService.releaseHold).toHaveBeenCalledWith("company-2", rootId, holdId, expect.objectContaining({ reason: null }));
+      expect(rejectionLogged()).toBe(false);
+    });
+  });
 });

@@ -3777,6 +3777,10 @@ function IssueChatSystemMessage({ message }: { message: ThreadMessage }) {
   const workspaceChange = isTimelineWorkspaceChange(custom.workspaceChange)
     ? custom.workspaceChange
     : null;
+  const holdChange =
+    typeof custom.holdChange === "object" && custom.holdChange
+      ? (custom.holdChange as { action: "paused" | "resumed"; reason: string | null })
+      : null;
   const interaction = isIssueThreadInteraction(custom.interaction)
     ? custom.interaction
     : null;
@@ -3840,9 +3844,11 @@ function IssueChatSystemMessage({ message }: { message: ThreadMessage }) {
         <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs">
           <span className="font-medium text-ink">{actorName}</span>
           <span className="text-ink-3">
-            {custom.followUpRequested === true
-              ? "requested follow-up"
-              : "updated this task"}
+            {holdChange
+              ? `${holdChange.action} this task`
+              : custom.followUpRequested === true
+                ? "requested follow-up"
+                : "updated this task"}
           </span>
           <a
             href={anchorId ? `#${anchorId}` : undefined}
@@ -3896,6 +3902,12 @@ function IssueChatSystemMessage({ message }: { message: ThreadMessage }) {
               />
             </div>
           </div>
+        ) : null}
+
+        {holdChange?.reason ? (
+          <p data-testid="hold-change-reason" className="whitespace-pre-wrap break-words text-xs text-ink-2">
+            {holdChange.reason}
+          </p>
         ) : null}
 
         {workspaceChange ? (

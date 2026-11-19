@@ -103,6 +103,8 @@ import {
 import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { useIssueWorkProducts } from "../hooks/useIssueWorkProducts";
+import { usePauseNoteBuilder } from "../hooks/usePauseNoteBuilder";
+import { PauseReasonNote } from "../components/PauseReasonNote";
 import {
   mergePendingIssueQueuedComments,
   normalizeIssueQueuedCommentQueue,
@@ -6527,6 +6529,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
       ) ?? null
     );
   }, [activePauseHold, issue]);
+  const buildPauseNote = usePauseNoteBuilder(issue?.companyId, Boolean(activePauseHold));
 
   if (isLoading)
     return <IssueDetailLoadingState headerSeed={issueHeaderSeed} />;
@@ -7279,6 +7282,13 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                       setTreeControlOpen(true);
                     } : undefined,
                     resumeHref: !activePauseHold.isRoot ? createIssueDetailPath(activePauseHoldRoot?.identifier ?? activePauseHold.rootIssueId) : undefined,
+                    note: (
+                      <PauseReasonNote
+                        note={buildPauseNote(activePauseHold)}
+                        identifier={activePauseHoldRoot?.identifier ?? issue.identifier ?? issue.id.slice(0, 8)}
+                        showTime
+                      />
+                    ),
                   } : null}
                   composerDisabledReason={issue.conversationAgentId && !instanceExperimentalSettings?.enableAgentChat ? "Agent chat is off in Settings > Features." : treeControlStateError ? "Couldn’t check whether this task is paused. Refresh to try again." : null}
                   composerHint={composerHint}

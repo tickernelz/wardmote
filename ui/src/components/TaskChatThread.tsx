@@ -114,6 +114,7 @@ import {
   useRunnerGoalControl,
 } from "@/components/task-chat/RunnerGoalWidget";
 import { TaskChatQueuedMessages } from "@/components/task-chat/TaskChatQueuedMessages";
+import { formatAssigneeUserLabel } from "@/lib/assignees";
 import { TaskChatWindowScroll } from "@/components/task-chat/useWindowAutoFollow";
 import { TaskChatComposerDock } from "@/components/task-chat/TaskChatComposerDock";
 import { useComposerDockReserve } from "@/components/task-chat/useComposerDockReserve";
@@ -1282,6 +1283,30 @@ export function TaskChatThread(props: TaskChatThreadProps) {
         item: { id, kind: "interaction", interaction },
       });
     }
+    for (const event of timelineEvents ?? []) {
+      if (!event.holdChange) continue;
+      const id = `hold:${event.id}`;
+      const actorName = event.actorType === "agent"
+        ? agentMap?.get(event.actorId)?.name ?? "An agent"
+        : event.actorType === "system"
+          ? "System"
+          : formatAssigneeUserLabel(event.actorId, currentUserId, userLabelMap) ?? "Board";
+      const reason = event.holdChange.reason;
+      entries.push({
+        ms: toMs(event.createdAt),
+        order: 0,
+        id,
+        item: {
+          id,
+          kind: "marker",
+          variant: "turn_boundary",
+          tone: "neutral",
+          label: `${actorName} ${event.holdChange.action} this task${reason ? "" : event.actorType === "agent" ? " without a reason" : ""}`,
+          ...(reason ? { detail: reason, collapsible: true } : {}),
+          createdAtIso: new Date(event.createdAt).toISOString(),
+        },
+      });
+    }
     for (const document of documents) {
       if (document.key === "plan") continue;
       const id = `resource:document:${document.id}`;
@@ -1410,6 +1435,9 @@ export function TaskChatThread(props: TaskChatThreadProps) {
     workProducts,
     attachments,
     timelineEvents,
+    agentMap,
+    currentUserId,
+    userLabelMap,
     linkedRuns,
     liveRuns,
     planDocument,

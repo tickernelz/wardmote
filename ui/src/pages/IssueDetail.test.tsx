@@ -4797,6 +4797,9 @@ describe("IssueDetail", () => {
         isRoot: boolean;
         mode: "pause";
         reason: string | null;
+        pausedAt: string;
+        pausedByAgentId: string | null;
+        pausedByUserId: string | null;
         releasePolicy: {
           strategy: "manual" | "after_active_runs_finish";
           note?: string | null;
@@ -4807,6 +4810,9 @@ describe("IssueDetail", () => {
         issueId: "issue-1",
         isRoot: true,
         mode: "pause",
+        pausedAt: "2026-04-21T00:00:00.000Z",
+        pausedByAgentId: null,
+        pausedByUserId: "user-1",
         reason: null,
         releasePolicy: { strategy: "manual" },
       };
@@ -5632,6 +5638,9 @@ describe("IssueDetail", () => {
           issueId: "issue-1",
           isRoot,
           mode: "pause",
+          pausedAt: "2026-04-21T00:00:00.000Z",
+          pausedByAgentId: null,
+          pausedByUserId: "user-1",
           reason: null,
           releasePolicy: { strategy: "manual" },
         },
@@ -5652,6 +5661,9 @@ describe("IssueDetail", () => {
         issueId: "issue-1",
         isRoot: true,
         mode: "pause",
+        pausedAt: "2026-04-21T00:00:00.000Z",
+        pausedByAgentId: null,
+        pausedByUserId: "user-1",
         reason: null,
         releasePolicy: { strategy: "manual" },
       },
@@ -5723,6 +5735,9 @@ describe("IssueDetail", () => {
         issueId: "issue-1",
         isRoot: true,
         mode: "pause",
+        pausedAt: "2026-04-21T00:00:00.000Z",
+        pausedByAgentId: null,
+        pausedByUserId: "user-1",
         reason: null,
         releasePolicy: { strategy: "manual" },
       },
