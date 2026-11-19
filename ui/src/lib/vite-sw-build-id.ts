@@ -39,6 +39,8 @@ export function stampServiceWorkerBuildId(source: string, buildId: string): stri
   return source.split(SERVICE_WORKER_BUILD_ID_PLACEHOLDER).join(buildId);
 }
 
+const APP_ENTRY_NAME = "index";
+
 export function serviceWorkerBuildIdPlugin(
   options: { serviceWorkerFileName?: string } = {},
 ): Plugin {
@@ -56,7 +58,7 @@ export function serviceWorkerBuildIdPlugin(
     generateBundle(_options, bundle) {
       bundleGenerated = true;
       const entry = Object.values(bundle).find(
-        (chunk) => chunk.type === "chunk" && chunk.isEntry,
+        (chunk) => chunk.type === "chunk" && chunk.isEntry && chunk.name === APP_ENTRY_NAME,
       );
       if (entry) {
         buildId = serviceWorkerBuildIdFromFileName(entry.fileName);

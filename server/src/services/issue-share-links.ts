@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "@tickernelz/wardmote-db";
 import {
   agents,
@@ -8,7 +8,6 @@ import {
   companyLogos,
   heartbeatRuns,
   issueAttachments,
-  issueRelations,
   issueShareLinks,
   issueWorkProducts,
   issues,
@@ -26,7 +25,6 @@ import {
   type IssueShareLink,
   type IssueStatus,
   type PublicIssueComment,
-  type PublicIssueRelatedIssue,
   type PublicIssueShareView,
   type PublicShareActor,
   type PublicShareAttachment,
@@ -109,8 +107,6 @@ export type ShareIssue = {
 
 export type ResolvedIssueShare = { link: ShareLinkRow; root: ShareIssue };
 
-type RelatedEntry = { issue: ShareIssue; relation: PublicIssueRelatedIssue["relation"] };
-
 type ClassifiableComment = {
   authorType?: string | null;
   authorAgentId?: string | null;
@@ -119,13 +115,6 @@ type ClassifiableComment = {
   publicShareVisible?: boolean | null;
   presentation?: unknown;
   deletedAt?: Date | string | null;
-};
-
-const RELATION_ORDER: Record<PublicIssueRelatedIssue["relation"], number> = {
-  parent: 0,
-  child: 1,
-  blocked_by: 2,
-  blocks: 3,
 };
 
 function iso(value: Date | string): string {
@@ -257,46 +246,6 @@ export function issueShareLinkService(db: Db) {
     return root ? { link, root } : null;
   }
 
-  async function relatedOf(issue: ShareIssue): Promise<RelatedEntry[]> {
-    const relations = await db
-      .select({ issueId: issueRelations.issueId, relatedIssueId: issueRelations.relatedIssueId })
-      .from(issueRelations)
-      .where(and(
-        eq(issueRelations.companyId, issue.companyId),
-        eq(issueRelations.type, "blocks"),
-        or(eq(issueRelations.issueId, issue.id), eq(issueRelations.relatedIssueId, issue.id)),
-      ));
-    const blockers = new Set(relations.filter((row) => row.relatedIssueId === issue.id).map((row) => row.issueId));
-    const blocked = new Set(relations.filter((row) => row.issueId === issue.id).map((row) => row.relatedIssueId));
-    const ids = [...new Set([...(issue.parentId ? [issue.parentId] : []), ...blockers, ...blocked])];
-    const rows = await db
-      .select(shareIssueColumns)
-      .from(issues)
-      .where(and(
-        eq(issues.companyId, issue.companyId),
-        isNull(issues.hiddenAt),
-        ids.length > 0 ? or(eq(issues.parentId, issue.id), inArray(issues.id, ids)) : eq(issues.parentId, issue.id),
-      ));
-    const entries: RelatedEntry[] = [];
-    for (const row of rows) {
-      if (row.id === issue.id) continue;
-      if (row.id === issue.parentId) entries.push({ issue: row, relation: "parent" });
-      if (row.parentId === issue.id) entries.push({ issue: row, relation: "child" });
-      if (blockers.has(row.id)) entries.push({ issue: row, relation: "blocked_by" });
-      if (blocked.has(row.id)) entries.push({ issue: row, relation: "blocks" });
-    }
-    return entries.sort((left, right) =>
-      RELATION_ORDER[left.relation] - RELATION_ORDER[right.relation]
-      || (left.issue.identifier ?? left.issue.title).localeCompare(right.issue.identifier ?? right.issue.title));
-  }
-
-  /** The shared issue plus every issue one hop away; downloads and related views must stay inside it. */
-  async function oneHopIssues(resolved: ResolvedIssueShare): Promise<Map<string, ShareIssue>> {
-    const set = new Map<string, ShareIssue>([[resolved.root.id, resolved.root]]);
-    for (const entry of await relatedOf(resolved.root)) set.set(entry.issue.id, entry.issue);
-    return set;
-  }
-
   async function agentActors(ids: string[]) {
     const unique = [...new Set(ids)];
     if (unique.length === 0) return new Map<string, PublicShareActor>();
@@ -373,11 +322,10 @@ export function issueShareLinkService(db: Db) {
     };
   }
 
-  async function buildView(resolved: ResolvedIssueShare, target: ShareIssue): Promise<PublicIssueShareView> {
+  async function buildView(resolved: ResolvedIssueShare): Promise<PublicIssueShareView> {
     const token = resolved.link.token;
-    const isSharedRoot = target.id === resolved.root.id;
-    const [related, comments, attachments, documents, workProducts, run, company, project] = await Promise.all([
-      relatedOf(target),
+    const target = resolved.root;
+    const [comments, attachments, documents, workProducts, run, company, project] = await Promise.all([
       issuesSvc.listComments(target.id, { order: "asc" }),
       issuesSvc.listAttachments(target.id),
       documentsSvc.listIssueDocuments(target.id),
@@ -507,18 +455,9 @@ export function issueShareLinkService(db: Db) {
         updatedAt: iso(target.updatedAt),
         completedAt: target.completedAt ? iso(target.completedAt) : null,
       },
-      isSharedRoot,
       activeRun: run && runAgent
         ? { agentName: runAgent.name, startedAt: iso(run.startedAt ?? run.createdAt) }
         : null,
-      related: related.map((entry) => ({
-        id: entry.issue.id,
-        identifier: entry.issue.identifier ?? null,
-        title: entry.issue.title,
-        status: entry.issue.status as IssueStatus,
-        relation: entry.relation,
-        navigable: isSharedRoot || entry.issue.id === resolved.root.id,
-      })),
       comments: publicComments,
       documents: documents.map((document) => ({
         key: document.key,
@@ -539,8 +478,7 @@ export function issueShareLinkService(db: Db) {
     if (!isUuidLike(attachmentId)) return null;
     const attachment = await issuesSvc.getAttachmentById(attachmentId);
     if (!attachment || attachment.companyId !== resolved.link.companyId) return null;
-    const set = await oneHopIssues(resolved);
-    if (!set.has(attachment.issueId)) return null;
+    if (attachment.issueId !== resolved.root.id) return null;
     if (!attachment.issueCommentId) return neverBoundToComment(attachment) ? attachment : null;
     const comment = await issuesSvc.getComment(attachment.issueCommentId);
     if (!comment || comment.issueId !== attachment.issueId) return null;
@@ -585,9 +523,8 @@ export function issueShareLinkService(db: Db) {
   async function findVisibleDocument(resolved: ResolvedIssueShare, issueId: string, rawKey: string) {
     const key = issueDocumentKeySchema.safeParse(rawKey.trim().toLowerCase());
     if (!key.success || isSystemIssueDocumentKey(key.data)) return null;
-    const set = await oneHopIssues(resolved);
-    const issue = set.get(issueId);
-    if (!issue) return null;
+    if (issueId !== resolved.root.id) return null;
+    const issue = resolved.root;
     const document = await documentsSvc.getIssueDocumentByKey(issue.id, key.data);
     if (!document) return null;
     return { issue, document: await runRedactions.redactForIssue(issue.companyId, issue.id, document) };
@@ -598,7 +535,6 @@ export function issueShareLinkService(db: Db) {
     create,
     revoke,
     resolve,
-    oneHopIssues,
     buildView,
     findVisibleAttachment,
     findVisibleAsset,

@@ -266,7 +266,7 @@ export const TOOL_OVERRIDES: Record<string, ToolOverride> = {
   "POST /api/issues/{id}/share-link": {
     name: "wardmoteCreateIssueShareLink",
     description:
-      "Create (or return the existing) public read-only link to an issue for an external requester. Any agent that can read the issue may call this, even while another agent's run holds its checkout. Anyone with the URL sees the issue, agent comments, documents, attachments and one-hop related issues without logging in, until the link is revoked.",
+      "Create (or return the existing) public read-only link to an issue for an external requester. Any agent that can read the issue may call this, even while another agent's run holds its checkout. Anyone with the URL sees only this issue (agent comments, documents, attachments and work products) without logging in, until the link is revoked; it links to no other issue.",
     toolset: "core",
   },
   "DELETE /api/issues/{id}/share-link": {

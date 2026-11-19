@@ -126,6 +126,7 @@ const AssistantConnectionsPage = lazyPage(() => import("./pages/McpConnect").the
 const CliAuthPage = lazyPage(() => import("./pages/CliAuth").then((module) => module.CliAuthPage));
 const InviteLandingPage = lazyPage(() => import("./pages/InviteLanding").then((module) => module.InviteLandingPage));
 const PublicIssueSharePage = lazyPage(() => import("./pages/PublicIssueSharePage").then((module) => module.PublicIssueSharePage));
+const PublicIssueShareLegacyRedirect = lazyPage(() => import("./pages/PublicIssueSharePage").then((module) => module.PublicIssueShareLegacyRedirect));
 const JoinRequestQueue = lazyPage(() => import("./pages/JoinRequestQueue").then((module) => module.JoinRequestQueue));
 const NotFoundPage = lazyPage(() => import("./pages/NotFound").then((module) => module.NotFoundPage));
 const Inbox = lazyPage(() => import("./pages/Inbox").then((module) => module.Inbox));
@@ -762,7 +763,7 @@ export function App() {
         <Route path="cli-auth/:id" element={<CliAuthPage />} />
         <Route path="invite/:token" element={<InviteLandingPage />} />
         <Route path="s/:token" element={<PublicIssueSharePage />} />
-        <Route path="s/:token/issues/:issueId" element={<PublicIssueSharePage />} />
+        <Route path="s/:token/issues/:issueId" element={<PublicIssueShareLegacyRedirect />} />
         <Route element={<CloudAccessGate allowMembershipRequest />}>
           {/* The identity APIs enforce the chat rollout flag. Nonmembers cannot
               read experimental settings, but a private invitation may request membership. */}

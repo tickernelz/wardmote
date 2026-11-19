@@ -1502,7 +1502,6 @@ const PUBLIC_OPERATIONS = new Set([
   "POST /api/cli-auth/challenges/{id}/cancel",
   "GET /api/invites/{token}",
   "GET /api/public/share/{token}",
-  "GET /api/public/share/{token}/issues/{issueId}",
   "GET /api/public/share/{token}/attachments/{attachmentId}/content",
   "GET /api/public/share/{token}/assets/{assetId}/content",
   "GET /api/public/share/{token}/issues/{issueId}/documents/{key}/pdf",
@@ -5500,7 +5499,7 @@ registry.registerPath({
   path: "/api/issues/{id}/share-link",
   tags: ["issues"],
   summary: "Create or return the public share link of an issue",
-  description: "Idempotent: returns the existing active link (200) or creates one (201). Requires issue read access only; another agent's checkout does not block it. Anyone holding the URL can read the issue, its agent comments, documents, attachments and one-hop related issues without logging in, until the link is revoked.",
+  description: "Idempotent: returns the existing active link (200) or creates one (201). Requires issue read access only; another agent's checkout does not block it. Anyone holding the URL can read only this issue, its agent comments, documents, attachments and work products without logging in, until the link is revoked; the link opens no other issue.",
   request: { params: z.object({ id: z.string() }) },
   responses: { 200: r.ok(), 201: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
 });
@@ -11495,15 +11494,6 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/api/public/share/{token}/issues/{issueId}",
-  tags: ["public-share"],
-  summary: "Read the public projection of an issue one hop from the shared issue",
-  request: { params: z.object({ token: z.string(), issueId: z.string() }) },
-  responses: { 200: r.ok(), 404: r.notFound, 429: r.tooManyRequests },
-});
-
-registry.registerPath({
-  method: "get",
   path: "/api/public/share/{token}/attachments/{attachmentId}/content",
   tags: ["public-share"],
   summary: "Download a publicly visible attachment of a shared issue",
@@ -11524,7 +11514,7 @@ registry.registerPath({
   method: "get",
   path: "/api/public/share/{token}/issues/{issueId}/documents/{key}/pdf",
   tags: ["public-share"],
-  summary: "Download a document of a shared issue as PDF",
+  summary: "Download a document of the shared issue as PDF; issueId must be the shared issue",
   request: { params: z.object({ token: z.string(), issueId: z.string(), key: z.string() }) },
   responses: { 200: { description: "PDF document" }, 404: r.notFound, 429: r.tooManyRequests },
 });

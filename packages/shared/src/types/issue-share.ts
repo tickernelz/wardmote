@@ -60,15 +60,6 @@ export interface PublicShareWorkProduct {
   downloadUrl: string | null;
 }
 
-export interface PublicIssueRelatedIssue {
-  id: string;
-  identifier: string | null;
-  title: string;
-  status: IssueStatus;
-  relation: "parent" | "child" | "blocked_by" | "blocks";
-  navigable: boolean;
-}
-
 export interface PublicIssueShareView {
   company: { name: string; logoUrl: string | null };
   issue: {
@@ -84,9 +75,7 @@ export interface PublicIssueShareView {
     updatedAt: string;
     completedAt: string | null;
   };
-  isSharedRoot: boolean;
   activeRun: { agentName: string; startedAt: string } | null;
-  related: PublicIssueRelatedIssue[];
   comments: PublicIssueComment[];
   documents: PublicShareDocument[];
   attachments: PublicShareAttachment[];

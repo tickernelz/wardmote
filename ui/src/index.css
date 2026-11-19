@@ -2837,12 +2837,12 @@ span.wardmote-mention-chip[data-mention-kind="external-object"] {
    reads on dark surfaces. A single hue covers both modes. */
 .status-chip {
   background-color: color-mix(in srgb, var(--sc) 15%, white);
-  color: color-mix(in srgb, var(--sc) 82%, black);
+  color: color-mix(in srgb, var(--sc) 60%, black);
   border-color: var(--sc);
 }
 .dark .status-chip {
   background-color: color-mix(in srgb, var(--sc) 22%, transparent);
-  color: color-mix(in srgb, var(--sc) 80%, white);
+  color: color-mix(in srgb, var(--sc) 70%, white);
   border-color: color-mix(in srgb, var(--sc) 48%, transparent);
 }
 .status-fill {

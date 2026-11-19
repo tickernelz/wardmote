@@ -1,9 +1,14 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { serviceWorkerBuildIdFromFileName } from "./service-worker-build-id";
-import { SERVICE_WORKER_BUILD_ID_PLACEHOLDER, stampServiceWorkerBuildId } from "./vite-sw-build-id";
+import {
+  SERVICE_WORKER_BUILD_ID_PLACEHOLDER,
+  serviceWorkerBuildIdPlugin,
+  stampServiceWorkerBuildId,
+} from "./vite-sw-build-id";
 
 const swSource = () =>
   `const BUILD_ID = "${SERVICE_WORKER_BUILD_ID_PLACEHOLDER}";\n` +
@@ -62,5 +67,30 @@ describe("public/sw.js contract", () => {
     );
     const source = fs.readFileSync(swPath, "utf8");
     expect(source).toContain(SERVICE_WORKER_BUILD_ID_PLACEHOLDER);
+  });
+});
+
+describe("serviceWorkerBuildIdPlugin", () => {
+  it("stamps the worker with the app entry even when the share page entry comes first", () => {
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "sw-build-id-"));
+    try {
+      fs.writeFileSync(path.join(outDir, "sw.js"), swSource());
+      const plugin = serviceWorkerBuildIdPlugin() as unknown as {
+        configResolved: (config: { build: { outDir: string } }) => void;
+        generateBundle: (options: unknown, bundle: Record<string, unknown>) => void;
+        closeBundle: () => void;
+      };
+      plugin.configResolved({ build: { outDir } });
+      plugin.generateBundle({}, {
+        "assets/share-Sh4re000.js": { type: "chunk", isEntry: true, name: "share", fileName: "assets/share-Sh4re000.js" },
+        "assets/index-App00000.js": { type: "chunk", isEntry: true, name: "index", fileName: "assets/index-App00000.js" },
+      });
+      plugin.closeBundle();
+      const stamped = fs.readFileSync(path.join(outDir, "sw.js"), "utf8");
+      expect(stamped).toContain("index-App00000");
+      expect(stamped).not.toContain("share-Sh4re000");
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
   });
 });

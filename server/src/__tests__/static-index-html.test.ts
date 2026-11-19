@@ -4,7 +4,7 @@ import path from "node:path";
 import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readBrandedStaticIndexHtml } from "../static-index-html.js";
+import { readBrandedStaticHtmlForPath, readBrandedStaticIndexHtml } from "../static-index-html.js";
 
 describe("static SPA fallback HTML", () => {
   const tempDirs: string[] = [];
@@ -13,6 +13,20 @@ describe("static SPA fallback HTML", () => {
     vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("serves the standalone share page for public share links and the app shell elsewhere", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wardmote-share-html-"));
+    tempDirs.push(dir);
+    fs.writeFileSync(path.join(dir, "index.html"), "<html><body>APP_SHELL</body></html>");
+    expect(readBrandedStaticHtmlForPath(dir, "/s/Ab3dE5gH9k")).toContain("APP_SHELL");
+    fs.writeFileSync(path.join(dir, "share.html"), "<html><body>SHARE_PAGE</body></html>");
+    for (const sharePath of ["/s/Ab3dE5gH9k", "/s/Ab3dE5gH9k/", "/s/Ab3dE5gH9k/issues/0f6c"]) {
+      expect(readBrandedStaticHtmlForPath(dir, sharePath)).toContain("SHARE_PAGE");
+    }
+    for (const appPath of ["/", "/s", "/ACM/issues/ACM-1", "/s/Ab3dE5gH9k/documents", "/settings/s/x"]) {
+      expect(readBrandedStaticHtmlForPath(dir, appPath)).toContain("APP_SHELL");
     }
   });
 
