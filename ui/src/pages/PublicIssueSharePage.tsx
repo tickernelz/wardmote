@@ -63,6 +63,17 @@ function useNoIndexMeta() {
   }, []);
 }
 
+function useDocumentTitle(title: string | null) {
+  useEffect(() => {
+    if (!title) return;
+    const previous = document.title;
+    document.title = title;
+    return () => {
+      document.title = previous;
+    };
+  }, [title]);
+}
+
 const ATTACHMENT_CONTENT_SRC = /^(?:https?:\/\/[^/]+)?\/api\/attachments\/([^/?#]+)\/content(?:[?#].*)?$/i;
 
 function publicShareImageSrc(token: string, src: string): string | null {
@@ -457,6 +468,7 @@ export function PublicIssueSharePage() {
     refetchOnWindowFocus: true,
     refetchInterval: (current) => (current.state.data?.activeRun ? ACTIVE_RUN_REFETCH_MS : false),
   });
+  useDocumentTitle(query.data?.issue.title ?? null);
 
   if (!tokenValid || query.data === null) return <PublicShareUnavailable />;
 

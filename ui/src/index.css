@@ -667,6 +667,10 @@ html[data-keyboard-open="true"] #main-content:has([data-testid="task-chat-compos
     height: 100%;
     overflow: hidden;
   }
+  body.public-share {
+    height: auto;
+    overflow: auto;
+  }
   h1,
   h2,
   h3 {
