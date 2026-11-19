@@ -51,8 +51,10 @@ describe("PublicIssueSharePage", () => {
   let container: HTMLDivElement;
   let root: Root;
 
-  async function renderAt(path: string) {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  async function renderAt(
+    path: string,
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  ) {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -67,8 +69,12 @@ describe("PublicIssueSharePage", () => {
         </QueryClientProvider>,
       );
     });
+    await waitUntilLoaded();
+  }
+
+  async function waitUntilLoaded(done = () => !container.querySelector("[aria-busy='true']")) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (!container.querySelector("[aria-busy='true']")) break;
+      if (done()) break;
       await act(async () => {
         await new Promise((resolve) => window.setTimeout(resolve, 0));
       });
@@ -205,5 +211,40 @@ describe("PublicIssueSharePage", () => {
 
     expect(container.textContent).toContain("This link is not available");
     expect(container.textContent).not.toContain("Install the warehouse scanner");
+  });
+
+  it("names the tab after the task only while the task is on screen", async () => {
+    document.title = "Shared task";
+    let resolveView: (view: PublicIssueShareView) => void = () => {};
+    getPublicShareMock.mockReturnValueOnce(new Promise<PublicIssueShareView>((resolve) => { resolveView = resolve; }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await renderAt(`/s/${TOKEN}`, queryClient);
+    expect(container.querySelector("[aria-busy='true']")).not.toBeNull();
+    expect(document.title).toBe("Shared task");
+
+    await act(async () => resolveView(buildView()));
+    await waitUntilLoaded();
+    expect(container.textContent).toContain("Install the warehouse scanner");
+    expect(document.title).toBe("Install the warehouse scanner");
+
+    getPublicShareMock.mockResolvedValue(null);
+    await act(async () => {
+      await queryClient.refetchQueries();
+    });
+    await waitUntilLoaded(() => Boolean(container.textContent?.includes("This link is not available")));
+    expect(container.textContent).toContain("This link is not available");
+    expect(document.title).toBe("Shared task");
+  });
+
+  it("gives the tab its original title back when the page goes away", async () => {
+    document.title = "Shared task";
+    getPublicShareMock.mockResolvedValue(buildView());
+
+    await renderAt(`/s/${TOKEN}`);
+    expect(document.title).toBe("Install the warehouse scanner");
+
+    act(() => root.unmount());
+    expect(document.title).toBe("Shared task");
   });
 });
