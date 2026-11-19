@@ -164,7 +164,7 @@ describe("pause reasons on task surfaces", () => {
     render(
       <IssueRow
         issue={issue("zha-1", "Migrate billing")}
-        presentation="streamlined"
+        presentation="task"
         titleNote={<PauseReasonNote note={note(pause).note} identifier="ZHA-1" showTime />}
       />,
     );
