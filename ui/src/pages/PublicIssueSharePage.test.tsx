@@ -324,18 +324,28 @@ describe("PublicIssueSharePage", () => {
       expect(FakeEventSource.instances[1]?.url).toBe(`/api/public/share/${TOKEN}/events?since=v2`);
     });
 
-    it("shows the not-available state as soon as the stream reports the link gone", async () => {
-      getPublicShareMock.mockResolvedValue(buildView());
-      await renderAt(`/s/${TOKEN}`);
+    it("shows the not-available state as soon as the stream reports the link gone and stops asking", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getPublicShareMock.mockResolvedValue(buildView());
+        await renderAt(`/s/${TOKEN}`);
 
-      const stream = FakeEventSource.instances[0]!;
-      await act(async () => {
-        stream.emit("open", null);
-        stream.emit("gone", {});
-      });
-      expect(container.textContent).toContain("This link is not available");
-      expect(stream.readyState).toBe(FakeEventSource.CLOSED);
-      expect(FakeEventSource.instances).toHaveLength(1);
+        const stream = FakeEventSource.instances[0]!;
+        await act(async () => {
+          stream.emit("open", null);
+          stream.emit("gone", {});
+        });
+        expect(container.textContent).toContain("This link is not available");
+        expect(stream.readyState).toBe(FakeEventSource.CLOSED);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(120_000);
+        });
+        expect(FakeEventSource.instances).toHaveLength(1);
+        expect(getPublicShareMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

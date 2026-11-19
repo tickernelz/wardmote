@@ -798,6 +798,28 @@ describeEmbeddedPostgres("public issue share links", () => {
     }
   });
 
+  it("holds the viewer cap when many viewers connect at the same moment", async () => {
+    const seeded = await seed();
+    const token = await share(seeded);
+    const live = liveHub({ limits: { streamsPerToken: 3 } });
+    const server = createApp(() => ({ type: "none", source: "none" }), { live }).listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const { port } = server.address() as AddressInfo;
+    const controller = new AbortController();
+    try {
+      const responses = await Promise.all(Array.from({ length: 10 }, () =>
+        fetch(`http://127.0.0.1:${port}/api/public/share/${token}/events`, { signal: controller.signal })));
+      expect(responses.filter((response) => response.status === 200)).toHaveLength(3);
+      expect(responses.filter((response) => response.status === 429)).toHaveLength(7);
+      expect(live.stats().streams).toBe(3);
+    } finally {
+      controller.abort();
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+      live.close();
+    }
+  });
+
   it("caps requests per share token and IP", async () => {
     const seeded = await seed();
     const token = await share(seeded);

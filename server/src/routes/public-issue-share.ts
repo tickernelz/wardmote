@@ -32,6 +32,11 @@ function clientIp(req: Request) {
   return req.ip || req.socket?.remoteAddress || "unknown";
 }
 
+function tooManyViewers(res: Response) {
+  res.setHeader("Retry-After", "30");
+  res.status(429).json({ error: "Too many live viewers for this share link" });
+}
+
 function notFound(res: Response) {
   res.setHeader("Cache-Control", "private, no-store");
   res.status(404).json({ error: "Not found" });
@@ -94,13 +99,10 @@ export function publicIssueShareRoutes(
   router.get("/public/share/:token/events", async (req, res) => {
     const token = String(req.params.token);
     const ip = clientIp(req);
-    if (live.limitFor(token, ip)) {
-      res.setHeader("Retry-After", "30");
-      res.status(429).json({ error: "Too many live viewers for this share link" });
-      return;
-    }
+    if (live.limitFor(token, ip)) return tooManyViewers(res);
     const resolved = await shares.resolve(token);
     if (!resolved) return notFound(res);
+    if (live.limitFor(token, ip)) return tooManyViewers(res);
     const lastEventId = req.headers["last-event-id"];
     const since = typeof lastEventId === "string" && lastEventId
       ? lastEventId

@@ -473,7 +473,7 @@ export function PublicIssueSharePage() {
     enabled: tokenValid,
     retry: false,
     refetchOnWindowFocus: false,
-    refetchInterval: streaming ? false : FALLBACK_POLL_MS,
+    refetchInterval: (current) => (streaming || current.state.data === null ? false : FALLBACK_POLL_MS),
   });
   usePublicShareLive(token, tokenValid && Boolean(query.data), setStreaming);
   useDocumentTitle(query.data?.view.issue.title ?? null);
