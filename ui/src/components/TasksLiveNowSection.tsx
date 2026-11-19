@@ -4,6 +4,7 @@ import type { Issue } from "@tickernelz/wardmote-shared";
 import type { LiveRunForIssue } from "../api/heartbeats";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { usePausedTasks } from "../hooks/usePausedTasks";
+import { usePauseNoteBuilder } from "../hooks/usePauseNoteBuilder";
 import { cn } from "../lib/utils";
 import { Chip } from "./ui/chip";
 import { Segmented, SegmentedItem } from "./ui/segmented";
@@ -97,7 +98,8 @@ export function TasksLiveNowSection({
   const listId = useId();
 
   const pausedTasks = usePausedTasks(companyId);
-  const { items, heartbeats, pausedItems, loadedById, detailById, failedIds } = useLiveNowModel(liveRuns, issues, pausedTasks);
+  const buildPauseNote = usePauseNoteBuilder(companyId, pausedTasks.length > 0);
+  const { items, heartbeats, pausedItems, loadedById, detailById, failedIds } = useLiveNowModel(liveRuns, issues, pausedTasks, buildPauseNote);
   const density: LiveNowDensity = storedDensity ?? (desktop ? "comfortable" : "compact");
 
   const passesFilter = (issue: Issue | null) => !issueFilter || issue === null || issueFilter(issue);

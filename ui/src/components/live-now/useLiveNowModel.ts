@@ -5,6 +5,7 @@ import type { LiveRunForIssue } from "../../api/heartbeats";
 import { issuesApi } from "../../api/issues";
 import { isLiveIssueRun } from "../../lib/liveIssueIds";
 import { queryKeys } from "../../lib/queryKeys";
+import type { PauseNote } from "../../lib/tree-hold-reason";
 import {
   classifyLiveNowHealth,
   compareLiveNowSeverity,
@@ -17,7 +18,6 @@ import {
 } from "./live-now-health";
 
 const ISSUE_DETAIL_STALE_TIME_MS = 30_000;
-const NO_PAUSED_TASKS: readonly PausedTask[] = [];
 
 export interface LiveNowRunSet {
   runs: LiveRunForIssue[];
@@ -54,6 +54,7 @@ export interface LiveNowItem {
 /** A paused task with no run left, shown in the Paused group until it is resumed or its pause ends. */
 export interface LiveNowPausedItem {
   pause: PausedTask;
+  note: PauseNote;
   issue: Issue | null;
   identifier: string;
 }
@@ -201,7 +202,8 @@ export function useLiveNowClock(runs: readonly LiveRunForIssue[]): number {
 export function useLiveNowModel(
   liveRuns: readonly LiveRunForIssue[] | null | undefined,
   issues: readonly Issue[],
-  pausedTasks: readonly PausedTask[] = NO_PAUSED_TASKS,
+  pausedTasks: readonly PausedTask[],
+  buildPauseNote: (pause: PausedTask) => PauseNote,
 ) {
   const loadedById = useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues]);
 
@@ -264,6 +266,7 @@ export function useLiveNowModel(
     .filter((pause) => !liveIssueIds.has(pause.issueId))
     .map((pause) => ({
       pause,
+      note: buildPauseNote(pause),
       issue: issueById(pause.issueId),
       identifier: pause.identifier ?? pause.issueId.slice(0, 8),
     }));

@@ -121,7 +121,7 @@ afterEach(() => {
 describe("pause reasons on task surfaces", () => {
   it("shows the agent, the time and the reason on a Live Now row next to Resume", () => {
     const pause = pausedTask({});
-    render(<LiveNowPausedRow companyId={COMPANY_ID} item={{ pause, issue: null, identifier: "ZHA-1" }} density="comfortable" />);
+    render(<LiveNowPausedRow companyId={COMPANY_ID} item={{ ...note(pause), issue: null, identifier: "ZHA-1" }} density="comfortable" />);
     const row = container.querySelector<HTMLElement>("[data-live-now-issue-id='zha-1']")!;
     expect(trigger(row).textContent).toContain(`Raka: ${AGENT_REASON}`);
     expect(trigger(row).dataset.pauseReason).toBe("given");
@@ -134,7 +134,7 @@ describe("pause reasons on task surfaces", () => {
 
   it("shows a button-made pause as a neutral manual pause on a Live Now card", () => {
     const pause = pausedTask({ pausedByAgentId: null, pausedByUserId: "user-1", reason: "Paused from Recent Tasks." });
-    render(<LiveNowPausedCard companyId={COMPANY_ID} item={{ pause, issue: null, identifier: "ZHA-1" }} />);
+    render(<LiveNowPausedCard companyId={COMPANY_ID} item={{ ...note(pause), issue: null, identifier: "ZHA-1" }} />);
     expect(trigger().textContent).toContain("Paused manually by Zhafron");
     expect(trigger().textContent).not.toContain("Recent Tasks");
     expect(trigger().dataset.pauseReason).toBe("none");

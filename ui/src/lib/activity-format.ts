@@ -248,11 +248,20 @@ const TREE_HOLD_CREATED_VERBS: Record<string, string> = {
   cancel: "cancelled",
   restore: "restored",
 };
+const TREE_HOLD_REJECTED_OPERATIONS: Record<string, string> = {
+  pause: "a pause",
+  resume: "a resume",
+  cancel: "a cancel",
+  restore: "a restore",
+  release: "a resume",
+};
 const TREE_HOLD_REASON_PREVIEW_LENGTH = 200;
 
 function formatTreeHoldActivity(action: string, details: ActivityDetails, forIssueDetail: boolean): string | null {
   if (action === "issue.tree_hold_reason_rejected") {
-    return forIssueDetail ? "was refused a pause or resume without a reason" : "was refused a pause or resume without a reason on";
+    const operation = typeof details?.operation === "string" ? TREE_HOLD_REJECTED_OPERATIONS[details.operation] : undefined;
+    const refused = `was refused ${operation ?? "a pause or resume"} without a reason`;
+    return forIssueDetail ? refused : `${refused} on`;
   }
   if (action !== "issue.tree_hold_created" && action !== "issue.tree_hold_released") return null;
   const mode = typeof details?.mode === "string" ? details.mode : null;

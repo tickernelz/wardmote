@@ -8,7 +8,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { usePauseNoteBuilder } from "../../hooks/usePauseNoteBuilder";
 import { useTaskPause } from "../../hooks/useTaskPause";
 import { createIssueDetailPath, withIssueDetailHeaderSeed } from "../../lib/issueDetailBreadcrumb";
 import { cn, relativeTime } from "../../lib/utils";
@@ -106,7 +105,6 @@ export function LiveNowPausedRow({
   issueLinkState?: unknown;
 }) {
   const actions = usePausedTaskActions(companyId, item, issueLinkState);
-  const note = usePauseNoteBuilder(companyId)(item.pause);
   const { pause, identifier } = item;
   const signal = pausedSignal(item);
   const comfortable = density === "comfortable";
@@ -160,7 +158,7 @@ export function LiveNowPausedRow({
             paused {relativeTime(pause.pausedAt)}
           </time>
           <span className="flex min-w-0 basis-full flex-col items-start [grid-area:activity]">
-            <PauseReasonNote note={note} identifier={identifier} />
+            <PauseReasonNote note={item.note} identifier={identifier} />
             <span className="min-w-0 max-w-full truncate text-xs text-ink-3">{pausedLastRunText(item)}</span>
           </span>
         </span>
@@ -199,7 +197,6 @@ export function LiveNowPausedCard({
   issueLinkState?: unknown;
 }) {
   const actions = usePausedTaskActions(companyId, item, issueLinkState);
-  const note = usePauseNoteBuilder(companyId)(item.pause);
   const { pause, identifier } = item;
   const signal = pausedSignal(item);
   return (
@@ -221,7 +218,7 @@ export function LiveNowPausedCard({
         {actions.title}
       </Link>
       <span className="text-xs text-ink-2">{pausedLastRunText(item)}</span>
-      <PauseReasonNote note={note} identifier={identifier} className="relative z-10" />
+      <PauseReasonNote note={item.note} identifier={identifier} className="relative z-10" />
       <span className="flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
         <span className="min-w-0 truncate">{pause.assigneeAgentName ?? "Unassigned"}</span>
         <span className="ml-auto shrink-0">paused {relativeTime(pause.pausedAt)}</span>

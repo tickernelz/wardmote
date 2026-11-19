@@ -172,7 +172,11 @@ describe("activity formatting", () => {
     expect(formatIssueActivityAction("issue.tree_hold_released", { mode: "pause", reason: null }))
       .toBe("ended the pause");
     expect(formatIssueActivityAction("issue.tree_hold_reason_rejected", { operation: "pause" }))
-      .toBe("was refused a pause or resume without a reason");
+      .toBe("was refused a pause without a reason");
+    expect(formatIssueActivityAction("issue.tree_hold_reason_rejected", { operation: "cancel" }))
+      .toBe("was refused a cancel without a reason");
+    expect(formatActivityVerb("issue.tree_hold_reason_rejected", { operation: "release" }))
+      .toBe("was refused a resume without a reason on");
     expect(formatIssueActivityAction("issue.tree_hold_created", { mode: "pause", reason: "x".repeat(300) }))
       .toHaveLength("paused the task: “".length + 200 + 1);
     expect(formatActivityVerb("issue.tree_hold_created", { mode: "pause", reason: "Waiting for the deploy window" })).toBe("paused");
