@@ -100,7 +100,14 @@ export function publicIssueShareRoutes(
     const token = String(req.params.token);
     const ip = clientIp(req);
     if (live.limitFor(token, ip)) return tooManyViewers(res);
+    let left = false;
+    const markLeft = () => {
+      left = true;
+    };
+    res.once("close", markLeft);
     const resolved = await shares.resolve(token);
+    if (left) return;
+    res.off("close", markLeft);
     if (!resolved) return notFound(res);
     if (live.limitFor(token, ip)) return tooManyViewers(res);
     const lastEventId = req.headers["last-event-id"];

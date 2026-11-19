@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
 import request from "supertest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   activityLog,
@@ -21,6 +21,7 @@ import {
   issueComments,
   issueDocuments,
   issueRelations,
+  issueShareLinks,
   issueWorkProducts,
   issues,
 } from "@tickernelz/wardmote-db";
@@ -814,6 +815,50 @@ describeEmbeddedPostgres("public issue share links", () => {
       expect(live.stats().streams).toBe(3);
     } finally {
       controller.abort();
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+      live.close();
+    }
+  });
+
+  it("frees the slot of a viewer that leaves before the link resolves", async () => {
+    const seeded = await seed();
+    const token = await share(seeded);
+    const live = liveHub();
+    const server = createApp(() => ({ type: "none", source: "none" }), { live }).listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const { port } = server.address() as AddressInfo;
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const lock = db.transaction(async (tx) => {
+      await tx.execute(sql`lock table ${issueShareLinks} in access exclusive mode`);
+      locked();
+      await held;
+    });
+    try {
+      await lockTaken;
+      const controller = new AbortController();
+      const pending = fetch(`http://127.0.0.1:${port}/api/public/share/${token}/events`, {
+        signal: controller.signal,
+      }).catch(() => null);
+      await pause(200);
+      controller.abort();
+      await pending;
+      await pause(100);
+      release();
+      await lock;
+      await pause(300);
+      expect(live.stats().streams).toBe(0);
+    } finally {
+      release();
+      await lock;
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
       live.close();
