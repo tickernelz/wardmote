@@ -74,7 +74,8 @@ export function usePublicShareLive(token: string, enabled: boolean, onStreaming:
       };
       on("view", (data) => {
         const { etag, view } = JSON.parse(data) as PublicIssueShareViewEvent;
-        queryClient.setQueryData<PublicShareState | null>(queryKey, { view, etag });
+        const state: PublicShareState = { view, etag };
+        queryClient.setQueryData(queryKey, state);
       });
       on("patch", (data) => {
         const event = JSON.parse(data) as PublicIssueSharePatchEvent;
@@ -94,11 +95,12 @@ export function usePublicShareLive(token: string, enabled: boolean, onStreaming:
           reconnect();
           return;
         }
-        queryClient.setQueryData<PublicShareState | null>(queryKey, { view, etag: event.etag });
+        const next: PublicShareState = { view, etag: event.etag };
+        queryClient.setQueryData(queryKey, next);
       });
       on("gone", () => {
         disconnect();
-        queryClient.setQueryData<PublicShareState | null>(queryKey, null);
+        queryClient.setQueryData(queryKey, null);
       });
       next.onerror = () => {
         if (source !== next) return;

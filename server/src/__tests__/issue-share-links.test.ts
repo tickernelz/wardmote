@@ -726,8 +726,8 @@ describeEmbeddedPostgres("public issue share links", () => {
       const visibleId = randomUUID();
       const privateId = randomUUID();
       await db.insert(issueComments).values([
-        { id: visibleId, companyId: seeded.companyId, issueId: seeded.ids.root, authorType: "agent", authorAgentId: seeded.agentId, body: "LIVE_AGENT_BODY" },
-        { id: privateId, companyId: seeded.companyId, issueId: seeded.ids.root, authorType: "user", authorUserId: seeded.userId, body: "LIVE_PRIVATE_BODY" },
+        { id: visibleId, companyId: seeded.companyId, issueId: seeded.ids.root, authorType: "agent", authorAgentId: seeded.agentId, body: "LIVE_AGENT_BODY", createdAt: new Date(Date.UTC(2026, 9, 8, 8, 0)) },
+        { id: privateId, companyId: seeded.companyId, issueId: seeded.ids.root, authorType: "user", authorUserId: seeded.userId, body: "LIVE_PRIVATE_BODY", createdAt: new Date(Date.UTC(2026, 9, 8, 8, 1)) },
       ]);
       publishLiveEvent({ companyId: seeded.companyId, type: "activity.logged", payload: { issueId: seeded.ids.root } });
       publishLiveEvent({ companyId: seeded.companyId, type: "activity.logged", payload: { issueId: seeded.ids.root } });
