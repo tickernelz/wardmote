@@ -169,7 +169,7 @@ import { adapterRoutes } from "./routes/adapters.js";
 import { managedAgentProfileRoutes } from "./routes/managed-agent-profiles.js";
 import { remoteAgentProfileRoutes } from "./routes/remote-agent-profiles.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
-import { readBrandedStaticIndexHtml } from "./static-index-html.js";
+import { readBrandedStaticHtmlForPath, readBrandedStaticIndexHtml } from "./static-index-html.js";
 import { staticUiCacheControl } from "./static-ui-cache.js";
 import { staticUiCompression } from "./middleware/static-ui-compression.js";
 import { applyUiBranding } from "./ui-branding.js";
@@ -1036,7 +1036,7 @@ export async function createApp(
           .status(200)
           .set("Content-Type", "text/html")
           .set("Cache-Control", "no-cache")
-          .end(readBrandedStaticIndexHtml(uiDist));
+          .end(readBrandedStaticHtmlForPath(uiDist, req.path));
       });
     } else {
       console.warn("[wardmote] UI dist not found; running in API-only mode");

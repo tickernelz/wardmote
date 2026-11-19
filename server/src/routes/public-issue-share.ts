@@ -59,15 +59,7 @@ export function publicIssueShareRoutes(
   router.get("/public/share/:token", async (req, res) => {
     const resolved = await shares.resolve(String(req.params.token));
     if (!resolved) return notFound(res);
-    res.json(await shares.buildView(resolved, resolved.root));
-  });
-
-  router.get("/public/share/:token/issues/:issueId", async (req, res) => {
-    const resolved = await shares.resolve(String(req.params.token));
-    if (!resolved) return notFound(res);
-    const target = (await shares.oneHopIssues(resolved)).get(String(req.params.issueId));
-    if (!target) return notFound(res);
-    res.json(await shares.buildView(resolved, target));
+    res.json(await shares.buildView(resolved));
   });
 
   router.get(

@@ -1,24 +1,31 @@
 import { useCallback, useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Download, ExternalLink, FileText } from "lucide-react";
+import {
+  ChevronRight,
+  Download,
+  ExternalLink,
+  Eye,
+  FileText,
+  Link2Off,
+  Lock,
+  WifiOff,
+} from "lucide-react";
 import {
   ISSUE_SHARE_TOKEN_PATTERN,
   type PublicIssueComment,
-  type PublicIssueRelatedIssue,
   type PublicIssueShareView,
   type PublicShareActor,
   type PublicShareAttachment,
   type PublicShareDocument,
   type PublicShareWorkProduct,
 } from "@tickernelz/wardmote-shared";
-import { Link, useParams } from "react-router-dom";
+import { Navigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Attachment,
   AttachmentContent,
   AttachmentDescription,
-  AttachmentGroup,
   AttachmentMedia,
   AttachmentTitle,
   AttachmentTrigger,
@@ -27,7 +34,6 @@ import { CompanyPatternIcon } from "@/components/CompanyPatternIcon";
 import { Identity } from "@/components/Identity";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { IssueStatusBadge } from "@/components/StatusBadge";
-import { StatusIcon } from "@/components/StatusIcon";
 import { PriorityIcon } from "@/components/PriorityIcon";
 import {
   fileKindForAttachment,
@@ -35,16 +41,17 @@ import {
 } from "@/components/task-chat/task-chat-attachments";
 import { issueShareApi } from "../api/issue-share";
 import { queryKeys } from "../lib/queryKeys";
-import { formatDateTime, relativeTime } from "../lib/utils";
+import { cn, formatDateTime, relativeTime } from "../lib/utils";
 
 const ACTIVE_RUN_REFETCH_MS = 15_000;
 
-const RELATION_LABELS: Record<PublicIssueRelatedIssue["relation"], string> = {
-  parent: "Parent task",
-  child: "Sub-task",
-  blocked_by: "Blocked by",
-  blocks: "Blocks",
-};
+const FOCUS_RING =
+  "outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
+const ACTION_LINK = cn(
+  FOCUS_RING,
+  "inline-flex min-h-6 items-center gap-1.5 rounded-sm text-(length:--t-13) font-medium text-ink-2 underline-offset-4 hover:text-ink hover:underline pointer-coarse:min-h-11",
+);
+const SHELL = "mx-auto w-full max-w-5xl px-4 sm:px-6";
 
 function useNoIndexMeta() {
   useEffect(() => {
@@ -56,11 +63,6 @@ function useNoIndexMeta() {
   }, []);
 }
 
-function sharePath(token: string, issueId?: string) {
-  const base = `/s/${encodeURIComponent(token)}`;
-  return issueId ? `${base}/issues/${encodeURIComponent(issueId)}` : base;
-}
-
 const ATTACHMENT_CONTENT_SRC = /^(?:https?:\/\/[^/]+)?\/api\/attachments\/([^/?#]+)\/content(?:[?#].*)?$/i;
 
 function publicShareImageSrc(token: string, src: string): string | null {
@@ -69,10 +71,18 @@ function publicShareImageSrc(token: string, src: string): string | null {
   return `/api/public/share/${encodeURIComponent(token)}/attachments/${match[1]}/content`;
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function humanize(value: string) {
+  const text = value.replace(/_/g, " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function Section({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
   return (
     <section className="space-y-3">
-      <h2 className="text-sm font-semibold text-ink-3">{title}</h2>
+      <h2 className="flex items-baseline gap-2 text-(length:--t-14) font-semibold text-ink">
+        {title}
+        {count !== undefined ? <span className="text-(length:--t-12) font-normal text-ink-3">{count}</span> : null}
+      </h2>
       {children}
     </section>
   );
@@ -84,11 +94,7 @@ function ActorIdentity({ actor }: { actor: PublicShareActor }) {
 
 function Timestamp({ value }: { value: string }) {
   return (
-    <time
-      dateTime={value}
-      title={formatDateTime(value)}
-      className="text-xs text-ink-3"
-    >
+    <time dateTime={value} title={formatDateTime(value)} className="text-(length:--t-12) text-ink-3">
       {relativeTime(value)}
     </time>
   );
@@ -98,9 +104,9 @@ function ActiveRunPill({ agentName }: { agentName: string }) {
   return (
     <span
       data-testid="public-share-run-pill"
-      className="inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-xs text-ink"
+      className="inline-flex items-center gap-2 rounded-full border border-line bg-bg-2 px-3 py-1 text-(length:--t-12) text-ink"
     >
-      <span className="h-2 w-2 animate-pulse rounded-full bg-(--status-agent-running)" aria-hidden />
+      <span className="size-2 rounded-full bg-(--status-agent-running) motion-safe:animate-pulse" aria-hidden />
       {agentName} is working…
     </span>
   );
@@ -108,7 +114,7 @@ function ActiveRunPill({ agentName }: { agentName: string }) {
 
 function AttachmentList({ attachments }: { attachments: PublicShareAttachment[] }) {
   return (
-    <AttachmentGroup>
+    <ul className="grid gap-2 sm:grid-cols-2">
       {attachments.map((attachment) => {
         const kind = fileKindForAttachment({
           name: attachment.filename,
@@ -119,59 +125,24 @@ function AttachmentList({ attachments }: { attachments: PublicShareAttachment[] 
         const KindIcon = kind.icon;
         const size = formatFileSize(attachment.byteSize);
         return (
-          <Attachment key={attachment.id} size="sm">
-            <AttachmentMedia>
-              <KindIcon aria-hidden />
-            </AttachmentMedia>
-            <AttachmentContent>
-              <AttachmentTitle className="max-w-48">{attachment.filename}</AttachmentTitle>
-              <AttachmentDescription className="max-w-48">
-                {size ? `${kind.label} · ${size}` : kind.label}
-              </AttachmentDescription>
-            </AttachmentContent>
-            <AttachmentTrigger
-              aria-label={`Download ${attachment.filename}`}
-              render={<a href={attachment.url} download={attachment.filename} rel="noreferrer" />}
-            />
-          </Attachment>
+          <li key={attachment.id} className="min-w-0">
+            <Attachment size="sm" className="w-full rounded-md focus-within:ring-2 focus-within:ring-focus">
+              <AttachmentMedia>
+                <KindIcon aria-hidden />
+              </AttachmentMedia>
+              <AttachmentContent className="min-w-0 flex-1">
+                <AttachmentTitle>{attachment.filename}</AttachmentTitle>
+                <AttachmentDescription>{size ? `${kind.label} · ${size}` : kind.label}</AttachmentDescription>
+              </AttachmentContent>
+              <AttachmentTrigger
+                aria-label={`Download ${attachment.filename}`}
+                render={<a href={attachment.url} download={attachment.filename} rel="noreferrer" />}
+              />
+            </Attachment>
+          </li>
         );
       })}
-    </AttachmentGroup>
-  );
-}
-
-function RelatedIssueRow({
-  related,
-  token,
-  isSharedRoot,
-}: {
-  related: PublicIssueRelatedIssue;
-  token: string;
-  isSharedRoot: boolean;
-}) {
-  const label = related.identifier ? `${related.identifier} · ${related.title}` : related.title;
-  const content = (
-    <>
-      <StatusIcon status={related.status} size="sm" />
-      <span className="min-w-0 truncate">{label}</span>
-    </>
-  );
-  return (
-    <li className="flex items-center gap-2 text-sm">
-      <span className="w-20 shrink-0 text-xs text-ink-3">
-        {RELATION_LABELS[related.relation]}
-      </span>
-      {related.navigable ? (
-        <Link
-          to={isSharedRoot ? sharePath(token, related.id) : sharePath(token)}
-          className="flex min-w-0 items-center gap-2 text-ink underline-offset-2 hover:underline"
-        >
-          {content}
-        </Link>
-      ) : (
-        <span className="flex min-w-0 items-center gap-2 text-ink-3">{content}</span>
-      )}
-    </li>
+    </ul>
   );
 }
 
@@ -182,24 +153,27 @@ function TimelineEntry({ comment, resolveImageSrc }: { comment: PublicIssueComme
     return (
       <li
         data-testid="public-share-redacted-comment"
-        className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-line px-3 py-2"
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-dashed border-line px-4 py-2.5"
       >
+        <Lock className="size-3.5 shrink-0 text-ink-3" aria-hidden />
         <ActorIdentity actor={comment.author} />
+        <span className="text-(length:--t-12) text-ink-3">Internal update</span>
         <Timestamp value={comment.createdAt} />
-        <span className="text-xs italic text-ink-3">Internal update</span>
       </li>
     );
   }
   return (
-    <li className="space-y-2 rounded-lg border border-line bg-bg-2 px-3 py-3">
-      <div className="flex flex-wrap items-center gap-2">
+    <li className="rounded-lg border border-line bg-bg-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-line-soft px-4 py-2.5">
         <ActorIdentity actor={comment.author} />
         <Timestamp value={comment.createdAt} />
       </div>
-      <MarkdownBody className="text-sm" softBreaks linkIssueReferences={false} resolveImageSrc={resolveImageSrc}>
-        {comment.body}
-      </MarkdownBody>
-      {comment.attachments.length > 0 ? <AttachmentList attachments={comment.attachments} /> : null}
+      <div className="space-y-3 px-4 py-3">
+        <MarkdownBody className="text-(length:--t-14)" softBreaks linkIssueReferences={false} resolveImageSrc={resolveImageSrc}>
+          {comment.body}
+        </MarkdownBody>
+        {comment.attachments.length > 0 ? <AttachmentList attachments={comment.attachments} /> : null}
+      </div>
     </li>
   );
 }
@@ -207,24 +181,28 @@ function TimelineEntry({ comment, resolveImageSrc }: { comment: PublicIssueComme
 function DocumentCard({ document, resolveImageSrc }: { document: PublicShareDocument; resolveImageSrc: ImageSrcResolver }) {
   return (
     <details className="group rounded-lg border border-line bg-bg-2">
-      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm">
-        <FileText className="h-4 w-4 shrink-0 text-ink-3" aria-hidden />
-        <span className="min-w-0 flex-1 truncate font-medium">{document.title ?? document.key}</span>
+      <summary
+        className={cn(
+          FOCUS_RING,
+          "flex min-h-11 cursor-pointer list-none items-center gap-3 rounded-lg px-4 py-2 text-(length:--t-14) hover:bg-bg-3/50 [&::-webkit-details-marker]:hidden",
+        )}
+      >
+        <ChevronRight
+          className="size-4 shrink-0 text-ink-3 group-open:rotate-90 motion-safe:transition-transform"
+          aria-hidden
+        />
+        <FileText className="size-4 shrink-0 text-ink-3" aria-hidden />
+        <span className="min-w-0 flex-1 break-words font-medium">{document.title ?? document.key}</span>
         <Timestamp value={document.updatedAt} />
       </summary>
-      <div className="space-y-3 border-t border-line px-3 py-3">
-        <a
-          href={document.pdfUrl}
-          download
-          rel="noreferrer"
-          className="inline-flex items-center gap-1.5 text-xs text-ink-3 hover:text-ink"
-        >
-          <Download className="h-3.5 w-3.5" aria-hidden />
-          Download PDF
-        </a>
-        <MarkdownBody className="text-sm" linkIssueReferences={false} resolveImageSrc={resolveImageSrc}>
+      <div className="space-y-4 border-t border-line px-4 py-4">
+        <MarkdownBody className="text-(length:--t-14)" linkIssueReferences={false} resolveImageSrc={resolveImageSrc}>
           {document.body}
         </MarkdownBody>
+        <a href={document.pdfUrl} download rel="noreferrer" className={ACTION_LINK}>
+          <Download className="size-4" aria-hidden />
+          Download PDF
+        </a>
       </div>
     </details>
   );
@@ -232,45 +210,94 @@ function DocumentCard({ document, resolveImageSrc }: { document: PublicShareDocu
 
 function WorkProductRow({ product }: { product: PublicShareWorkProduct }) {
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-line bg-bg-2 px-3 py-2 text-sm">
-      <span className="min-w-0 flex-1 truncate font-medium">{product.title}</span>
-      <span className="text-xs text-ink-3">
-        {product.type.replace(/_/g, " ")} · {product.status.replace(/_/g, " ")}
-      </span>
-      {product.url ? (
-        <a
-          href={product.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-ink-3 hover:text-ink"
-        >
-          <ExternalLink className="h-3.5 w-3.5" aria-hidden />
-          Open
-        </a>
-      ) : null}
-      {product.downloadUrl ? (
-        <a
-          href={product.downloadUrl}
-          download
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-ink-3 hover:text-ink"
-        >
-          <Download className="h-3.5 w-3.5" aria-hidden />
-          Download
-        </a>
+    <li className="flex flex-col gap-2 rounded-lg border border-line bg-bg-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+      <div className="min-w-0 flex-1">
+        <p className="break-words text-(length:--t-14) font-medium">{product.title}</p>
+        <p className="text-(length:--t-12) text-ink-3">
+          {humanize(product.type)} · {humanize(product.status)}
+        </p>
+      </div>
+      {product.url || product.downloadUrl ? (
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          {product.url ? (
+            <a href={product.url} target="_blank" rel="noopener noreferrer" className={ACTION_LINK}>
+              <ExternalLink className="size-4" aria-hidden />
+              Open
+              <span className="sr-only">{` ${product.title}, opens in a new tab`}</span>
+            </a>
+          ) : null}
+          {product.downloadUrl ? (
+            <a href={product.downloadUrl} download rel="noreferrer" className={ACTION_LINK}>
+              <Download className="size-4" aria-hidden />
+              Download
+              <span className="sr-only">{` ${product.title}`}</span>
+            </a>
+          ) : null}
+        </div>
       ) : null}
     </li>
   );
 }
 
-function CenteredNotice({ title, body, action }: { title: string; body: string; action?: ReactNode }) {
+function Property({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex h-dvh overflow-y-auto bg-bg px-4 text-ink">
-      <div className="m-auto w-full max-w-sm space-y-2 rounded-lg border border-line bg-bg-2 p-6 text-center">
-        <h1 className="text-lg font-semibold">{title}</h1>
-        <p className="text-sm text-ink-3">{body}</p>
-        {action}
+    <div className="min-w-0 space-y-1">
+      <dt className="text-(length:--t-12) text-ink-3">{label}</dt>
+      <dd className="min-w-0 break-words text-(length:--t-13) text-ink">{children}</dd>
+    </div>
+  );
+}
+
+function ShareHeader({ company }: { company: PublicIssueShareView["company"] | null }) {
+  return (
+    <header className="border-b border-line bg-bg-2">
+      <div className={cn(SHELL, "flex min-h-14 items-center gap-3 py-2")}>
+        {company ? (
+          <>
+            <CompanyPatternIcon
+              companyName={company.name}
+              logoUrl={company.logoUrl}
+              logoFit="contain"
+              className="size-8 shrink-0 rounded-md"
+            />
+            <span className="min-w-0 truncate text-(length:--t-14) font-semibold">{company.name}</span>
+          </>
+        ) : (
+          <span className="text-(length:--t-14) font-semibold">Wardmote</span>
+        )}
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-(length:--t-12) text-ink-2">
+          <Eye className="size-3.5" aria-hidden />
+          Read-only
+        </span>
       </div>
+    </header>
+  );
+}
+
+function CenteredNotice({
+  icon,
+  title,
+  body,
+  action,
+}: {
+  icon: ReactNode;
+  title: string;
+  body: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex min-h-dvh flex-col bg-bg text-ink">
+      <ShareHeader company={null} />
+      <main className="flex flex-1 items-center px-4 py-10">
+        <div className="mx-auto w-full max-w-md space-y-3 rounded-lg border border-line bg-bg-2 p-6 text-center">
+          <div className="mx-auto flex size-10 items-center justify-center rounded-full bg-bg-3 text-ink-2" aria-hidden>
+            {icon}
+          </div>
+          <h1 className="text-(length:--t-16) font-semibold text-balance">{title}</h1>
+          <p className="text-(length:--t-14) text-ink-2 text-pretty">{body}</p>
+          {action}
+        </div>
+      </main>
     </div>
   );
 }
@@ -279,138 +306,170 @@ function PublicIssueShareContent({ view, token }: { view: PublicIssueShareView; 
   const { company, issue } = view;
   const resolveImageSrc = useCallback((src: string) => publicShareImageSrc(token, src), [token]);
   return (
-    <div className="h-dvh overflow-y-auto bg-bg text-ink">
-      <header className="border-b border-line">
-        <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-          <CompanyPatternIcon
-            companyName={company.name}
-            logoUrl={company.logoUrl}
-            logoFit="contain"
-            className="h-8 w-8 shrink-0 rounded-md"
-          />
-          <span className="min-w-0 truncate text-sm font-medium">{company.name}</span>
-          <span className="ml-auto shrink-0 text-xs text-ink-3">Read-only view</span>
+    <div className="flex min-h-dvh flex-col bg-bg text-ink">
+      <ShareHeader company={company} />
+      <main className={cn(SHELL, "flex-1 space-y-8 py-6 sm:py-10")}>
+        <div className="space-y-3">
+          {issue.identifier || issue.projectName ? (
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-(length:--t-13) text-ink-3">
+              {issue.identifier ? <span className="font-mono">{issue.identifier}</span> : null}
+              {issue.identifier && issue.projectName ? <span aria-hidden>·</span> : null}
+              {issue.projectName ? <span>{issue.projectName}</span> : null}
+            </p>
+          ) : null}
+          <h1 className="break-words text-(length:--t-20) font-semibold leading-tight text-balance sm:text-(length:--t-24)">
+            {issue.title}
+          </h1>
+          {view.activeRun ? <ActiveRunPill agentName={view.activeRun.agentName} /> : null}
         </div>
-      </header>
-      <main className="mx-auto max-w-3xl space-y-8 px-4 py-5">
-        {!view.isSharedRoot ? (
-          <Link
-            to={sharePath(token)}
-            className="inline-flex items-center gap-1.5 text-sm text-ink-3 hover:text-ink"
-          >
-            <ArrowLeft className="h-4 w-4" aria-hidden />
-            Back to main task
-          </Link>
-        ) : null}
-        <section className="space-y-3">
-          <div className="flex flex-wrap items-center gap-x-2 text-xs text-ink-3">
-            {issue.identifier ? <span>{issue.identifier}</span> : null}
-            {issue.projectName ? <span>{issue.projectName}</span> : null}
+        <div className="grid gap-8 lg:grid-cols-3 lg:gap-10">
+          <aside aria-label="Task details" className="lg:order-last">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-4 rounded-lg border border-line bg-bg-2 p-4 sm:grid-cols-3 lg:sticky lg:top-6 lg:grid-cols-1">
+              <Property label="Status">
+                <IssueStatusBadge status={issue.status} />
+              </Property>
+              <Property label="Priority">
+                <PriorityIcon priority={issue.priority} showLabel />
+              </Property>
+              <Property label="Assignee">
+                {issue.assignee ? <ActorIdentity actor={issue.assignee} /> : <span className="text-ink-3">Unassigned</span>}
+              </Property>
+              <Property label="Created">
+                <time dateTime={issue.createdAt}>{formatDateTime(issue.createdAt)}</time>
+              </Property>
+              <Property label="Updated">
+                <time dateTime={issue.updatedAt} title={formatDateTime(issue.updatedAt)}>
+                  {relativeTime(issue.updatedAt)}
+                </time>
+              </Property>
+              {issue.completedAt ? (
+                <Property label="Completed">
+                  <time dateTime={issue.completedAt}>{formatDateTime(issue.completedAt)}</time>
+                </Property>
+              ) : null}
+            </dl>
+          </aside>
+          <div className="min-w-0 space-y-10 lg:col-span-2">
+            {issue.description ? (
+              <MarkdownBody
+                className="text-(length:--t-14) sm:text-(length:--t-16)"
+                softBreaks
+                linkIssueReferences={false}
+                resolveImageSrc={resolveImageSrc}
+              >
+                {issue.description}
+              </MarkdownBody>
+            ) : null}
+            {view.documents.length > 0 ? (
+              <Section title="Documents" count={view.documents.length}>
+                <div className="space-y-2">
+                  {view.documents.map((document) => (
+                    <DocumentCard key={document.key} document={document} resolveImageSrc={resolveImageSrc} />
+                  ))}
+                </div>
+              </Section>
+            ) : null}
+            {view.attachments.length > 0 ? (
+              <Section title="Attachments" count={view.attachments.length}>
+                <AttachmentList attachments={view.attachments} />
+              </Section>
+            ) : null}
+            {view.workProducts.length > 0 ? (
+              <Section title="Work products" count={view.workProducts.length}>
+                <ul className="space-y-2">
+                  {view.workProducts.map((product) => (
+                    <WorkProductRow key={product.id} product={product} />
+                  ))}
+                </ul>
+              </Section>
+            ) : null}
+            <Section title="Activity" count={view.comments.length > 0 ? view.comments.length : undefined}>
+              {view.comments.length > 0 ? (
+                <ol className="space-y-3">
+                  {view.comments.map((comment) => (
+                    <TimelineEntry key={comment.id} comment={comment} resolveImageSrc={resolveImageSrc} />
+                  ))}
+                </ol>
+              ) : (
+                <p className="text-(length:--t-14) text-ink-3">No updates yet.</p>
+              )}
+            </Section>
           </div>
-          <h1 className="break-words text-xl font-semibold">{issue.title}</h1>
-          <div className="flex flex-wrap items-center gap-3">
-            <IssueStatusBadge status={issue.status} />
-            <PriorityIcon priority={issue.priority} showLabel />
-            {issue.assignee ? <ActorIdentity actor={issue.assignee} /> : null}
-            {view.activeRun ? <ActiveRunPill agentName={view.activeRun.agentName} /> : null}
+        </div>
+      </main>
+      <footer className="border-t border-line">
+        <p className={cn(SHELL, "py-5 text-(length:--t-12) text-ink-3 text-pretty")}>
+          Read-only view of one task, shared by {company.name || "its team"}. Anyone with this link can see it.
+        </p>
+      </footer>
+    </div>
+  );
+}
+
+function LoadingShell() {
+  return (
+    <div className="flex min-h-dvh flex-col bg-bg text-ink" aria-busy="true">
+      <ShareHeader company={null} />
+      <main className={cn(SHELL, "flex-1 space-y-8 py-6 sm:py-10")}>
+        <p role="status" className="sr-only">Loading shared task…</p>
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-7 w-3/4" />
+        </div>
+        <div className="grid gap-8 lg:grid-cols-3 lg:gap-10">
+          <Skeleton className="h-28 w-full lg:order-last" />
+          <div className="space-y-3 lg:col-span-2">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-11/12" />
+            <Skeleton className="h-4 w-4/5" />
+            <Skeleton className="h-24 w-full" />
           </div>
-          <p className="text-xs text-ink-3">
-            Created {formatDateTime(issue.createdAt)} · Updated {relativeTime(issue.updatedAt)}
-            {issue.completedAt ? ` · Completed ${formatDateTime(issue.completedAt)}` : ""}
-          </p>
-        </section>
-        {issue.description ? (
-          <MarkdownBody className="text-sm" softBreaks linkIssueReferences={false} resolveImageSrc={resolveImageSrc}>
-            {issue.description}
-          </MarkdownBody>
-        ) : null}
-        {view.related.length > 0 ? (
-          <Section title="Related tasks">
-            <ul className="space-y-2">
-              {view.related.map((related) => (
-                <RelatedIssueRow
-                  key={`${related.relation}:${related.id}`}
-                  related={related}
-                  token={token}
-                  isSharedRoot={view.isSharedRoot}
-                />
-              ))}
-            </ul>
-          </Section>
-        ) : null}
-        {view.documents.length > 0 ? (
-          <Section title="Documents">
-            <div className="space-y-2">
-              {view.documents.map((document) => (
-                <DocumentCard key={document.key} document={document} resolveImageSrc={resolveImageSrc} />
-              ))}
-            </div>
-          </Section>
-        ) : null}
-        {view.attachments.length > 0 ? (
-          <Section title="Attachments">
-            <AttachmentList attachments={view.attachments} />
-          </Section>
-        ) : null}
-        {view.workProducts.length > 0 ? (
-          <Section title="Work products">
-            <ul className="space-y-2">
-              {view.workProducts.map((product) => (
-                <WorkProductRow key={product.id} product={product} />
-              ))}
-            </ul>
-          </Section>
-        ) : null}
-        <Section title="Activity">
-          {view.comments.length > 0 ? (
-            <ol className="space-y-3">
-              {view.comments.map((comment) => (
-                <TimelineEntry key={comment.id} comment={comment} resolveImageSrc={resolveImageSrc} />
-              ))}
-            </ol>
-          ) : (
-            <p className="text-sm text-ink-3">No updates yet.</p>
-          )}
-        </Section>
+        </div>
       </main>
     </div>
   );
 }
 
+export function PublicShareUnavailable() {
+  return (
+    <CenteredNotice
+      icon={<Link2Off className="size-5" />}
+      title="This link is not available"
+      body="The task may no longer be shared, or the address is incomplete. Ask the person who sent it for a new link."
+    />
+  );
+}
+
+export function PublicIssueShareLegacyRedirect() {
+  const { token = "" } = useParams<{ token: string }>();
+  return <Navigate to={`/s/${encodeURIComponent(token)}`} replace />;
+}
+
 export function PublicIssueSharePage() {
-  const { token = "", issueId } = useParams<{ token: string; issueId?: string }>();
+  const { token = "" } = useParams<{ token: string }>();
   useNoIndexMeta();
   const tokenValid = ISSUE_SHARE_TOKEN_PATTERN.test(token);
   const query = useQuery({
-    queryKey: queryKeys.publicShare.view(token, issueId ?? null),
-    queryFn: () =>
-      issueId ? issueShareApi.getPublicShareIssue(token, issueId) : issueShareApi.getPublicShare(token),
+    queryKey: queryKeys.publicShare.view(token),
+    queryFn: () => issueShareApi.getPublicShare(token),
     enabled: tokenValid,
     retry: false,
     refetchOnWindowFocus: true,
     refetchInterval: (current) => (current.state.data?.activeRun ? ACTIVE_RUN_REFETCH_MS : false),
   });
 
-  if (!tokenValid || query.data === null) {
-    return (
-      <CenteredNotice
-        title="This link is not available"
-        body="It may have been revoked, or the address is incomplete."
-      />
-    );
-  }
+  if (!tokenValid || query.data === null) return <PublicShareUnavailable />;
 
-  if (query.data) {
-    return <PublicIssueShareContent view={query.data} token={token} />;
-  }
+  if (query.data) return <PublicIssueShareContent view={query.data} token={token} />;
 
   if (query.isError) {
     return (
       <CenteredNotice
-        title="Couldn't load this page"
+        icon={<WifiOff className="size-5" />}
+        title="Couldn't load this task"
         body="Check your connection and try again."
         action={
-          <Button variant="secondary" size="sm" className="mt-2" onClick={() => void query.refetch()}>
+          <Button variant="secondary" className="mt-2 min-h-11" onClick={() => void query.refetch()}>
             Try again
           </Button>
         }
@@ -418,13 +477,5 @@ export function PublicIssueSharePage() {
     );
   }
 
-  return (
-    <div className="h-dvh overflow-y-auto px-4 py-6" aria-busy="true">
-      <div className="mx-auto max-w-3xl space-y-4">
-        <Skeleton className="h-6 w-1/2" />
-        <Skeleton className="h-4 w-1/3" />
-        <Skeleton className="h-24 w-full" />
-      </div>
-    </div>
-  );
+  return <LoadingShell />;
 }

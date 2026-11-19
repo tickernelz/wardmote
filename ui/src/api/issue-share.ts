@@ -10,8 +10,8 @@ export type IssueCommentPublicShare = IssueComment & { publicShareVisible: boole
 
 const PUBLIC_SHARE_BASE = "/api/public/share";
 
-async function getPublicShareView(path: string): Promise<PublicIssueShareView | null> {
-  const res = await fetch(`${PUBLIC_SHARE_BASE}/${path}`, {
+async function getPublicShareView(token: string): Promise<PublicIssueShareView | null> {
+  const res = await fetch(`${PUBLIC_SHARE_BASE}/${encodeURIComponent(token)}`, {
     method: "GET",
     credentials: "omit",
     headers: { Accept: "application/json" },
@@ -40,10 +40,5 @@ export const issueShareApi = {
       `/issues/${issueId}/comments/${commentId}/public-share`,
       { visible },
     ),
-  getPublicShare: (token: string) =>
-    getPublicShareView(encodeURIComponent(token)),
-  getPublicShareIssue: (token: string, issueId: string) =>
-    getPublicShareView(
-      `${encodeURIComponent(token)}/issues/${encodeURIComponent(issueId)}`,
-    ),
+  getPublicShare: getPublicShareView,
 };

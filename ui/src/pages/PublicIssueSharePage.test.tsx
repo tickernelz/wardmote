@@ -7,21 +7,14 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { PublicIssueShareView } from "@tickernelz/wardmote-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "../context/ThemeContext";
-import { PublicIssueSharePage } from "./PublicIssueSharePage";
+import { PublicIssueShareLegacyRedirect, PublicIssueSharePage } from "./PublicIssueSharePage";
 
 const getPublicShareMock = vi.hoisted(() => vi.fn());
-const getPublicShareIssueMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/issue-share", () => ({
   issueShareApi: {
     getPublicShare: (token: string) => getPublicShareMock(token),
-    getPublicShareIssue: (token: string, issueId: string) => getPublicShareIssueMock(token, issueId),
   },
-}));
-
-vi.mock("@/context/CompanyContext", () => ({
-  useCompany: () => ({ selectedCompany: null, selectedCompanyId: null, companies: [] }),
-  useOptionalCompany: () => null,
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -45,9 +38,7 @@ function buildView(overrides: Partial<PublicIssueShareView> = {}): PublicIssueSh
       updatedAt: "2026-10-07T08:00:00.000Z",
       completedAt: null,
     },
-    isSharedRoot: true,
     activeRun: null,
-    related: [],
     comments: [],
     documents: [],
     attachments: [],
@@ -69,7 +60,7 @@ describe("PublicIssueSharePage", () => {
             <MemoryRouter initialEntries={[path]}>
               <Routes>
                 <Route path="/s/:token" element={<PublicIssueSharePage />} />
-                <Route path="/s/:token/issues/:issueId" element={<PublicIssueSharePage />} />
+                <Route path="/s/:token/issues/:issueId" element={<PublicIssueShareLegacyRedirect />} />
               </Routes>
             </MemoryRouter>
           </ThemeProvider>
@@ -154,27 +145,16 @@ describe("PublicIssueSharePage", () => {
     expect(container.querySelector("[data-testid^='task-chat']")).toBeNull();
   });
 
-  it("links navigable related issues within the token and leaves the rest as plain text", async () => {
-    getPublicShareMock.mockResolvedValue(
-      buildView({
-        related: [
-          { id: "issue-child", identifier: "ACM-13", title: "Mount bracket", status: "todo", relation: "child", navigable: true },
-          { id: "issue-blocker", identifier: "ACM-9", title: "Order spare cables", status: "blocked", relation: "blocked_by", navigable: false },
-        ],
-      }),
-    );
+  it("sends an old sub-task address back to the shared task and links to no other task", async () => {
+    getPublicShareMock.mockResolvedValue(buildView());
 
-    await renderAt(`/s/${TOKEN}`);
+    await renderAt(`/s/${TOKEN}/issues/issue-child`);
 
-    const plain = Array.from(container.querySelectorAll("span")).find((node) =>
-      node.textContent === "ACM-9 · Order spare cables",
-    );
-    expect(plain).toBeDefined();
-    expect(plain!.closest("a")).toBeNull();
-    const linked = Array.from(container.querySelectorAll("a")).find((node) =>
-      node.textContent?.includes("Mount bracket"),
-    );
-    expect(linked?.getAttribute("href")).toBe(`/s/${TOKEN}/issues/issue-child`);
+    expect(getPublicShareMock).toHaveBeenCalledWith(TOKEN);
+    expect(container.textContent).toContain("Install the warehouse scanner");
+    const hrefs = Array.from(container.querySelectorAll("a")).map((node) => node.getAttribute("href") ?? "");
+    expect(hrefs.filter((href) => href.startsWith("/s/"))).toEqual([]);
+    expect(container.textContent).not.toMatch(/Parent task|Sub-task|Related tasks|Back to main task/);
   });
 
   it("routes inline attachment images through the share token", async () => {

@@ -642,8 +642,7 @@ export const queryKeys = {
     currentBoardAccess: ["access", "current-board-access"] as const,
   },
   publicShare: {
-    view: (token: string, issueId: string | null) =>
-      ["public-share", token, issueId ?? "root"] as const,
+    view: (token: string) => ["public-share", token] as const,
   },
   auth: {
     session: ["auth", "session"] as const,

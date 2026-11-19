@@ -9,7 +9,7 @@ External requesters (for example client members of a WhatsApp group served by th
 
 ## Outcome
 
-Any agent or board user can create a short public link for an issue. Anyone holding the link sees, without logging in, a read-only, mobile-friendly view of that issue and of the issues one hop away from it, with internal detail removed. The link works until it is revoked.
+Any agent or board user can create a short public link for an issue. Anyone holding the link sees, without logging in, a read-only, mobile-friendly view of that issue alone, with internal detail removed. The link works until it is revoked.
 
 ## Decisions (owner interview, 2026-10-07)
 
@@ -23,7 +23,7 @@ Any agent or board user can create a short public link for an issue. Anyone hold
 | D6 | The page looks like the internal issue view, read-only. Run transcripts, tool calls, thinking and progress output are replaced by a static indicator such as "Wira is working…". |
 | D7 | Agent comments are shown in full. Human internal comments are shown as a placeholder (author and time visible, body hidden) unless a board user marks that comment as public. System and automation comments are hidden. |
 | D8 | Internal panels are not exposed: costs, budget, agent configuration, run ids, adapter overrides, execution policy, approvals, interactions, document annotations. |
-| D9 | Related issues one hop from the shared issue (parent, children, blocked-by, blocks) are clickable, read-only, with the same rules. Navigation stops there: a related issue's own relations are listed without links. |
+| D9 | Superseded 2026-11-19 (ZHA-7098): the link shows only the shared issue. Parent, children, blocked-by and blocks are neither listed nor reachable, and `/s/:token/issues/:issueId` redirects to `/s/:token`. |
 | D10 | Attachments, issue documents and file work products of visible content can be viewed and downloaded through token-scoped URLs. Revoking the link revokes those URLs. |
 
 ## Behaviour
@@ -60,11 +60,11 @@ While the issue has an active run, the page shows a static pill "<agent name> is
 
 ### Related issues
 
-The one-hop set is computed from the shared issue: `parentId`, children by `parentId`, and `issue_relations` (`blocks`) in both directions, same company, not hidden. A related issue is requested by id under the token; ids outside the set return 404.
+Only the shared issue is visible. Any other issue id under the token returns 404 (ZHA-7098 removed the earlier one-hop set).
 
 ### Downloads
 
-Token-scoped attachment, asset and document-PDF routes resolve the file only when it belongs to the shared issue or a one-hop issue and is visible under the comment rules above. They reuse the existing any-type serving headers verbatim: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox; default-src 'none'` for non-inline-safe types, RFC 5987 `Content-Disposition`, range support.
+Token-scoped attachment, asset and document-PDF routes resolve the file only when it belongs to the shared issue and is visible under the comment rules above. They reuse the existing any-type serving headers verbatim: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox; default-src 'none'` for non-inline-safe types, RFC 5987 `Content-Disposition`, range support.
 
 ### Response hardening
 
@@ -93,7 +93,6 @@ Types and validators: `IssueShareLink`, `PublicIssueShareView`, `PublicIssueComm
 | `DELETE /api/issues/:id/share-link` | board or agent with issue read | revoke |
 | `PATCH /api/issues/:id/comments/:commentId/public-share` | board only | set `public_share_visible` on a user comment |
 | `GET /api/public/share/:token` | none | projection of the shared issue |
-| `GET /api/public/share/:token/issues/:issueId` | none | projection of a one-hop issue (relations not navigable) |
 | `GET /api/public/share/:token/attachments/:attachmentId/content` | none | download |
 | `GET /api/public/share/:token/assets/:assetId/content` | none | work-product file download |
 | `GET /api/public/share/:token/issues/:issueId/documents/:key/pdf` | none | document PDF |
@@ -127,7 +126,7 @@ Create and revoke check company access and issue read (`assertIssueReadAllowed`)
 
 ## Verification
 
-- Targeted server tests: projection rules (each comment row of the table), one-hop enforcement, revoke and hidden 404s, download visibility and headers, create idempotency and activity log, board-only comment toggle, rate limit.
+- Targeted server tests: projection rules (each comment row of the table), shared-issue-only enforcement, revoke and hidden 404s, download visibility and headers, create idempotency and activity log, board-only comment toggle, rate limit.
 - UI component test for the placeholder and run indicator.
 - Full suite, recursive typecheck, build and Playwright run on GitHub CI only.
 - Smoke on a throwaway instance: create a link with an agent key, open it in a logged-out mobile-viewport browser, screenshot, revoke, confirm 404.

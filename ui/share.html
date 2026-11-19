@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f7f9" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0d0e11" />
+    <title>Shared task</title>
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/IBMPlexMono-Regular-Latin1.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- WARDMOTE_RUNTIME_BRANDING_START -->
+    <!-- WARDMOTE_RUNTIME_BRANDING_END -->
+    <!-- WARDMOTE_FAVICON_START -->
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <!-- WARDMOTE_FAVICON_END -->
+    <script>
+      (() => {
+        const key = "wardmote.theme";
+        const darkThemeColor = "#0d0e11";
+        const lightThemeColor = "#f6f7f9";
+        try {
+          const stored = window.localStorage.getItem(key);
+          const prefersDark =
+            typeof window.matchMedia === "function" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const fallback = prefersDark ? "dark" : "light";
+          const theme = stored === "light" || stored === "dark" ? stored : fallback;
+          const isDark = theme === "dark";
+          document.documentElement.classList.toggle("dark", isDark);
+          document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+          for (const themeColorMeta of document.querySelectorAll('meta[name="theme-color"]')) {
+            themeColorMeta.setAttribute("content", isDark ? darkThemeColor : lightThemeColor);
+          }
+        } catch {
+          document.documentElement.classList.add("dark");
+          document.documentElement.style.colorScheme = "dark";
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>This shared task needs JavaScript to display.</noscript>
+    <script type="module" src="/src/share-main.tsx"></script>
+  </body>
+</html>
