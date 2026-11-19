@@ -56,7 +56,15 @@ Work products: title, type, status, and an `http(s)` URL when present; file arti
 
 ### Run indicator
 
-While the issue has an active run, the page shows a static pill "<agent name> is working…". No transcript data leaves the server. The page refetches every 15 s while the tab is visible and a run is active, otherwise on focus.
+While the issue has an active run, the page shows a static pill "<agent name> is working…". No transcript data leaves the server.
+
+### Live updates (ZHA-7176)
+
+The page follows `GET /api/public/share/:token/events`, a server-sent event stream. The server keeps one channel per shared token: activity and run-status events for the issue (coalesced for 150 ms) rebuild the public view once through the same `buildView` as the GET route, and every viewer receives the same `patch` (changed issue fields, upserted or removed comments, documents, attachments and work products). No query runs per viewer per change. Events carry the view version (SHA-1 of the view JSON) as `id`; a reconnect with `Last-Event-ID` or `?since=` gets `ready` when the version matches, otherwise the full `view`. A revoked link or hidden task ends every stream with `gone` (activity event, plus a 5 s batched token check for any other path). A `ping` event every 20 s keeps proxies open.
+
+Limits: 250 streams per token, 20 per client IP (skipped for loopback peers, which are the reverse proxy unless `TRUST_PROXY` is set), 2,000 per process. Over a limit the stream answers 429 and the page polls instead. The page closes the stream 30 s after the tab is hidden and resyncs when it is shown again, reconnects with backoff, and while no stream is open polls the GET route every 30 s with `If-None-Match` (304 when unchanged). Once the link is gone the page stops polling.
+
+Risk: behind a reverse proxy without `TRUST_PROXY` every viewer has the proxy's address, so the 300 requests per minute per token and IP limit is shared by all viewers of one link. A restart that reconnects more than about 250 viewers at once (stream plus GET each) pushes some into 429; they back off for up to 60 s and then resync.
 
 ### Related issues
 
@@ -92,7 +100,8 @@ Types and validators: `IssueShareLink`, `PublicIssueShareView`, `PublicIssueComm
 | `POST /api/issues/:id/share-link` | board or agent with issue read | create or return the active link; `{ url, token, createdAt }` |
 | `DELETE /api/issues/:id/share-link` | board or agent with issue read | revoke |
 | `PATCH /api/issues/:id/comments/:commentId/public-share` | board only | set `public_share_visible` on a user comment |
-| `GET /api/public/share/:token` | none | projection of the shared issue |
+| `GET /api/public/share/:token` | none | projection of the shared issue, with ETag and 304 |
+| `GET /api/public/share/:token/events` | none | live changes to the projection (SSE) |
 | `GET /api/public/share/:token/attachments/:attachmentId/content` | none | download |
 | `GET /api/public/share/:token/assets/:assetId/content` | none | work-product file download |
 | `GET /api/public/share/:token/issues/:issueId/documents/:key/pdf` | none | document PDF |

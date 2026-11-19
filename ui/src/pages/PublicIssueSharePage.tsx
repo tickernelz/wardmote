@@ -1,5 +1,5 @@
-import { useCallback, useEffect, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
   Download,
@@ -39,11 +39,12 @@ import {
   fileKindForAttachment,
   formatFileSize,
 } from "@/components/task-chat/task-chat-attachments";
-import { issueShareApi } from "../api/issue-share";
+import { issueShareApi, type PublicShareState } from "../api/issue-share";
+import { usePublicShareLive } from "../hooks/usePublicShareLive";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, formatDateTime, relativeTime } from "../lib/utils";
 
-const ACTIVE_RUN_REFETCH_MS = 15_000;
+const FALLBACK_POLL_MS = 30_000;
 
 const FOCUS_RING =
   "outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
@@ -460,19 +461,26 @@ export function PublicIssueSharePage() {
   const { token = "" } = useParams<{ token: string }>();
   useNoIndexMeta();
   const tokenValid = ISSUE_SHARE_TOKEN_PATTERN.test(token);
+  const queryClient = useQueryClient();
+  const [streaming, setStreaming] = useState(false);
   const query = useQuery({
     queryKey: queryKeys.publicShare.view(token),
-    queryFn: () => issueShareApi.getPublicShare(token),
+    queryFn: async () => {
+      const previous = queryClient.getQueryData<PublicShareState | null>(queryKeys.publicShare.view(token));
+      const result = await issueShareApi.getPublicShare(token, previous?.etag ?? null);
+      return result === "not-modified" ? previous ?? null : result;
+    },
     enabled: tokenValid,
     retry: false,
-    refetchOnWindowFocus: true,
-    refetchInterval: (current) => (current.state.data?.activeRun ? ACTIVE_RUN_REFETCH_MS : false),
+    refetchOnWindowFocus: false,
+    refetchInterval: (current) => (streaming || current.state.data === null ? false : FALLBACK_POLL_MS),
   });
-  useDocumentTitle(query.data?.issue.title ?? null);
+  usePublicShareLive(token, tokenValid && Boolean(query.data), setStreaming);
+  useDocumentTitle(query.data?.view.issue.title ?? null);
 
   if (!tokenValid || query.data === null) return <PublicShareUnavailable />;
 
-  if (query.data) return <PublicIssueShareContent view={query.data} token={token} />;
+  if (query.data) return <PublicIssueShareContent view={query.data.view} token={token} />;
 
   if (query.isError) {
     return (

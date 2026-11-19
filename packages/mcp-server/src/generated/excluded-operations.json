@@ -116,6 +116,7 @@
   "GET /api/public/share/{token}": "actor:public",
   "GET /api/public/share/{token}/assets/{assetId}/content": "actor:public",
   "GET /api/public/share/{token}/attachments/{attachmentId}/content": "actor:public",
+  "GET /api/public/share/{token}/events": "actor:public",
   "GET /api/public/share/{token}/issues/{issueId}/documents/{key}/pdf": "actor:public",
   "GET /api/secret-provider-configs/{id}": "credential_surface",
   "GET /api/secrets/{id}/access-events": "credential_surface",

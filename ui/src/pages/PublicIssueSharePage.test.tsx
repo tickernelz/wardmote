@@ -13,9 +13,48 @@ const getPublicShareMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/issue-share", () => ({
   issueShareApi: {
-    getPublicShare: (token: string) => getPublicShareMock(token),
+    getPublicShare: async (token: string) => {
+      const view = await getPublicShareMock(token);
+      return view ? { view, etag: "v1" } : view;
+    },
   },
+  publicShareEventsUrl: (token: string, since: string | null) =>
+    `/api/public/share/${token}/events${since ? `?since=${since}` : ""}`,
 }));
+
+class FakeEventSource {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 2;
+  static instances: FakeEventSource[] = [];
+  readyState = FakeEventSource.CONNECTING;
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  private listeners = new Map<string, Array<(event: MessageEvent<string>) => void>>();
+
+  constructor(readonly url: string) {
+    FakeEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  close() {
+    this.readyState = FakeEventSource.CLOSED;
+  }
+
+  emit(type: string, data: unknown) {
+    if (type === "open") {
+      this.readyState = FakeEventSource.OPEN;
+      this.onopen?.();
+      return;
+    }
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(new MessageEvent(type, { data: JSON.stringify(data) }));
+    }
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -235,6 +274,79 @@ describe("PublicIssueSharePage", () => {
     await waitUntilLoaded(() => Boolean(container.textContent?.includes("This link is not available")));
     expect(container.textContent).toContain("This link is not available");
     expect(document.title).toBe("Shared task");
+  });
+
+  describe("live updates", () => {
+    beforeEach(() => {
+      FakeEventSource.instances = [];
+      vi.stubGlobal("EventSource", FakeEventSource);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("applies streamed changes in place and resyncs from the shown version after a gap", async () => {
+      getPublicShareMock.mockResolvedValue(buildView());
+      await renderAt(`/s/${TOKEN}`);
+
+      const stream = FakeEventSource.instances[0]!;
+      expect(stream.url).toBe(`/api/public/share/${TOKEN}/events?since=v1`);
+      await act(async () => {
+        stream.emit("open", null);
+        stream.emit("patch", {
+          base: "v1",
+          etag: "v2",
+          patch: {
+            issue: { title: "Scanner installed" },
+            comments: {
+              upsert: [{
+                id: "c-new",
+                kind: "comment",
+                author: { kind: "agent", name: "Wira", iconUrl: null },
+                body: "Dock 3 scanner is live.",
+                attachments: [],
+                createdAt: "2026-10-07T09:00:00.000Z",
+              }],
+            },
+          },
+        });
+      });
+      expect(container.textContent).toContain("Dock 3 scanner is live.");
+      expect(container.querySelector("h1")?.textContent).toBe("Scanner installed");
+      expect(getPublicShareMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        stream.emit("patch", { base: "v9", etag: "v10", patch: { issue: { title: "Skipped" } } });
+      });
+      expect(stream.readyState).toBe(FakeEventSource.CLOSED);
+      expect(container.textContent).not.toContain("Skipped");
+      expect(FakeEventSource.instances[1]?.url).toBe(`/api/public/share/${TOKEN}/events?since=v2`);
+    });
+
+    it("shows the not-available state as soon as the stream reports the link gone and stops asking", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getPublicShareMock.mockResolvedValue(buildView());
+        await renderAt(`/s/${TOKEN}`);
+
+        const stream = FakeEventSource.instances[0]!;
+        await act(async () => {
+          stream.emit("open", null);
+          stream.emit("gone", {});
+        });
+        expect(container.textContent).toContain("This link is not available");
+        expect(stream.readyState).toBe(FakeEventSource.CLOSED);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(120_000);
+        });
+        expect(FakeEventSource.instances).toHaveLength(1);
+        expect(getPublicShareMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("gives the tab its original title back when the page goes away", async () => {

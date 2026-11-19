@@ -246,6 +246,23 @@ export function issueShareLinkService(db: Db) {
     return root ? { link, root } : null;
   }
 
+  async function liveTokens(tokens: string[]): Promise<Set<string>> {
+    if (tokens.length === 0) return new Set();
+    const rows = await db
+      .select({ token: issueShareLinks.token })
+      .from(issueShareLinks)
+      .innerJoin(
+        issues,
+        and(eq(issues.id, issueShareLinks.issueId), eq(issues.companyId, issueShareLinks.companyId)),
+      )
+      .where(and(
+        inArray(issueShareLinks.token, tokens),
+        isNull(issueShareLinks.revokedAt),
+        isNull(issues.hiddenAt),
+      ));
+    return new Set(rows.map((row) => row.token));
+  }
+
   async function agentActors(ids: string[]) {
     const unique = [...new Set(ids)];
     if (unique.length === 0) return new Map<string, PublicShareActor>();
@@ -535,6 +552,7 @@ export function issueShareLinkService(db: Db) {
     create,
     revoke,
     resolve,
+    liveTokens,
     buildView,
     findVisibleAttachment,
     findVisibleAsset,

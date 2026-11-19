@@ -1502,6 +1502,7 @@ const PUBLIC_OPERATIONS = new Set([
   "POST /api/cli-auth/challenges/{id}/cancel",
   "GET /api/invites/{token}",
   "GET /api/public/share/{token}",
+  "GET /api/public/share/{token}/events",
   "GET /api/public/share/{token}/attachments/{attachmentId}/content",
   "GET /api/public/share/{token}/assets/{assetId}/content",
   "GET /api/public/share/{token}/issues/{issueId}/documents/{key}/pdf",
@@ -11489,7 +11490,28 @@ registry.registerPath({
   tags: ["public-share"],
   summary: "Read the public projection of a shared issue",
   request: { params: z.object({ token: z.string() }) },
-  responses: { 200: r.ok(), 404: r.notFound, 429: r.tooManyRequests },
+  responses: {
+    200: r.ok(),
+    304: { description: "The view matches the If-None-Match ETag" },
+    404: r.notFound,
+    429: r.tooManyRequests,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/public/share/{token}/events",
+  tags: ["public-share"],
+  summary: "Stream live changes to the public projection of a shared issue",
+  request: {
+    params: z.object({ token: z.string() }),
+    query: z.object({ since: z.string().optional() }),
+  },
+  responses: {
+    200: { description: "Server-sent event stream (text/event-stream)" },
+    404: r.notFound,
+    429: r.tooManyRequests,
+  },
 });
 
 registry.registerPath({
