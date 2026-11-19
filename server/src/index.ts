@@ -2044,8 +2044,10 @@ async function startServerWithDatabaseTeardown(
       logger.error({ err, signal }, "run-log in-flight mirror flush failed");
     }
 
-    const appShutdown = (app as { locals?: { wardmoteShutdown?: () => Promise<void> } }).locals
-      ?.wardmoteShutdown;
+    const appLocals = (app as {
+      locals?: { wardmoteShutdown?: () => Promise<void>; wardmoteBeforeHttpClose?: () => void };
+    }).locals;
+    const appShutdown = appLocals?.wardmoteShutdown;
     const stopEmbeddedPostgres = embeddedPostgres && embeddedPostgresStartedByThisProcess
       ? () => embeddedPostgresSupervisor?.shutdown() ?? embeddedPostgres!.stop()
       : null;
@@ -2061,8 +2063,10 @@ async function startServerWithDatabaseTeardown(
     await finalizeServerShutdown({
       signal,
       shutdownAppServices: appShutdown,
-      closeHttpListener: () =>
-        closeHttpListenerForShutdown({ server, signal, log: logger }),
+      closeHttpListener: () => {
+        appLocals?.wardmoteBeforeHttpClose?.();
+        return closeHttpListenerForShutdown({ server, signal, log: logger });
+      },
       drainPendingRunFailureReports: waitForPendingRunFailureReports,
       closeDatabase: closeDatabaseClients,
       stopEmbeddedPostgres,

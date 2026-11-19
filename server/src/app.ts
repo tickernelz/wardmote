@@ -24,6 +24,8 @@ import {
   localBrowserRoutes,
 } from "./routes/local-browser.js";
 import { publicIssueShareRoutes } from "./routes/public-issue-share.js";
+import { issueShareLinkService } from "./services/issue-share-links.js";
+import { createIssueShareLiveHub } from "./services/issue-share-live.js";
 import { createPublicMcpOAuth, publicMcpConfig } from "./services/public-mcp/oauth.js";
 import { createDotRunnerMcpTools } from "./services/dot-runner-broker.js";
 import { agentProfileAvatarRoutes } from "./routes/agent-profile-avatar.js";
@@ -951,7 +953,15 @@ export async function createApp(
       authPublicBaseUrl: opts.authPublicBaseUrl,
     }),
   );
-  api.use(publicIssueShareRoutes(db, opts.storageService));
+  const shareLinks = issueShareLinkService(db);
+  const publicShareLive = createIssueShareLiveHub({
+    resolve: shareLinks.resolve,
+    liveTokens: shareLinks.liveTokens,
+    buildView: shareLinks.buildView,
+    onError: (err) => logger.warn({ err }, "public share live update failed"),
+  });
+  app.locals.wardmoteBeforeHttpClose = () => publicShareLive.close();
+  api.use(publicIssueShareRoutes(db, opts.storageService, { live: publicShareLive }));
   let publicMcpEvents: PublicMcpEvents | null = null;
   let dotMcpEvents: PublicMcpEvents | null = null;
   if (publicMcpOAuth) {
@@ -1295,6 +1305,7 @@ export async function createApp(
       // The scheduler tick queries the database. Stop it here, inside the
       // awaited teardown, so no tick runs after the caller ends the pool.
       scheduler.stop();
+      publicShareLive.close();
       await agentLifecycle.stop();
       await publicMcpEvents?.stop();
       await dotMcpEvents?.stop();

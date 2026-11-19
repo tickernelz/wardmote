@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -33,7 +35,15 @@ import { publicIssueShareRoutes } from "../routes/public-issue-share.js";
 import { errorHandler } from "../middleware/index.js";
 import { createInviteRateLimiter } from "../services/invite-rate-limit.js";
 import { issueService } from "../services/issues.js";
-import { LOW_TRUST_REVIEW_PRESET } from "@tickernelz/wardmote-shared";
+import { issueShareLinkService } from "../services/issue-share-links.js";
+import { createIssueShareLiveHub, type IssueShareLiveHub } from "../services/issue-share-live.js";
+import { publishLiveEvent } from "../services/live-events.js";
+import {
+  LOW_TRUST_REVIEW_PRESET,
+  applyPublicIssueSharePatch,
+  type PublicIssueSharePatchEvent,
+  type PublicIssueShareViewEvent,
+} from "@tickernelz/wardmote-shared";
 
 const renderDocumentPdfMock = vi.hoisted(() => vi.fn(async () => Buffer.from("%PDF-share")));
 
@@ -112,7 +122,7 @@ describeEmbeddedPostgres("public issue share links", () => {
 
   function createApp(
     actor: () => Express.Request["actor"],
-    limits: { notFound?: number; requests?: number } = {},
+    limits: { notFound?: number; requests?: number; live?: IssueShareLiveHub } = {},
   ) {
     const app = express();
     app.use(express.json());
@@ -126,6 +136,7 @@ describeEmbeddedPostgres("public issue share links", () => {
       publicIssueShareRoutes(db, storage, {
         notFoundLimiter: createInviteRateLimiter({ maxRequests: limits.notFound ?? 1_000, windowMs: 60_000 }),
         requestLimiter: createInviteRateLimiter({ maxRequests: limits.requests ?? 1_000, windowMs: 60_000 }),
+        live: limits.live,
       }),
     );
     app.use(errorHandler);
@@ -305,6 +316,59 @@ describeEmbeddedPostgres("public issue share links", () => {
       { companyId, issueId: ids.root, type: "artifact", provider: "wardmote", title: "Orphan report", status: "active", metadata: { attachmentId: files.orphanFile.attachmentId } },
     ]);
     return { companyId, otherCompanyId, agentId, otherAgentId, userId, runId, ids, comments, files };
+  }
+
+  type StreamEvent = { event: string; id: string | null; data: string };
+
+  async function openStream(app: express.Express, token: string, headers: Record<string, string> = {}) {
+    const server = app.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const { port } = server.address() as AddressInfo;
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${port}/api/public/share/${token}/events`, {
+      headers,
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let ended = false;
+    async function next(): Promise<StreamEvent | null> {
+      for (;;) {
+        const boundary = buffer.indexOf("\n\n");
+        if (boundary >= 0) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const fields = new Map(block.split("\n").map((line) => {
+            const colon = line.indexOf(": ");
+            return [line.slice(0, colon), line.slice(colon + 2)] as const;
+          }));
+          if (!fields.has("event") || fields.get("event") === "ping") continue;
+          return { event: fields.get("event")!, id: fields.get("id") ?? null, data: fields.get("data") ?? "" };
+        }
+        if (ended) return null;
+        const chunk = await reader.read();
+        if (chunk.done) ended = true;
+        else buffer += decoder.decode(chunk.value, { stream: true });
+      }
+    }
+    async function close() {
+      controller.abort();
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+    return { status: response.status, next, close };
+  }
+
+  function liveHub(options: Partial<Parameters<typeof createIssueShareLiveHub>[0]> = {}) {
+    const shares = issueShareLinkService(db);
+    return createIssueShareLiveHub({
+      resolve: shares.resolve,
+      liveTokens: shares.liveTokens,
+      buildView: shares.buildView,
+      coalesceMs: 20,
+      ...options,
+    });
   }
 
   async function share(seeded: Awaited<ReturnType<typeof seed>>, app = createApp(() => board(seeded.companyId))) {
@@ -644,6 +708,94 @@ describeEmbeddedPostgres("public issue share links", () => {
     await request(limited).get("/api/public/share/ZZZZZZZZZZ").expect(404);
     const response = await request(limited).get(`/api/public/share/${token}`).expect(429);
     expect(response.headers["retry-after"]).toBeDefined();
+  });
+
+  it("pushes one patch per change to every viewer that rebuilds the public view without hidden bodies", async () => {
+    const seeded = await seed();
+    const token = await share(seeded);
+    const live = liveHub();
+    const app = createApp(() => ({ type: "none", source: "none" }), { live });
+    const viewers = [await openStream(app, token), await openStream(app, token)];
+    try {
+      const initial = await viewers[0]!.next();
+      expect(initial?.event).toBe("view");
+      expect((await viewers[1]!.next())?.event).toBe("view");
+      expect(live.stats()).toEqual({ channels: 1, streams: 2 });
+      const start = JSON.parse(initial!.data) as PublicIssueShareViewEvent;
+
+      const visibleId = randomUUID();
+      const privateId = randomUUID();
+      await db.insert(issueComments).values([
+        { id: visibleId, companyId: seeded.companyId, issueId: seeded.ids.root, authorType: "agent", authorAgentId: seeded.agentId, body: "LIVE_AGENT_BODY" },
+        { id: privateId, companyId: seeded.companyId, issueId: seeded.ids.root, authorType: "user", authorUserId: seeded.userId, body: "LIVE_PRIVATE_BODY" },
+      ]);
+      publishLiveEvent({ companyId: seeded.companyId, type: "activity.logged", payload: { issueId: seeded.ids.root } });
+      publishLiveEvent({ companyId: seeded.companyId, type: "activity.logged", payload: { issueId: seeded.ids.root } });
+
+      const patches = [await viewers[0]!.next(), await viewers[1]!.next()];
+      expect(patches.map((entry) => entry?.event)).toEqual(["patch", "patch"]);
+      expect(patches[1]!.data).toBe(patches[0]!.data);
+      expect(patches[0]!.data).toContain("LIVE_AGENT_BODY");
+      expect(patches[0]!.data).not.toContain("LIVE_PRIVATE_BODY");
+      const event = JSON.parse(patches[0]!.data) as PublicIssueSharePatchEvent;
+      expect(event.base).toBe(start.etag);
+      expect(event.patch.comments?.upsert?.map((comment) => [comment.id, comment.kind])).toEqual([
+        [visibleId, "comment"],
+        [privateId, "redacted"],
+      ]);
+
+      const fresh = await request(app).get(`/api/public/share/${token}`).expect(200);
+      expect(fresh.headers.etag).toBe(`W/"${event.etag}"`);
+      expect(applyPublicIssueSharePatch(start.view, event.patch)).toEqual(fresh.body);
+    } finally {
+      await Promise.all(viewers.map((viewer) => viewer.close()));
+      live.close();
+    }
+  });
+
+  it("resumes from a known version, answers 304 for it and ends the stream within seconds of a revoke", async () => {
+    const seeded = await seed();
+    const boardApp = createApp(() => board(seeded.companyId));
+    const token = await share(seeded, boardApp);
+    const live = liveHub();
+    const app = createApp(() => ({ type: "none", source: "none" }), { live });
+    const etag = (await request(app).get(`/api/public/share/${token}`).expect(200)).headers.etag as string;
+    await request(app).get(`/api/public/share/${token}`).set("If-None-Match", etag).expect(304);
+    const stream = await openStream(app, token, { "Last-Event-ID": etag.slice(3, -1) });
+    try {
+      expect((await stream.next())?.event).toBe("ready");
+      const revokedAt = Date.now();
+      await request(boardApp).delete(`/api/issues/${seeded.ids.root}/share-link`).expect(204);
+      expect((await stream.next())?.event).toBe("gone");
+      expect(await stream.next()).toBeNull();
+      expect(Date.now() - revokedAt).toBeLessThan(5_000);
+      expect(live.stats()).toEqual({ channels: 0, streams: 0 });
+      await request(app).get(`/api/public/share/${token}/events`).expect(404);
+    } finally {
+      await stream.close();
+      live.close();
+    }
+  });
+
+  it("closes the stream of a task hidden without any live event and caps viewers per link", async () => {
+    const seeded = await seed();
+    const token = await share(seeded);
+    const live = liveHub({ tickMs: 100, limits: { streamsPerToken: 1 } });
+    const app = createApp(() => ({ type: "none", source: "none" }), { live });
+    const stream = await openStream(app, token);
+    try {
+      expect((await stream.next())?.event).toBe("view");
+      const refused = await request(app).get(`/api/public/share/${token}/events`).expect(429);
+      expect(refused.headers["retry-after"]).toBeDefined();
+      const hiddenAt = Date.now();
+      await db.update(issues).set({ hiddenAt: new Date() }).where(eq(issues.id, seeded.ids.root));
+      expect((await stream.next())?.event).toBe("gone");
+      expect(Date.now() - hiddenAt).toBeLessThan(2_000);
+      expect(await stream.next()).toBeNull();
+    } finally {
+      await stream.close();
+      live.close();
+    }
   });
 
   it("caps requests per share token and IP", async () => {

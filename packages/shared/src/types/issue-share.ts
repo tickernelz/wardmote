@@ -81,3 +81,30 @@ export interface PublicIssueShareView {
   attachments: PublicShareAttachment[];
   workProducts: PublicShareWorkProduct[];
 }
+
+export interface PublicShareListPatch<T> {
+  upsert?: T[];
+  remove?: string[];
+  order?: string[];
+}
+
+export interface PublicIssueSharePatch {
+  company?: PublicIssueShareView["company"];
+  issue?: Partial<PublicIssueShareView["issue"]>;
+  activeRun?: PublicIssueShareView["activeRun"];
+  comments?: PublicShareListPatch<PublicIssueComment>;
+  documents?: PublicShareListPatch<PublicShareDocument>;
+  attachments?: PublicShareListPatch<PublicShareAttachment>;
+  workProducts?: PublicShareListPatch<PublicShareWorkProduct>;
+}
+
+export interface PublicIssueSharePatchEvent {
+  base: string;
+  etag: string;
+  patch: PublicIssueSharePatch;
+}
+
+export interface PublicIssueShareViewEvent {
+  etag: string;
+  view: PublicIssueShareView;
+}
