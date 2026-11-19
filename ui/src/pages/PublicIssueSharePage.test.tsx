@@ -17,11 +17,6 @@ vi.mock("../api/issue-share", () => ({
   },
 }));
 
-vi.mock("@/context/CompanyContext", () => ({
-  useCompany: () => ({ selectedCompany: null, selectedCompanyId: null, companies: [] }),
-  useOptionalCompany: () => null,
-}));
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
