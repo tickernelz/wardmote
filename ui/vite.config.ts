@@ -18,6 +18,12 @@ export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss(), serviceWorkerBuildIdPlugin()],
   build: {
     minify: "esbuild",
+    rolldownOptions: {
+      input: {
+        index: path.resolve(__dirname, "index.html"),
+        share: path.resolve(__dirname, "share.html"),
+      },
+    },
   },
   esbuild:
     mode === "production"

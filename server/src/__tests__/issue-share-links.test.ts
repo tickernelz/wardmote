@@ -425,7 +425,7 @@ describeEmbeddedPostgres("public issue share links", () => {
     expect(response.headers["x-robots-tag"]).toBe("noindex, nofollow");
     expect(response.headers["referrer-policy"]).toBe("no-referrer");
     expect(response.headers["cache-control"]).toBe("private, no-store");
-    expect(view.isSharedRoot).toBe(true);
+    expect(Object.keys(view).sort()).toEqual(["activeRun", "attachments", "comments", "company", "documents", "issue", "workProducts"]);
     expect(view.issue).toMatchObject({ title: "Shared request", description: "Please build it", assignee: { kind: "agent", name: "Wira" } });
     expect(view.activeRun).toMatchObject({ agentName: "Wira" });
     const byId = new Map(view.comments.map((comment: { id: string }) => [comment.id, comment]));
@@ -462,33 +462,37 @@ describeEmbeddedPostgres("public issue share links", () => {
     }
   });
 
-  it("allows one-hop issues and refuses two-hop, hidden and unrelated ones", async () => {
+  it("shows only the shared issue and serves nothing from its parent, children or blocking issues", async () => {
     const seeded = await seed();
+    const neighbours = [seeded.ids.parent, seeded.ids.child, seeded.ids.blocker, seeded.ids.blocked];
+    const neighbourFiles: Array<{ assetId: string; attachmentId: string }> = [];
+    for (const issueId of neighbours) {
+      const file = await attach({ companyId: seeded.companyId, issueId, filename: "neighbour.txt", contentType: "text/plain", body: "neighbour" });
+      await db.insert(issueWorkProducts).values({ companyId: seeded.companyId, issueId, type: "artifact", provider: "wardmote", title: "Neighbour report", status: "active", metadata: { attachmentId: file.attachmentId } });
+      const [document] = await db
+        .insert(documents)
+        .values({ companyId: seeded.companyId, title: "Neighbour spec", latestBody: "NEIGHBOUR_DOC" })
+        .returning();
+      await db.insert(issueDocuments).values({ companyId: seeded.companyId, issueId, documentId: document!.id, key: "spec" });
+      neighbourFiles.push(file);
+    }
     const token = await share(seeded);
     const app = createApp(() => ({ type: "none", source: "none" }));
-    const rootView = (await request(app).get(`/api/public/share/${token}`).expect(200)).body;
-    expect(rootView.related.map((entry: { id: string; relation: string; navigable: boolean }) => [entry.id, entry.relation, entry.navigable])).toEqual([
-      [seeded.ids.parent, "parent", true],
-      [seeded.ids.child, "child", true],
-      [seeded.ids.blocker, "blocked_by", true],
-      [seeded.ids.blocked, "blocks", true],
-    ]);
-    for (const id of [seeded.ids.parent, seeded.ids.child, seeded.ids.blocker, seeded.ids.blocked]) {
-      await request(app).get(`/api/public/share/${token}/issues/${id}`).expect(200);
+    const response = await request(app).get(`/api/public/share/${token}`).expect(200);
+    expect(response.body.issue.id).toBe(seeded.ids.root);
+    for (const leaked of ["Umbrella", "Child step", "Blocker", "NEIGHBOUR_DOC", "neighbour.txt", ...neighbours]) {
+      expect(response.text).not.toContain(leaked);
     }
-    const childView = (await request(app).get(`/api/public/share/${token}/issues/${seeded.ids.child}`).expect(200)).body;
-    expect(childView.isSharedRoot).toBe(false);
-    expect(childView.related).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: seeded.ids.root, navigable: true }),
-      expect.objectContaining({ id: seeded.ids.grandchild, navigable: false }),
-    ]));
-    for (const id of [seeded.ids.grandchild, seeded.ids.hiddenChild, seeded.ids.unrelated, "not-a-uuid"]) {
-      const response = await request(app).get(`/api/public/share/${token}/issues/${id}`).expect(404);
-      expect(response.body).toEqual(NOT_FOUND);
+    for (const id of [seeded.ids.root, ...neighbours, seeded.ids.grandchild, seeded.ids.hiddenChild, seeded.ids.unrelated]) {
+      expect((await request(app).get(`/api/public/share/${token}/issues/${id}`).expect(404)).body.issue).toBeUndefined();
     }
-    await request(app)
-      .get(`/api/public/share/${token}/attachments/${seeded.files.unrelatedFile.attachmentId}/content`)
-      .expect(404);
+    for (const id of neighbours) {
+      expect((await request(app).get(`/api/public/share/${token}/issues/${id}/documents/spec/pdf`).expect(404)).body).toEqual(NOT_FOUND);
+    }
+    for (const file of [...neighbourFiles, seeded.files.unrelatedFile]) {
+      expect((await request(app).get(`/api/public/share/${token}/attachments/${file.attachmentId}/content`).expect(404)).body).toEqual(NOT_FOUND);
+      expect((await request(app).get(`/api/public/share/${token}/assets/${file.assetId}/content`).expect(404)).body).toEqual(NOT_FOUND);
+    }
   });
 
   it("returns the same 404 for unknown, revoked and hidden shares", async () => {
@@ -543,7 +547,6 @@ describeEmbeddedPostgres("public issue share links", () => {
     for (const url of [
       `/api/public/share/${token}/attachments/${seeded.files.agentFile.attachmentId}/content`,
       `/api/public/share/${token}/assets/${seeded.files.issueFile.assetId}/content`,
-      `/api/public/share/${token}/issues/${seeded.ids.child}`,
     ]) {
       expect((await request(anonymous).get(url).expect(404)).body).toEqual(NOT_FOUND);
     }
