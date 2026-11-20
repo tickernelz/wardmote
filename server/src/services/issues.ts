@@ -12401,39 +12401,29 @@ export function issueService(db: Db) {
       if (afterCommentId) {
         // Guard: reject non-UUID cursors before hitting the DB to avoid Postgres type errors.
         if (!isUuidLike(afterCommentId)) return [];
-        const anchor = await db
-          .select({
-            id: issueComments.id,
-            createdAt: issueComments.createdAt,
-          })
+        const anchorCreatedAt = sql`(${db
+          .select({ createdAt: issueComments.createdAt })
           .from(issueComments)
           .where(
             and(
               eq(issueComments.issueId, issueId),
               eq(issueComments.id, afterCommentId),
             ),
-          )
-          .then((rows) => rows[0] ?? null);
-
-        if (!anchor) return [];
-        const anchorCreatedAt =
-          anchor.createdAt instanceof Date
-            ? anchor.createdAt
-            : new Date(String(anchor.createdAt));
+          )})`;
         conditions.push(
           order === "asc"
             ? or(
                 gt(issueComments.createdAt, anchorCreatedAt),
                 and(
                   eq(issueComments.createdAt, anchorCreatedAt),
-                  gt(issueComments.id, anchor.id),
+                  gt(issueComments.id, afterCommentId),
                 ),
               )!
             : or(
                 lt(issueComments.createdAt, anchorCreatedAt),
                 and(
                   eq(issueComments.createdAt, anchorCreatedAt),
-                  lt(issueComments.id, anchor.id),
+                  lt(issueComments.id, afterCommentId),
                 ),
               )!,
         );

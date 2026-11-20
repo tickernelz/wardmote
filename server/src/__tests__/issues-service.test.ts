@@ -2689,6 +2689,46 @@ describeEmbeddedPostgres("issueService.list participantAgentId", () => {
     expect(comments.map((comment) => comment.id)).toEqual([latestCommentId]);
   });
 
+  it("pages from an anchor that shares its millisecond with neighbouring comments", async () => {
+    const companyId = randomUUID();
+    const issueId = randomUUID();
+    const earlierCommentId = randomUUID();
+    const anchorCommentId = randomUUID();
+    const laterCommentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Wardmote",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Microsecond cursor issue",
+      status: "todo",
+      priority: "medium",
+    });
+
+    const at = (micros: string) => sql`${`2026-03-26T10:00:00.123${micros}Z`}::timestamptz`;
+    await db.insert(issueComments).values([
+      { id: earlierCommentId, companyId, issueId, body: "Earlier", createdAt: at("100"), updatedAt: at("100") },
+      { id: anchorCommentId, companyId, issueId, body: "Anchor", createdAt: at("400"), updatedAt: at("400") },
+      { id: laterCommentId, companyId, issueId, body: "Later", createdAt: at("700"), updatedAt: at("700") },
+    ]);
+
+    const later = await svc.listComments(issueId, { afterCommentId: anchorCommentId, order: "asc", limit: 50 });
+    expect(later.map((comment) => comment.id)).toEqual([laterCommentId]);
+
+    const earlier = await svc.listComments(issueId, { afterCommentId: anchorCommentId, order: "desc", limit: 50 });
+    expect(earlier.map((comment) => comment.id)).toEqual([earlierCommentId]);
+
+    await expect(
+      svc.listComments(issueId, { afterCommentId: randomUUID(), order: "asc", limit: 50 }),
+    ).resolves.toEqual([]);
+  });
+
   it("returns no comments for an anchor cursor that is not a UUID", async () => {
     const companyId = randomUUID();
     const issueId = randomUUID();
