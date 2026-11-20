@@ -5261,6 +5261,10 @@ export function issueRoutes(
     return decision.allowed;
   }
 
+  function taskBridgeKeyActivityDetails(req: Request) {
+    return isTaskBridgeKeyActor(req) && req.actor.keyId ? { taskBridgeKeyId: req.actor.keyId } : {};
+  }
+
   function taskBridgeScopeNamesProject(req: Request, projectId: string) {
     if (!isTaskBridgeKeyActor(req) || req.actor.keyScope?.kind !== "task_bridge") return false;
     return taskBridgeScopeIds(req.actor.keyScope, "projectId", "projectIds").includes(projectId);
@@ -7026,6 +7030,7 @@ export function issueRoutes(
           identifier: ancestor.identifier,
           issueTitle: ancestor.title,
           source: "comment.ancestor_handoff",
+          ...taskBridgeKeyActivityDetails(req),
           sourceIssueId: source.id,
           sourceCommentId: comment.id,
         },
@@ -16579,6 +16584,7 @@ export function issueRoutes(
             identifier: issue.identifier,
             issueTitle: issue.title,
             authorizationReason: issueMutationAuthorizationReason,
+            ...taskBridgeKeyActivityDetails(req),
             ...(resumeRequested === true
               ? { resumeIntent: true, followUpRequested: true }
               : {}),
@@ -21170,9 +21176,7 @@ export function issueRoutes(
           identifier: currentIssue.identifier,
           issueTitle: currentIssue.title,
           authorizationReason: commentAuthorizationReason,
-          ...(isTaskBridgeKeyActor(req) && req.actor.keyId
-            ? { taskBridgeKeyId: req.actor.keyId }
-            : {}),
+          ...taskBridgeKeyActivityDetails(req),
           ...(isDirectParentReportDecision(commentAccessDecision)
             ? { directParentReportGrant: true }
             : {}),

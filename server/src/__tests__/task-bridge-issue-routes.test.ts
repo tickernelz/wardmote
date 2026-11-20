@@ -155,6 +155,11 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
       .send({ body: "Jawaban klarifikasi dari jembatan" });
     expect(comment.status, JSON.stringify(comment.body)).toBe(201);
 
+    const patchComment = await request(app)
+      .patch(`/api/issues/${fixture.bridgeIssue.id}`)
+      .send({ comment: "Tambahan konteks lewat PATCH" });
+    expect(patchComment.status, JSON.stringify(patchComment.body)).toBe(200);
+
     const audit = await db
       .select({ actorType: activityLog.actorType, runId: activityLog.runId, details: activityLog.details })
       .from(activityLog)
@@ -163,13 +168,12 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
         eq(activityLog.agentId, fixture.bridgeAgentId),
         eq(activityLog.action, "issue.comment_added"),
       ));
-    expect(audit).toEqual([
-      expect.objectContaining({
-        actorType: "agent",
-        runId: null,
-        details: expect.objectContaining({ taskBridgeKeyId: fixture.bridgeKeyId }),
-      }),
-    ]);
+    const attributed = expect.objectContaining({
+      actorType: "agent",
+      runId: null,
+      details: expect.objectContaining({ taskBridgeKeyId: fixture.bridgeKeyId }),
+    });
+    expect(audit).toEqual([attributed, attributed]);
   });
 
   it("still requires a heartbeat run for a bridge key to update its own issue", async () => {
