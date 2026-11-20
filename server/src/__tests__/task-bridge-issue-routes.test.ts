@@ -146,7 +146,7 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
     return app;
   }
 
-  it("lets a bridge key comment on and update the issue it created", async () => {
+  it("lets a bridge key comment on the issue it created, attributed to that key", async () => {
     const fixture = await seed();
     const app = createApp(fixture.bridgeActor());
 
@@ -155,20 +155,30 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
       .send({ body: "Jawaban klarifikasi dari jembatan" });
     expect(comment.status, JSON.stringify(comment.body)).toBe(201);
 
-    const patch = await request(app)
+    const audit = await db
+      .select({ actorType: activityLog.actorType, runId: activityLog.runId, details: activityLog.details })
+      .from(activityLog)
+      .where(and(
+        eq(activityLog.entityId, fixture.bridgeIssue.id),
+        eq(activityLog.agentId, fixture.bridgeAgentId),
+        eq(activityLog.action, "issue.comment_added"),
+      ));
+    expect(audit).toEqual([
+      expect.objectContaining({
+        actorType: "agent",
+        runId: null,
+        details: expect.objectContaining({ taskBridgeKeyId: fixture.bridgeKeyId }),
+      }),
+    ]);
+  });
+
+  it("still requires a heartbeat run for a bridge key to update its own issue", async () => {
+    const fixture = await seed();
+    const patch = await request(createApp(fixture.bridgeActor()))
       .patch(`/api/issues/${fixture.bridgeIssue.id}`)
       .send({ status: "cancelled" });
-    expect(patch.status, JSON.stringify(patch.body)).toBe(200);
-    expect(patch.body.status).toBe("cancelled");
-
-    const audit = await db
-      .select({ action: activityLog.action, actorType: activityLog.actorType, runId: activityLog.runId })
-      .from(activityLog)
-      .where(and(eq(activityLog.entityId, fixture.bridgeIssue.id), eq(activityLog.agentId, fixture.bridgeAgentId)));
-    expect(audit.map((row) => row.action)).toEqual(
-      expect.arrayContaining(["issue.comment_added", "issue.updated"]),
-    );
-    expect(audit.every((row) => row.actorType === "agent" && row.runId === null)).toBe(true);
+    expect(patch.status, JSON.stringify(patch.body)).toBe(403);
+    expect(JSON.stringify(patch.body)).toContain("cross_issue_influence_run_context_required");
   });
 
   it("keeps a bridge key out of issues it neither created nor holds", async () => {
@@ -188,7 +198,7 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
     }
   });
 
-  it("lets a bridge key answer and cancel its request after another agent took it", async () => {
+  it("lets a bridge key answer its request after another agent took it, but not rewrite it", async () => {
     const fixture = await seed();
     await db
       .update(issues)
@@ -198,13 +208,19 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
 
     const comment = await request(app)
       .post(`/api/issues/${fixture.bridgeIssue.id}/comments`)
-      .send({ body: "Jawaban klarifikasi untuk agent pelaksana" });
+      .send({ body: "Permintaan dibatalkan oleh peminta di Chat" });
     expect(comment.status, JSON.stringify(comment.body)).toBe(201);
 
-    const patch = await request(app)
-      .patch(`/api/issues/${fixture.bridgeIssue.id}`)
-      .send({ status: "cancelled" });
-    expect(patch.status, JSON.stringify(patch.body)).toBe(200);
+    for (const body of [
+      { description: "Rewritten objective" },
+      { assigneeAgentId: fixture.bridgeAgentId },
+      { status: "done" },
+    ]) {
+      const patch = await request(app).patch(`/api/issues/${fixture.bridgeIssue.id}`).send(body);
+      expect(patch.status, JSON.stringify(patch.body)).toBe(403);
+    }
+    const [unchanged] = await db.select().from(issues).where(eq(issues.id, fixture.bridgeIssue.id));
+    expect(unchanged).toMatchObject({ assigneeAgentId: fixture.standardAgentId, status: "todo", description: null });
   });
 
   it("still requires a heartbeat run for standard agent keys", async () => {

@@ -369,6 +369,7 @@ import {
   authorizationDeniedDetails,
   issueReadSqlCondition,
   projectReadSqlCondition,
+  taskBridgeScopeIds,
 } from "../services/authorization.js";
 import { stalledReviewDecisionService } from "../services/stalled-review-decisions.js";
 import { environmentService } from "../services/environments.js";
@@ -3848,7 +3849,7 @@ export function issueRoutes(
     kind: CrossIssueInfluenceKind,
   ) {
     if (req.actor.type !== "agent" || isCompanyOwnerAgentActor(req)) return true;
-    if (!req.actor.runId && (await taskBridgeKeyOwnsIssue(req, issue, kind))) return true;
+    if (!req.actor.runId && kind === "comment" && (await taskBridgeKeyMayCommentOn(req, issue))) return true;
     if (!req.actor.agentId || !req.actor.runId)
       throw crossIssueInfluenceRunContextError();
 
@@ -5250,15 +5251,11 @@ export function issueRoutes(
     );
   }
 
-  async function taskBridgeKeyOwnsIssue(
-    req: Request,
-    issue: { id: string; companyId: string },
-    kind: CrossIssueInfluenceKind,
-  ) {
-    if (!isTaskBridgeKeyActor(req) || (kind !== "comment" && kind !== "update")) return false;
+  async function taskBridgeKeyMayCommentOn(req: Request, issue: { id: string; companyId: string }) {
+    if (!isTaskBridgeKeyActor(req)) return false;
     const decision = await access.decide({
       actor: req.actor,
-      action: kind === "comment" ? "issue:comment" : "issue:mutate",
+      action: "issue:comment",
       resource: { type: "issue", companyId: issue.companyId, issueId: issue.id },
     });
     return decision.allowed;
@@ -5266,8 +5263,7 @@ export function issueRoutes(
 
   function taskBridgeScopeNamesProject(req: Request, projectId: string) {
     if (!isTaskBridgeKeyActor(req) || req.actor.keyScope?.kind !== "task_bridge") return false;
-    const scope = req.actor.keyScope;
-    return scope.projectId === projectId || (scope.projectIds ?? []).includes(projectId);
+    return taskBridgeScopeIds(req.actor.keyScope, "projectId", "projectIds").includes(projectId);
   }
 
   function taskBridgeOriginForActor(req: Request) {
@@ -21174,6 +21170,9 @@ export function issueRoutes(
           identifier: currentIssue.identifier,
           issueTitle: currentIssue.title,
           authorizationReason: commentAuthorizationReason,
+          ...(isTaskBridgeKeyActor(req) && req.actor.keyId
+            ? { taskBridgeKeyId: req.actor.keyId }
+            : {}),
           ...(isDirectParentReportDecision(commentAccessDecision)
             ? { directParentReportGrant: true }
             : {}),
