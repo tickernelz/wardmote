@@ -29,6 +29,7 @@ COPY scripts/link-plugin-dev-sdk.mjs ./scripts/link-plugin-dev-sdk.mjs
 COPY packages ./packages
 COPY server/package.json ./server/package.json
 COPY ui/package.json ./ui/package.json
+COPY ui/vendor/ ./ui/vendor/
 COPY cli/package.json ./cli/package.json
 # The complete resolved lock (including transitive integrity hashes) is reviewed.
 # Reject registry-time drift BEFORE installing packages or running lifecycle code.

@@ -1108,8 +1108,8 @@ importers:
         specifier: ^3.6.0
         version: 3.6.0
       xlsx:
-        specifier: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
-        version: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
+        specifier: file:vendor/xlsx-0.20.3.tgz
+        version: file:ui/vendor/xlsx-0.20.3.tgz
       yjs:
         specifier: 13.6.32
         version: 13.6.32
@@ -7877,7 +7877,6 @@ packages:
 
   opencode-ai@1.18.34:
     resolution: {integrity: sha512-9WUS2T0t4HHDVzXvuwTHF0nvhXvZ9mQ0r+ozCvKdJu0LVoQpOzqAW4qWTC3ygNc5Oedcc7j+Oct24JYlQYnySA==}
-    cpu: [arm64, x64]
     os: [darwin, linux, win32]
     hasBin: true
 
@@ -9231,8 +9230,8 @@ packages:
     resolution: {integrity: sha512-sqMMuL1rc0FmMBOzCpd0yuy9trqF2yTTVe+E9ogwCSWQCdDEtQUwrZPT6AxqtsFGRNxycgncbP/xmOOSPw5ZUw==}
     engines: {node: '>= 6.0'}
 
-  xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz:
-    resolution: {tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz}
+  xlsx@file:ui/vendor/xlsx-0.20.3.tgz:
+    resolution: {integrity: sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA==, tarball: file:ui/vendor/xlsx-0.20.3.tgz}
     version: 0.20.3
     engines: {node: '>=0.8'}
     hasBin: true
@@ -17920,7 +17919,7 @@ snapshots:
     dependencies:
       os-paths: 4.4.0
 
-  xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz: {}
+  xlsx@file:ui/vendor/xlsx-0.20.3.tgz: {}
 
   xml-name-validator@5.0.0: {}
 

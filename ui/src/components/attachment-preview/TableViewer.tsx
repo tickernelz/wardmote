@@ -1,14 +1,12 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { WorkBook } from "xlsx";
 import { csvDelimiterFor, PREVIEW_LIMITS } from "@/lib/attachment-preview";
 import { readBytes, readCsvPreview } from "@/lib/attachment-preview-readers";
 import { cn } from "@/lib/utils";
 import { DataGrid } from "./DataGrid";
+import { runOfficeJob } from "./office-jobs";
 import { PreviewMessage } from "./PreviewMessage";
 import type { ViewerProps } from "./types";
-
-type XlsxModule = typeof import("xlsx");
 
 function RowSummary({ shown, total, exact, columnsShown, columnCount, note }: {
   shown: number;
@@ -64,49 +62,22 @@ function CsvTable({ file }: ViewerProps) {
   );
 }
 
-function readSheet(xlsx: XlsxModule, workbook: WorkBook, name: string) {
-  const sheet = workbook.Sheets[name];
-  if (!sheet) return { header: [], rows: [], total: 0, columnCount: 0 };
-  const rows = xlsx.utils.sheet_to_json<string[]>(sheet, { header: 1, raw: false, defval: "", blankrows: true });
-  const reference = sheet["!fullref"] ?? sheet["!ref"];
-  const range = reference ? xlsx.utils.decode_range(reference) : null;
-  const columnCount = range ? range.e.c - range.s.c + 1 : Math.max(0, ...rows.map((row) => row.length));
-  const firstColumn = range?.s.c ?? 0;
-  const header = Array.from({ length: Math.min(columnCount, PREVIEW_LIMITS.tableColumns) }, (_, index) => xlsx.utils.encode_col(firstColumn + index));
-  const total = range ? range.e.r - range.s.r + 1 : rows.length;
-  return { header, rows: rows.slice(0, PREVIEW_LIMITS.tableRows), total, columnCount, firstRow: (range?.s.r ?? 0) + 1 };
-}
-
 function SpreadsheetTable({ file }: ViewerProps) {
   const query = useQuery({
     queryKey: ["public-share-preview", "spreadsheet", file.url],
-    queryFn: async ({ signal }) => {
-      const [xlsx, bytes] = await Promise.all([import("xlsx"), readBytes(file.url, PREVIEW_LIMITS.spreadsheetBytes, signal)]);
-      const workbook = xlsx.read(bytes, {
-        type: "array",
-        dense: true,
-        sheetRows: PREVIEW_LIMITS.tableRows,
-        cellFormula: false,
-        cellHTML: false,
-        cellStyles: false,
-      });
-      return { xlsx, workbook };
-    },
+    queryFn: async ({ signal }) => (await runOfficeJob("xlsx", await readBytes(file.url, PREVIEW_LIMITS.spreadsheetBytes, signal), signal)).sheets,
     staleTime: Infinity,
     retry: 1,
     structuralSharing: false,
   });
   const [selected, setSelected] = useState(0);
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
-  const sheetNames = query.data?.workbook.SheetNames ?? [];
-  const sheetName = sheetNames[selected] ?? sheetNames[0];
-  const sheet = useMemo(
-    () => (query.data && sheetName ? readSheet(query.data.xlsx, query.data.workbook, sheetName) : null),
-    [query.data, sheetName],
-  );
+  const sheets = query.data ?? [];
+  const sheetNames = sheets.map((entry) => entry.name);
+  const sheet = sheets[selected] ?? sheets[0] ?? null;
+  const sheetName = sheet?.name;
   if (query.isError) return <PreviewMessage file={file} message={`Could not read this spreadsheet: ${(query.error as Error).message}`} />;
   if (!query.data || !sheet) return <PreviewMessage file={file} loading message="Loading spreadsheet…" />;
-  const hidden = query.data.workbook.Workbook?.Sheets?.map((entry) => Boolean(entry.Hidden)) ?? [];
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
     if (!step && event.key !== "Home" && event.key !== "End") return;
@@ -134,7 +105,7 @@ function SpreadsheetTable({ file }: ViewerProps) {
               index === selected ? "bg-accent-soft text-accent" : "text-ink-2 hover:bg-bg-3 hover:text-ink",
             )}
           >
-            {name}{hidden[index] ? " (hidden)" : ""}
+            {name}{sheets[index]?.hidden ? " (hidden)" : ""}
           </button>
         ))}
       </div>

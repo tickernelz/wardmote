@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { HtmlArtifactPreview } from "@/components/HtmlArtifactPreview";
 import { PREVIEW_LIMITS } from "@/lib/attachment-preview";
 import { readBytes } from "@/lib/attachment-preview-readers";
+import { runOfficeJob } from "./office-jobs";
 import { PreviewMessage } from "./PreviewMessage";
 import type { ViewerProps } from "./types";
 
@@ -19,12 +20,7 @@ h1,h2,h3{line-height:1.25}
 export default function DocxViewer({ file }: ViewerProps) {
   const query = useQuery({
     queryKey: ["public-share-preview", "docx", file.url],
-    queryFn: async ({ signal }) => {
-      const [mammoth, bytes] = await Promise.all([import("mammoth"), readBytes(file.url, PREVIEW_LIMITS.docxBytes, signal)]);
-      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-      const result = await mammoth.convertToHtml({ arrayBuffer: buffer });
-      return result.value;
-    },
+    queryFn: async ({ signal }) => (await runOfficeJob("docx", await readBytes(file.url, PREVIEW_LIMITS.docxBytes, signal), signal)).html,
     staleTime: Infinity,
     retry: 1,
   });

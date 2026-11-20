@@ -1,14 +1,14 @@
 import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { strFromU8, unzipSync } from "fflate";
+import { strFromU8 } from "fflate";
 import { PREVIEW_LIMITS } from "@/lib/attachment-preview";
 import { readBytes } from "@/lib/attachment-preview-readers";
+import { runOfficeJob } from "./office-jobs";
 import { PreviewMessage } from "./PreviewMessage";
 import type { ViewerProps } from "./types";
 
 const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const RELATIONSHIP_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-const MAX_ENTRY_BYTES = 40 * 1024 * 1024;
 const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp" };
 
 type SlideBlock =
@@ -73,16 +73,7 @@ function readSlide(files: Record<string, Uint8Array>, path: string, number: numb
 }
 
 /** Pulls slide text and raster pictures out of a .pptx, in presentation order. */
-function readPresentation(bytes: Uint8Array): Slide[] {
-  let total = 0;
-  const files = unzipSync(bytes, {
-    filter: (entry) => {
-      if (!entry.name.startsWith("ppt/") || entry.originalSize > MAX_ENTRY_BYTES) return false;
-      total += entry.originalSize;
-      if (total > PREVIEW_LIMITS.pptxBytes * 4) throw new Error("This presentation expands to too much data to preview.");
-      return true;
-    },
-  });
+function readPresentation(files: Record<string, Uint8Array>): Slide[] {
   const presentation = parseXml(files["ppt/presentation.xml"]);
   if (!presentation) throw new Error("This file isn't a PowerPoint presentation.");
   const rels = relationships(files, "ppt/presentation.xml");
@@ -101,7 +92,7 @@ function SlideImage({ block }: { block: Extract<SlideBlock, { kind: "image" }> }
 export default function PptxViewer({ file }: ViewerProps) {
   const query = useQuery({
     queryKey: ["public-share-preview", "pptx", file.url],
-    queryFn: async ({ signal }) => readPresentation(await readBytes(file.url, PREVIEW_LIMITS.pptxBytes, signal)),
+    queryFn: async ({ signal }) => readPresentation((await runOfficeJob("pptx", await readBytes(file.url, PREVIEW_LIMITS.pptxBytes, signal), signal)).files),
     staleTime: Infinity,
     retry: 1,
     structuralSharing: false,
