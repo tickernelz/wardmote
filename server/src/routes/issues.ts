@@ -369,6 +369,7 @@ import {
   authorizationDeniedDetails,
   issueReadSqlCondition,
   projectReadSqlCondition,
+  taskBridgeScopeIds,
 } from "../services/authorization.js";
 import { stalledReviewDecisionService } from "../services/stalled-review-decisions.js";
 import { environmentService } from "../services/environments.js";
@@ -3848,6 +3849,7 @@ export function issueRoutes(
     kind: CrossIssueInfluenceKind,
   ) {
     if (req.actor.type !== "agent" || isCompanyOwnerAgentActor(req)) return true;
+    if (!req.actor.runId && kind === "comment" && (await taskBridgeKeyMayCommentOn(req, issue))) return true;
     if (!req.actor.agentId || !req.actor.runId)
       throw crossIssueInfluenceRunContextError();
 
@@ -5247,6 +5249,25 @@ export function issueRoutes(
     return (
       req.actor.type === "agent" && req.actor.keyScope?.kind === "skill_test"
     );
+  }
+
+  async function taskBridgeKeyMayCommentOn(req: Request, issue: { id: string; companyId: string }) {
+    if (!isTaskBridgeKeyActor(req)) return false;
+    const decision = await access.decide({
+      actor: req.actor,
+      action: "issue:comment",
+      resource: { type: "issue", companyId: issue.companyId, issueId: issue.id },
+    });
+    return decision.allowed;
+  }
+
+  function taskBridgeKeyActivityDetails(req: Request) {
+    return isTaskBridgeKeyActor(req) && req.actor.keyId ? { taskBridgeKeyId: req.actor.keyId } : {};
+  }
+
+  function taskBridgeScopeNamesProject(req: Request, projectId: string) {
+    if (!isTaskBridgeKeyActor(req) || req.actor.keyScope?.kind !== "task_bridge") return false;
+    return taskBridgeScopeIds(req.actor.keyScope, "projectId", "projectIds").includes(projectId);
   }
 
   function taskBridgeOriginForActor(req: Request) {
@@ -7009,6 +7030,7 @@ export function issueRoutes(
           identifier: ancestor.identifier,
           issueTitle: ancestor.title,
           source: "comment.ancestor_handoff",
+          ...taskBridgeKeyActivityDetails(req),
           sourceIssueId: source.id,
           sourceCommentId: comment.id,
         },
@@ -13266,14 +13288,15 @@ export function issueRoutes(
     }
     if (createBody.projectId) {
       const selectedProject = await projectsSvc.getById(createBody.projectId);
-      const projectDecision = selectedProject && selectedProject.companyId === companyId
-        ? await access.decide({
+      const projectAllowed = selectedProject?.companyId === companyId && (
+        taskBridgeScopeNamesProject(req, selectedProject.id) ||
+        (await access.decide({
           actor: req.actor,
           action: "project:read",
           resource: { type: "project", companyId, projectId: selectedProject.id },
-        })
-        : null;
-      if (!projectDecision?.allowed) {
+        })).allowed
+      );
+      if (!projectAllowed) {
         res.status(422).json({
           error: `Project ${createBody.projectId} was not found in this company. Use wardmoteListProjects to get the exact id.`,
           code: "project_not_found",
@@ -16561,6 +16584,7 @@ export function issueRoutes(
             identifier: issue.identifier,
             issueTitle: issue.title,
             authorizationReason: issueMutationAuthorizationReason,
+            ...taskBridgeKeyActivityDetails(req),
             ...(resumeRequested === true
               ? { resumeIntent: true, followUpRequested: true }
               : {}),
@@ -21152,6 +21176,7 @@ export function issueRoutes(
           identifier: currentIssue.identifier,
           issueTitle: currentIssue.title,
           authorizationReason: commentAuthorizationReason,
+          ...taskBridgeKeyActivityDetails(req),
           ...(isDirectParentReportDecision(commentAccessDecision)
             ? { directParentReportGrant: true }
             : {}),
