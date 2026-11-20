@@ -513,7 +513,11 @@ describeEmbeddedPostgres("public issue share links", () => {
     expect(view.workProducts).toEqual(expect.arrayContaining([
       expect.objectContaining({ title: "Preview", url: "https://preview.example.test/app", downloadUrl: null }),
       expect.objectContaining({ title: "Branch", url: null }),
-      expect.objectContaining({ title: "Report", downloadUrl: `/api/public/share/${token}/assets/${seeded.files.issueFile.assetId}/content` }),
+      expect.objectContaining({
+        title: "Report",
+        downloadUrl: `/api/public/share/${token}/assets/${seeded.files.issueFile.assetId}/content`,
+        file: { filename: "brief.txt", contentType: "text/plain", byteSize: 5 },
+      }),
     ]));
     const raw = JSON.stringify(view);
     for (const secret of ["PRIVATE_HUMAN_BODY", "SYSTEM_BODY", "NOTICE_BODY", "DELETED_BODY", "TRANSCRIPT_SECRET", "RESULT_SECRET", "SECRET_ADAPTER", "WP_META", "private.txt", "Private report", "orphan.txt", "Orphan report", "CANCELLED_BODY"]) {

@@ -22,23 +22,12 @@ import {
 import { Navigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Attachment,
-  AttachmentContent,
-  AttachmentDescription,
-  AttachmentMedia,
-  AttachmentTitle,
-  AttachmentTrigger,
-} from "@/components/ui/attachment";
+import { AttachmentEmbed, contentDownloadUrl } from "@/components/attachment-preview/AttachmentEmbed";
 import { CompanyPatternIcon } from "@/components/CompanyPatternIcon";
 import { Identity } from "@/components/Identity";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { IssueStatusBadge } from "@/components/StatusBadge";
 import { PriorityIcon } from "@/components/PriorityIcon";
-import {
-  fileKindForAttachment,
-  formatFileSize,
-} from "@/components/task-chat/task-chat-attachments";
 import { issueShareApi, type PublicShareState } from "../api/issue-share";
 import { usePublicShareLive } from "../hooks/usePublicShareLive";
 import { queryKeys } from "../lib/queryKeys";
@@ -126,34 +115,20 @@ function ActiveRunPill({ agentName }: { agentName: string }) {
 
 function AttachmentList({ attachments }: { attachments: PublicShareAttachment[] }) {
   return (
-    <ul className="grid gap-2 sm:grid-cols-2">
-      {attachments.map((attachment) => {
-        const kind = fileKindForAttachment({
-          name: attachment.filename,
-          url: attachment.url,
-          contentType: attachment.contentType,
-          byteSize: attachment.byteSize,
-        });
-        const KindIcon = kind.icon;
-        const size = formatFileSize(attachment.byteSize);
-        return (
-          <li key={attachment.id} className="min-w-0">
-            <Attachment size="sm" className="w-full rounded-md focus-within:ring-2 focus-within:ring-focus">
-              <AttachmentMedia>
-                <KindIcon aria-hidden />
-              </AttachmentMedia>
-              <AttachmentContent className="min-w-0 flex-1">
-                <AttachmentTitle>{attachment.filename}</AttachmentTitle>
-                <AttachmentDescription>{size ? `${kind.label} · ${size}` : kind.label}</AttachmentDescription>
-              </AttachmentContent>
-              <AttachmentTrigger
-                aria-label={`Download ${attachment.filename}`}
-                render={<a href={attachment.url} download={attachment.filename} rel="noreferrer" />}
-              />
-            </Attachment>
-          </li>
-        );
-      })}
+    <ul className="grid gap-3">
+      {attachments.map((attachment) => (
+        <li key={attachment.id} className="min-w-0">
+          <AttachmentEmbed
+            file={{
+              filename: attachment.filename,
+              contentType: attachment.contentType,
+              byteSize: attachment.byteSize,
+              url: attachment.url,
+              downloadUrl: contentDownloadUrl(attachment.url),
+            }}
+          />
+        </li>
+      ))}
     </ul>
   );
 }
@@ -221,32 +196,38 @@ function DocumentCard({ document, resolveImageSrc }: { document: PublicShareDocu
 }
 
 function WorkProductRow({ product }: { product: PublicShareWorkProduct }) {
+  const file = product.downloadUrl && product.file
+    ? { ...product.file, url: product.downloadUrl, downloadUrl: contentDownloadUrl(product.downloadUrl) }
+    : null;
   return (
-    <li className="flex flex-col gap-2 rounded-lg border border-line bg-bg-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
-      <div className="min-w-0 flex-1">
-        <p className="break-words text-(length:--t-14) font-medium">{product.title}</p>
-        <p className="text-(length:--t-12) text-ink-3">
-          {humanize(product.type)} · {humanize(product.status)}
-        </p>
-      </div>
-      {product.url || product.downloadUrl ? (
-        <div className="flex flex-wrap gap-x-4 gap-y-1">
-          {product.url ? (
-            <a href={product.url} target="_blank" rel="noopener noreferrer" className={ACTION_LINK}>
-              <ExternalLink className="size-4" aria-hidden />
-              Open
-              <span className="sr-only">{` ${product.title}, opens in a new tab`}</span>
-            </a>
-          ) : null}
-          {product.downloadUrl ? (
-            <a href={product.downloadUrl} download rel="noreferrer" className={ACTION_LINK}>
-              <Download className="size-4" aria-hidden />
-              Download
-              <span className="sr-only">{` ${product.title}`}</span>
-            </a>
-          ) : null}
+    <li className="flex flex-col gap-3 rounded-lg border border-line bg-bg-2 px-4 py-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+        <div className="min-w-0 flex-1">
+          <p className="break-words text-(length:--t-14) font-medium">{product.title}</p>
+          <p className="text-(length:--t-12) text-ink-3">
+            {humanize(product.type)} · {humanize(product.status)}
+          </p>
         </div>
-      ) : null}
+        {product.url || (product.downloadUrl && !file) ? (
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {product.url ? (
+              <a href={product.url} target="_blank" rel="noopener noreferrer" className={ACTION_LINK}>
+                <ExternalLink className="size-4" aria-hidden />
+                Open
+                <span className="sr-only">{` ${product.title}, opens in a new tab`}</span>
+              </a>
+            ) : null}
+            {product.downloadUrl && !file ? (
+              <a href={product.downloadUrl} download rel="noreferrer" className={ACTION_LINK}>
+                <Download className="size-4" aria-hidden />
+                Download
+                <span className="sr-only">{` ${product.title}`}</span>
+              </a>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {file ? <AttachmentEmbed file={file} /> : null}
     </li>
   );
 }
@@ -335,7 +316,7 @@ function PublicIssueShareContent({ view, token }: { view: PublicIssueShareView; 
           {view.activeRun ? <ActiveRunPill agentName={view.activeRun.agentName} /> : null}
         </div>
         <div className="grid gap-8 lg:grid-cols-3 lg:gap-10">
-          <aside aria-label="Task details" className="lg:order-last">
+          <aside aria-label="Task details" className="lg:order-last lg:[overflow-anchor:none]">
             <dl className="grid grid-cols-2 gap-x-4 gap-y-4 rounded-lg border border-line bg-bg-2 p-4 sm:grid-cols-3 lg:sticky lg:top-6 lg:grid-cols-1">
               <Property label="Status">
                 <IssueStatusBadge status={issue.status} />

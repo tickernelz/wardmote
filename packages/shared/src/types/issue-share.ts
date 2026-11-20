@@ -51,6 +51,12 @@ export interface PublicShareDocument {
   pdfUrl: string;
 }
 
+export interface PublicShareWorkProductFile {
+  filename: string;
+  contentType: string;
+  byteSize: number;
+}
+
 export interface PublicShareWorkProduct {
   id: string;
   type: string;
@@ -58,6 +64,7 @@ export interface PublicShareWorkProduct {
   status: string;
   url: string | null;
   downloadUrl: string | null;
+  file: PublicShareWorkProductFile | null;
 }
 
 export interface PublicIssueShareView {

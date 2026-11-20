@@ -447,6 +447,9 @@ export function issueShareLinkService(db: Db) {
         status: product.status,
         url: httpUrl(product.url),
         downloadUrl: backing ? sharePath(token, `/assets/${backing.assetId}/content`) : null,
+        file: backing
+          ? { filename: backing.originalFilename ?? product.title, contentType: backing.contentType, byteSize: backing.byteSize }
+          : null,
       }];
     });
 
