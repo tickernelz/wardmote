@@ -751,7 +751,12 @@ may wake the target assignee, including an explicit `resume: true` comment on a
 the normal agent rewake throttle; comment presentation cannot give it human
 wake privileges. Agent issue comments and updates require a persisted heartbeat
 run bound to the authenticated agent and company; missing, invalid, or mismatched
-run context fails closed before mutation. A run may attempt at most 20 cross-issue comments, issue
+run context fails closed before mutation. The one exception is a `task_bridge` key, which never
+has a heartbeat run: it may comment on and update, without run context, only an issue its own
+scope boundary allows (created by that key or assigned to its agent); the activity is attributed
+to the bridge agent and its key's responsible user, and every other write by that key still needs
+run context. A `task_bridge` key may also create an issue directly in a project its scope names,
+without `project:read`. A run may attempt at most 20 cross-issue comments, issue
 updates, or issue-thread interaction resolutions across one shared counter. The
 server records each attempt with its source issue, target issue, run, count, and
 rollout mode, and fails closed with the cap in the error once enforcement is

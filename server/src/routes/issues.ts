@@ -3848,6 +3848,7 @@ export function issueRoutes(
     kind: CrossIssueInfluenceKind,
   ) {
     if (req.actor.type !== "agent" || isCompanyOwnerAgentActor(req)) return true;
+    if (!req.actor.runId && (await taskBridgeKeyOwnsIssue(req, issue, kind))) return true;
     if (!req.actor.agentId || !req.actor.runId)
       throw crossIssueInfluenceRunContextError();
 
@@ -5247,6 +5248,26 @@ export function issueRoutes(
     return (
       req.actor.type === "agent" && req.actor.keyScope?.kind === "skill_test"
     );
+  }
+
+  async function taskBridgeKeyOwnsIssue(
+    req: Request,
+    issue: { id: string; companyId: string },
+    kind: CrossIssueInfluenceKind,
+  ) {
+    if (!isTaskBridgeKeyActor(req) || (kind !== "comment" && kind !== "update")) return false;
+    const decision = await access.decide({
+      actor: req.actor,
+      action: kind === "comment" ? "issue:comment" : "issue:mutate",
+      resource: { type: "issue", companyId: issue.companyId, issueId: issue.id },
+    });
+    return decision.allowed;
+  }
+
+  function taskBridgeScopeNamesProject(req: Request, projectId: string) {
+    if (!isTaskBridgeKeyActor(req) || req.actor.keyScope?.kind !== "task_bridge") return false;
+    const scope = req.actor.keyScope;
+    return scope.projectId === projectId || (scope.projectIds ?? []).includes(projectId);
   }
 
   function taskBridgeOriginForActor(req: Request) {
@@ -13266,14 +13287,15 @@ export function issueRoutes(
     }
     if (createBody.projectId) {
       const selectedProject = await projectsSvc.getById(createBody.projectId);
-      const projectDecision = selectedProject && selectedProject.companyId === companyId
-        ? await access.decide({
+      const projectAllowed = selectedProject?.companyId === companyId && (
+        taskBridgeScopeNamesProject(req, selectedProject.id) ||
+        (await access.decide({
           actor: req.actor,
           action: "project:read",
           resource: { type: "project", companyId, projectId: selectedProject.id },
-        })
-        : null;
-      if (!projectDecision?.allowed) {
+        })).allowed
+      );
+      if (!projectAllowed) {
         res.status(422).json({
           error: `Project ${createBody.projectId} was not found in this company. Use wardmoteListProjects to get the exact id.`,
           code: "project_not_found",
