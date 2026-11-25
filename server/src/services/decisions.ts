@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, count, desc, eq, gt, gte, inArray, lte, or, sql } from "drizzle-orm";
 import type { Db } from "@tickernelz/wardmote-db";
-import { companyMemberships, decisionBundles, decisionEffectExecutions, decisionRetention, decisions, decisionTargetIssues, heartbeatRuns, issueRelations, issues } from "@tickernelz/wardmote-db";
+import { agents, companyMemberships, decisionBundles, decisionEffectExecutions, decisionRetention, decisions, decisionTargetIssues, heartbeatRuns, issueRelations, issues } from "@tickernelz/wardmote-db";
 import { ATTENTION_SOURCE_KINDS, decisionEffectTargetIssueIds } from "@tickernelz/wardmote-shared";
 import type { AttentionArchiveManifestEntry, DecisionEffect, DecisionInput, DecisionOption, DecisionStatsCounts, DecisionStatsResponse } from "@tickernelz/wardmote-shared";
 import { conflict, forbidden, notFound, tooManyRequests, unprocessable } from "../errors.js";
@@ -740,9 +740,19 @@ export function decisionService(db: Db, options: DecisionServiceOptions) {
     return resumeDecision(claimed, input.userActor);
   }
 
+  async function isCompanyCeoAgent(companyId: string, agentId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ role: agents.role, status: agents.status })
+      .from(agents)
+      .where(and(eq(agents.companyId, companyId), eq(agents.id, agentId)))
+      .limit(1);
+    return row?.role === "ceo" && row.status !== "terminated";
+  }
+
   async function cancel(id: string, actor: { actorType: "agent" | "user"; actorId: string; runId?: string | null }) {
     const current = await get(id); if (!current) throw notFound("Decision not found");
-    if (actor.actorType === "agent" && actor.actorId !== current.originAgentId) throw forbidden("Only the origin agent may cancel");
+    if (actor.actorType === "agent" && actor.actorId !== current.originAgentId && !(await isCompanyCeoAgent(current.companyId, actor.actorId)))
+      throw forbidden("Only the origin agent or a CEO agent may cancel");
     if (current.status === "cancelled") {
       await deliverContinuation(current, "cancelled");
       return (await get(id))!;

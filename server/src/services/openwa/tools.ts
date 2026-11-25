@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import {
+  agents,
   assets,
   chatActions,
   chatConversations,
@@ -256,7 +257,51 @@ interface ConversationBinding {
   status: string;
 }
 
-async function findOpenwaConversation(db: Db, companyId: string, issueId: string): Promise<ConversationBinding | null> {
+/** The owner's direct chat of the OpenWA endpoint assigned to a CEO agent, used as the home chat of its runs on tasks outside any WhatsApp conversation. */
+async function ceoHomeConversation(db: Db, companyId: string, agentId: string): Promise<ConversationBinding | null> {
+  const [agent] = await db
+    .select({ role: agents.role })
+    .from(agents)
+    .where(and(eq(agents.companyId, companyId), eq(agents.id, agentId)))
+    .limit(1);
+  if (agent?.role !== "ceo") return null;
+  const endpoints = await db
+    .select({ id: chatEndpoints.id, companyId: chatEndpoints.companyId, connectionId: chatEndpoints.connectionId, status: chatEndpoints.status })
+    .from(chatEndpoints)
+    .where(and(eq(chatEndpoints.companyId, companyId), eq(chatEndpoints.assignedAgentId, agentId), eq(chatEndpoints.provider, "openwa")))
+    .orderBy(chatEndpoints.createdAt);
+  const endpoint = endpoints.find((row) => USABLE_ENDPOINT_STATUSES.has(row.status));
+  if (!endpoint || !endpoint.connectionId) return null;
+  const ownerKeys = new Set((await openwaCurrentOwners(db, endpoint)).flatMap((owner) => owner.jids.map(openwaChatKey)));
+  if (ownerKeys.size === 0) return null;
+  const conversations = await db
+    .select({
+      id: chatConversations.id,
+      issueId: chatConversations.issueId,
+      externalThreadId: chatConversations.externalThreadId,
+      externalConversationId: chatConversations.externalConversationId,
+    })
+    .from(chatConversations)
+    .where(and(
+      eq(chatConversations.companyId, companyId),
+      eq(chatConversations.endpointId, endpoint.id),
+      eq(chatConversations.isDirectMessage, true),
+    ))
+    .orderBy(desc(chatConversations.updatedAt));
+  const home = conversations.find((row) =>
+    row.issueId && ownerKeys.has(openwaChatKey(parseOpenwaThreadId(row.externalThreadId || row.externalConversationId).chatId)));
+  if (!home?.issueId) return null;
+  return {
+    conversationId: home.id,
+    conversationIssueId: home.issueId,
+    endpointId: endpoint.id,
+    connectionId: endpoint.connectionId,
+    assignedAgentId: agentId,
+    status: endpoint.status,
+  };
+}
+
+async function findOpenwaConversation(db: Db, companyId: string, issueId: string, agentId?: string): Promise<ConversationBinding | null> {
   const rows = (await db.execute(sql`
     with recursive chain(id, parent_id, depth) as (
       select id, parent_id, 0 from issues where company_id = ${companyId} and id = ${issueId}
@@ -274,7 +319,7 @@ async function findOpenwaConversation(db: Db, companyId: string, issueId: string
     limit 1
   `)) as unknown as Array<Record<string, unknown>>;
   const row = rows[0];
-  if (!row) return null;
+  if (!row) return agentId ? ceoHomeConversation(db, companyId, agentId) : null;
   return {
     conversationId: String(row.conversation_id),
     conversationIssueId: String(row.conversation_issue_id),
@@ -295,7 +340,7 @@ export async function openwaAssignedResource(
 ): Promise<Array<{ id: string; label: string; connectionId: string }>> {
   if (!binding.runId || !binding.issueId) return [];
   if (!(await chatConnectorsEnabled(db))) return [];
-  const found = await findOpenwaConversation(db, binding.companyId, binding.issueId);
+  const found = await findOpenwaConversation(db, binding.companyId, binding.issueId, binding.agentId);
   if (!found || found.assignedAgentId !== binding.agentId || !USABLE_ENDPOINT_STATUSES.has(found.status)) return [];
   return [{ id: found.endpointId, label: "OpenWA", connectionId: found.connectionId }];
 }
@@ -365,7 +410,7 @@ async function resolveContext(db: Db, binding: OpenwaToolBinding): Promise<ToolC
   if (!run || !ACTIVE_RUN_STATUSES.has(run.status)) throw forbidden("OpenWA tools require the agent's active run");
   const snapshot = record(run.contextSnapshot);
   if ((str(snapshot.issueId) ?? str(snapshot.taskId)) !== binding.issueId) throw forbidden("OpenWA tools require the run's own task");
-  const found = await findOpenwaConversation(db, binding.companyId, binding.issueId);
+  const found = await findOpenwaConversation(db, binding.companyId, binding.issueId, binding.agentId);
   if (!found || found.assignedAgentId !== binding.agentId || !USABLE_ENDPOINT_STATUSES.has(found.status))
     throw forbidden("This connector is no longer assigned or authorized");
   const [[endpoint], [conversation]] = await Promise.all([

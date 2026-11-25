@@ -461,6 +461,23 @@ describePg("decisionService", () => {
     expect(wakes).toEqual([{ companyId, agentId, issueId: originIssueId, decisionId: created.id, outcome: "cancelled" }]);
   });
 
+  it("lets a CEO agent of the company cancel another agent's decision, and refuses any other agent", async () => {
+    const engineerId = randomUUID();
+    const ceoId = randomUUID();
+    await db.insert(agents).values([
+      { id: engineerId, companyId, name: "Peer", role: "engineer", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+      { id: ceoId, companyId, name: "Chief", role: "ceo", status: "active", adapterType: "codex_local", adapterConfig: {}, runtimeConfig: {}, permissions: {} },
+    ]);
+    const created = await createCommentDecision();
+
+    await expect(service().cancel(created.id, { actorType: "agent", actorId: engineerId })).rejects.toThrow("Only the origin agent or a CEO agent may cancel");
+    expect((await service().get(created.id))?.status).toBe("open");
+
+    const cancelled = await service().cancel(created.id, { actorType: "agent", actorId: ceoId });
+    expect(cancelled.status).toBe("cancelled");
+    expect(wakes).toEqual([{ companyId, agentId, issueId: originIssueId, decisionId: created.id, outcome: "cancelled" }]);
+  });
+
   it("adds open decisions to the attention feed and badge count", async () => {
     const created = await createCommentDecision();
     const feed = await attentionService(db).list(companyId, { userId: decidedByUserId });
