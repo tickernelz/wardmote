@@ -1469,45 +1469,62 @@ describe("OpenWA agent tools (embedded Postgres + fake gateway)", () => {
     expect(await resolveConnectorAssignments(db, binding)).toEqual([]);
   });
 
-  it("gives a CEO agent its OpenWA tools on tasks outside any WhatsApp conversation, anchored on the owner's DM, and nobody else", async () => {
+  it("gives a CEO agent its OpenWA tools on tasks outside any WhatsApp conversation, anchored on the requester's own owner DM, and nobody else", async () => {
     const t = await setup();
     const [endpoint] = await db.select().from(chatEndpoints).where(eq(chatEndpoints.id, t.endpointId));
-    const [principal] = await db
-      .insert(chatExternalPrincipals)
-      .values({ companyId: t.companyId, provider: "openwa", providerAccountId: endpoint!.providerAccountId!, externalId: OTHER })
-      .returning();
-    const [link] = await db
-      .insert(chatIdentityLinks)
-      .values({ companyId: t.companyId, endpointId: t.endpointId, principalId: principal!.id, wardmoteUserId: t.userId, status: "linked" })
-      .returning();
-    await db.insert(chatEndpointOwners).values({ companyId: t.companyId, endpointId: t.endpointId, identityLinkId: link!.id, addedByUserId: t.userId });
-    await conversation(t, MEMBER);
-    const ownerDm = await conversation(t, OTHER);
+    const ownerBId = randomUUID();
+    const memberId = randomUUID();
+    for (const id of [ownerBId, memberId]) {
+      await db.insert(authUsers).values({ id, name: id.slice(0, 6), email: id + "@example.com", emailVerified: true, createdAt: new Date(), updatedAt: new Date() });
+      await db.insert(companyMemberships).values({ companyId: t.companyId, principalType: "user", principalId: id, status: "active", membershipRole: "operator" });
+    }
+    for (const [jid, userId] of [[OTHER, t.userId], [MEMBER, ownerBId]] as const) {
+      const [principal] = await db
+        .insert(chatExternalPrincipals)
+        .values({ companyId: t.companyId, provider: "openwa", providerAccountId: endpoint!.providerAccountId!, externalId: jid })
+        .returning();
+      const [link] = await db
+        .insert(chatIdentityLinks)
+        .values({ companyId: t.companyId, endpointId: t.endpointId, principalId: principal!.id, wardmoteUserId: userId, status: "linked" })
+        .returning();
+      await db.insert(chatEndpointOwners).values({ companyId: t.companyId, endpointId: t.endpointId, identityLinkId: link!.id, addedByUserId: t.userId });
+    }
+    const ownerBDm = await conversation(t, MEMBER);
+    const ownerADm = await conversation(t, OTHER);
+    await db.update(chatConversations).set({ updatedAt: new Date(Date.now() + 60_000) }).where(eq(chatConversations.id, ownerADm.id));
     const [routine] = await db.insert(issues).values({ companyId: t.companyId, title: "Routine report", status: "todo", assigneeAgentId: t.agentId, originKind: "routine_execution" }).returning();
-    const runId = randomUUID();
-    await db.insert(heartbeatRuns).values({
-      id: runId, companyId: t.companyId, agentId: t.agentId, status: "running", startedAt: new Date(Date.now() - 30_000),
-      contextSnapshot: { issueId: routine!.id, wardmoteToolProfile: "full" },
-    });
-    const binding = { companyId: t.companyId, agentId: t.agentId, runId, issueId: routine!.id };
+    const runAs = async (responsibleUserId: string | null) => {
+      const runId = randomUUID();
+      await db.insert(heartbeatRuns).values({
+        id: runId, companyId: t.companyId, agentId: t.agentId, status: "running", startedAt: new Date(Date.now() - 30_000),
+        responsibleUserId, contextSnapshot: { issueId: routine!.id, wardmoteToolProfile: "full" },
+      });
+      return { companyId: t.companyId, agentId: t.agentId, runId, issueId: routine!.id };
+    };
+    const ownerA = await runAs(t.userId);
+    const ownerB = await runAs(ownerBId);
+    const nonOwner = await runAs(memberId);
+    const unattributed = await runAs(null);
 
-    expect(await resolveConnectorAssignments(db, binding)).toEqual([]);
-    await expect(executeConnectorTool(db, binding, "openwa_read_chat", {})).rejects.toMatchObject({ status: 403 });
+    expect(await resolveConnectorAssignments(db, ownerA)).toEqual([]);
+    await expect(executeConnectorTool(db, ownerA, "openwa_read_chat", {})).rejects.toMatchObject({ status: 403 });
 
     await db.update(agents).set({ role: "ceo" }).where(eq(agents.id, t.agentId));
-    expect((await resolveConnectorAssignments(db, binding)).map((assignment) => assignment.key)).toEqual(["openwa"]);
-    await expect(executeConnectorTool(db, binding, "openwa_read_chat", {})).resolves.toMatchObject({ chatRef: ownerDm.chatRef });
-    await expect(executeConnectorTool(db, binding, "openwa_send", { chat: GROUP, text: "weekly report", idempotencyKey: randomUUID() })).resolves.toMatchObject({ state: "delivered" });
-    await expect(executeConnectorTool(db, binding, "openwa_stay_silent", {})).rejects.toMatchObject({ status: 403 });
+    expect((await resolveConnectorAssignments(db, ownerA)).map((assignment) => assignment.key)).toEqual(["openwa"]);
+    await expect(executeConnectorTool(db, ownerA, "openwa_read_chat", {})).resolves.toMatchObject({ chatRef: ownerADm.chatRef });
+    await expect(executeConnectorTool(db, ownerB, "openwa_read_chat", {})).resolves.toMatchObject({ chatRef: ownerBDm.chatRef });
+    await expect(executeConnectorTool(db, ownerB, "openwa_send", { chat: GROUP, text: "weekly report", idempotencyKey: randomUUID() })).resolves.toMatchObject({ state: "delivered" });
+    await expect(executeConnectorTool(db, ownerB, "openwa_stay_silent", {})).rejects.toMatchObject({ status: 403 });
+
+    expect(await resolveConnectorAssignments(db, nonOwner)).toEqual([]);
+    await expect(executeConnectorTool(db, nonOwner, "openwa_read_chat", {})).rejects.toMatchObject({ status: 403 });
+    expect(await resolveConnectorAssignments(db, unattributed)).toEqual([]);
+    await expect(executeConnectorTool(db, unattributed, "openwa_read_chat", {})).rejects.toMatchObject({ status: 403 });
 
     const otherAgentId = randomUUID();
     await db.insert(agents).values({ id: otherAgentId, companyId: t.companyId, name: "Other CEO", role: "ceo", status: "idle", adapterType: "wardmote_runner", adapterConfig: {}, runtimeConfig: {}, permissions: {} });
-    expect(await resolveConnectorAssignments(db, { ...binding, agentId: otherAgentId })).toEqual([]);
-
-    await db.delete(chatEndpointOwners).where(eq(chatEndpointOwners.endpointId, t.endpointId));
-    expect(await resolveConnectorAssignments(db, binding)).toEqual([]);
+    expect(await resolveConnectorAssignments(db, { ...ownerA, agentId: otherAgentId })).toEqual([]);
   });
-
   it("adds the openwa MCP toolset per run on the server side", async () => {
     const t = await setup();
     const c = await conversation(t, MEMBER);

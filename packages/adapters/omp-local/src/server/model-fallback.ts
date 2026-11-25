@@ -1,4 +1,5 @@
 import type { AdapterRuntimeEvent } from "@tickernelz/wardmote-adapter-utils";
+import { OMP_MODEL_PROBATION_KEY } from "@tickernelz/wardmote-shared";
 import { classifyFallbackError, type OmpFallbackErrorKind, type OmpFallbackReason } from "./failure.js";
 
 const THINKING_SUFFIX_RE = /:(?:auto|off|minimal|low|medium|high|xhigh|max)$/i;
@@ -55,7 +56,6 @@ export function ompFallbackChain(config: Record<string, unknown>): { key: string
   return chain.length > 0 ? { key, chain } : null;
 }
 
-export const OMP_MODEL_PROBATION_KEY = "modelProbation";
 const HOLD_ATTEMPTS = 2;
 const PROBATION_HOLD_ATTEMPTS = 3;
 const HOLD_MS = 10 * 60_000;

@@ -139,6 +139,12 @@ function installFallbackHold(pi) {
     holdChain(ctx.modelRegistry);
   });
 
+  pi.on("auto_retry_end", (event, ctx) => {
+    if (event.success) return;
+    failures = 0;
+    releaseChain(ctx.modelRegistry);
+  });
+
   pi.on("retry_fallback_applied", (event, ctx) => {
     const to = bareSelector(event.to);
     if (!HOLD.selectors.includes(to)) return;

@@ -740,18 +740,19 @@ export function decisionService(db: Db, options: DecisionServiceOptions) {
     return resumeDecision(claimed, input.userActor);
   }
 
-  async function isCompanyCeoAgent(companyId: string, agentId: string): Promise<boolean> {
+  async function agentMayManage(decision: { companyId: string; originAgentId: string }, agentId: string): Promise<boolean> {
+    if (agentId === decision.originAgentId) return true;
     const [row] = await db
       .select({ role: agents.role, status: agents.status })
       .from(agents)
-      .where(and(eq(agents.companyId, companyId), eq(agents.id, agentId)))
+      .where(and(eq(agents.companyId, decision.companyId), eq(agents.id, agentId)))
       .limit(1);
     return row?.role === "ceo" && row.status !== "terminated";
   }
 
   async function cancel(id: string, actor: { actorType: "agent" | "user"; actorId: string; runId?: string | null }) {
     const current = await get(id); if (!current) throw notFound("Decision not found");
-    if (actor.actorType === "agent" && actor.actorId !== current.originAgentId && !(await isCompanyCeoAgent(current.companyId, actor.actorId)))
+    if (actor.actorType === "agent" && !(await agentMayManage(current, actor.actorId)))
       throw forbidden("Only the origin agent or a CEO agent may cancel");
     if (current.status === "cancelled") {
       await deliverContinuation(current, "cancelled");
@@ -853,5 +854,5 @@ export function decisionService(db: Db, options: DecisionServiceOptions) {
     return { expired, resumed };
   }
 
-  return { create, createBundle, get, list, stats, outcome, decide, cancel, dismiss, sweepExpired };
+  return { create, createBundle, get, list, stats, outcome, decide, cancel, dismiss, sweepExpired, agentMayManage };
 }

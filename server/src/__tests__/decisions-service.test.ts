@@ -473,6 +473,10 @@ describePg("decisionService", () => {
     await expect(service().cancel(created.id, { actorType: "agent", actorId: engineerId })).rejects.toThrow("Only the origin agent or a CEO agent may cancel");
     expect((await service().get(created.id))?.status).toBe("open");
 
+    expect(await service().agentMayManage(created, engineerId)).toBe(false);
+    expect(await service().agentMayManage(created, ceoId)).toBe(true);
+    expect(await service().agentMayManage(created, agentId)).toBe(true);
+
     const cancelled = await service().cancel(created.id, { actorType: "agent", actorId: ceoId });
     expect(cancelled.status).toBe("cancelled");
     expect(wakes).toEqual([{ companyId, agentId, issueId: originIssueId, decisionId: created.id, outcome: "cancelled" }]);

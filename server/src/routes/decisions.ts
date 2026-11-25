@@ -176,7 +176,10 @@ export function decisionRoutes(db: Db, options: DecisionServiceOptions) {
     assertBoardOrAgent(req);
     const decision = await getAccessibleResource(req, res, svc.get(req.params.id as string), "Decision not found");
     if (!decision) return;
-    if (req.actor.type === "agent" && req.actor.agentId !== decision.originAgentId) { res.status(403).json({ error: "Only the origin agent may read this decision" }); return; }
+    if (req.actor.type === "agent" && !(await svc.agentMayManage(decision, req.actor.agentId ?? ""))) {
+      res.status(403).json({ error: "Only the origin agent or a CEO agent may read this decision" });
+      return;
+    }
     res.json(await svc.outcome(decision.id));
   });
   router.post("/decisions/:id/decide", validate(decideSchema), async (req, res) => {

@@ -272,6 +272,18 @@ describe("OMP fallback hold", () => {
     expect(hold.held()).toEqual(["a/primary", "c/last"]);
   });
 
+  it("releases the hold when OMP gives up the retry without a switch", async () => {
+    const hold = await loadHold(dir, "gave-up", false);
+    hold.fire({ type: "turn_start" });
+    hold.failOn("a", "primary", "503 Service Unavailable");
+    expect(hold.held()).toEqual(["b/backup", "c/last"]);
+    hold.fire({ type: "auto_retry_end", success: false, attempt: 1 });
+    expect(hold.held()).toEqual([]);
+    hold.fire({ type: "auto_retry_end", success: true, attempt: 1 });
+    hold.fire({ type: "turn_start" });
+    expect(hold.held()).toEqual(["b/backup", "c/last"]);
+  });
+
   it("limits the first response only while the model on probation is active, and holds it one attempt longer", async () => {
     delete process.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
     const hold = await loadHold(dir, "probation", true);
