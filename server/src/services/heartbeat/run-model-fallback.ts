@@ -25,7 +25,20 @@ import {
   type CoolingModel,
   type ModelFallbackRetryPlan,
 } from "../model-fallback.js";
-import type { RunModelFallbackReason } from "@tickernelz/wardmote-shared";
+import type { RunModelFallbackErrorKind, RunModelFallbackReason } from "@tickernelz/wardmote-shared";
+
+const FALLBACK_ERROR_KINDS: ReadonlySet<string> = new Set<RunModelFallbackErrorKind>([
+  "no_accounts",
+  "refusal",
+  "timeout",
+  "concurrency_limit",
+  "rate_limit",
+  "upstream",
+]);
+
+function readFallbackErrorKind(value: unknown): RunModelFallbackErrorKind | null {
+  return typeof value === "string" && FALLBACK_ERROR_KINDS.has(value) ? (value as RunModelFallbackErrorKind) : null;
+}
 
 type Run = typeof heartbeatRuns.$inferSelect;
 type RunEvent = {
@@ -120,7 +133,14 @@ export function createRunModelFallback(dependencies: RunModelFallbackDependencie
   async function logRunModelFallbackActivity(
     run: Pick<Run, "id" | "companyId" | "agentId">,
     issueId: string | null,
-    details: { from: string; to: string; reason: RunModelFallbackReason; phase: "run_start" | "in_run" },
+    details: {
+      from: string;
+      to: string;
+      reason: RunModelFallbackReason;
+      phase: "run_start" | "in_run";
+      errorKind?: RunModelFallbackErrorKind | null;
+      error?: string | null;
+    },
   ) {
     if (!issueId) return;
     await logActivity(db, {
@@ -235,24 +255,25 @@ export function createRunModelFallback(dependencies: RunModelFallbackDependencie
         : "upstream";
     if (!from || !to || !primary) return;
     const now = new Date();
-    const providerRetryAfterMs = payload.retryAfterSource !== "default" &&
-      typeof payload.retryAfterMs === "number" && payload.retryAfterMs > 0
-      ? payload.retryAfterMs
-      : null;
+    const errorKind = readFallbackErrorKind(payload.errorKind);
+    const error = typeof payload.error === "string" && payload.error.trim() ? payload.error.trim().slice(0, 200) : null;
+    const reportedMs = typeof payload.retryAfterMs === "number" && payload.retryAfterMs > 0 ? payload.retryAfterMs : null;
+    const providerTimed = payload.retryAfterSource !== "default" || errorKind === "concurrency_limit";
+    const cooldownMs = providerTimed && reportedMs !== null ? reportedMs : MODEL_FALLBACK_DEFAULT_COOLDOWN_MS;
     await writeCooldown({
       companyId: run.companyId,
       selector: from,
-      until: new Date(now.getTime() + (providerRetryAfterMs ?? MODEL_FALLBACK_DEFAULT_COOLDOWN_MS)),
+      until: new Date(now.getTime() + cooldownMs),
       reason,
       sourceRunId: run.id,
-      probeAfter: providerRetryAfterMs === null ? now : null,
+      probeAfter: providerTimed && reportedMs !== null ? null : now,
     });
     await persistRunModelFallbackState(db, run.id, {
       state: to === primary
         ? null
-        : { primaryModel: primary, activeModel: to, reason, switchedAt: now.toISOString() },
+        : { primaryModel: primary, activeModel: to, reason, switchedAt: now.toISOString(), errorKind, error },
     });
-    await logRunModelFallbackActivity(run, issueId, { from, to, reason, phase: "in_run" });
+    await logRunModelFallbackActivity(run, issueId, { from, to, reason, phase: "in_run", errorKind, error });
   }
 
   async function noteModelFallbackRunFailure(run: Run) {

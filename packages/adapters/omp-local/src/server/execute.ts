@@ -84,7 +84,7 @@ import {
 import { resolveOmpModelContextWindow } from "./models.js";
 import { ensureOmpSkills } from "./skills.js";
 import { writeOmpSettingsOverlay, type OmpSettingsOverlay } from "./settings-overlay.js";
-import { createOmpModelFallbackTracker, ompFallbackChain, type OmpModelFallbackTracker } from "./model-fallback.js";
+import { createOmpModelFallbackTracker, ompFallbackChain, ompFallbackHold, type OmpModelFallbackTracker } from "./model-fallback.js";
 import { writeOmpToolGuardExtension, type OmpToolGuardExtension } from "./tool-guard.js";
 import { prependPythonPath, writeOmpPythonEnvBridge, type OmpPythonEnvBridge } from "./python-env.js";
 import {
@@ -952,6 +952,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       timeoutSec,
       graceSec,
       profile: runToolProfile(context),
+      fallbackHold: ompFallbackHold(executionConfig, asString(context.wardmotePrimaryModel, "").trim()),
     });
     pythonEnvBridge = await writeOmpPythonEnvBridge({
       runId,

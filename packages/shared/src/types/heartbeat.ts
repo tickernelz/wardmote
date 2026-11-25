@@ -297,12 +297,16 @@ export interface ChatFailedRunRetryResponse {
 
 export type RunModelFallbackReason = "rate_limit" | "upstream" | "refusal";
 
+export type RunModelFallbackErrorKind = "no_accounts" | "refusal" | "timeout" | "concurrency_limit" | "rate_limit" | "upstream";
+
 /** Model a run is using when it is not on its primary model. */
 export interface RunModelFallbackState {
   primaryModel: string;
   activeModel: string;
   reason: RunModelFallbackReason;
   switchedAt: string;
+  errorKind?: RunModelFallbackErrorKind | null;
+  error?: string | null;
 }
 
 /** Outcome of a user's forced switch back to an assignee's primary model. */

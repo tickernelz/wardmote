@@ -4,9 +4,10 @@ export const OMP_SETTINGS_KEY = "ompSettings";
 export const OMP_SETTINGS_PATH_PREFIX = `${OMP_SETTINGS_KEY}.`;
 export const OMP_STYLE_KEY = "stylePreset";
 export const OMP_FALLBACK_MODE_KEY = "fallbackMode";
+export const OMP_MODEL_PROBATION_KEY = "modelProbation";
 export const OMP_RUN_GRACE_SEC = 60;
 
-export const OMP_SESSION_NEUTRAL_ADAPTER_CONFIG_KEYS = [OMP_STYLE_KEY, OMP_FALLBACK_MODE_KEY] as const;
+export const OMP_SESSION_NEUTRAL_ADAPTER_CONFIG_KEYS = [OMP_STYLE_KEY, OMP_FALLBACK_MODE_KEY, OMP_MODEL_PROBATION_KEY] as const;
 
 export const OMP_MODEL_SWITCH_ADAPTER_CONFIG_KEYS = [
   "model",

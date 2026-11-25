@@ -16,6 +16,7 @@ export interface OmpSettingsOverlay {
 }
 
 export const OMP_CONTEXT_MANAGEMENT_MIN_VERSION = "18.1.16";
+export const OMP_FALLBACK_RETRY_BASE_DELAY_MS = 4_000;
 
 const ADAPTER_OWNED_OMP_SETTINGS = new Set([
   "advisor.enabled",
@@ -79,6 +80,7 @@ function buildAdapterSettingsOverlay(config: Record<string, unknown>): Record<st
       ? {
           retry: {
             modelFallback: true,
+            baseDelayMs: OMP_FALLBACK_RETRY_BASE_DELAY_MS,
             fallbackRevertPolicy: "cooldown-expiry",
             fallbackChains: { [fallback.key]: fallback.chain },
           },

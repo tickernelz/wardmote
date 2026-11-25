@@ -65,6 +65,16 @@ describe("classifyOmpFailure", () => {
     expect(classify("429 Too many requests (type=invalid_request_error)").errorFamily).toBe("provider_quota");
   });
 
+  it("classifies a gateway concurrency cap as a short quota wait, not an upstream outage", () => {
+    const before = Date.now();
+    const result = classify("429 Concurrency limit exceeded for user, please retry later (gateway_concurrency_limit)");
+    expect(result.errorFamily).toBe("provider_quota");
+    expect(result.errorCode).toBe("omp_provider_concurrency_limit");
+    const wait = Date.parse(result.retryNotBefore ?? "") - before;
+    expect(wait).toBeGreaterThanOrEqual(29_000);
+    expect(wait).toBeLessThanOrEqual(35_000);
+  });
+
   it("keeps an unrelated exit as a plain exit code", () => {
     expect(classify("tool crashed unexpectedly")).toEqual({
       errorCode: "omp_exit_1",

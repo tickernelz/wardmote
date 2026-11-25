@@ -1,12 +1,15 @@
 import type { AdapterRuntimeEvent } from "@tickernelz/wardmote-adapter-utils";
-import { classifyFallbackReason, retryDelayMsFromText, type OmpFallbackReason } from "./failure.js";
+import { classifyFallbackError, type OmpFallbackErrorKind, type OmpFallbackReason } from "./failure.js";
 
 const THINKING_SUFFIX_RE = /:(?:auto|off|minimal|low|medium|high|xhigh|max)$/i;
 const DEFAULT_COOLDOWN_MS = 5 * 60_000;
-const FALLBACK_REASON_LABELS: Record<OmpFallbackReason, string> = {
+const FALLBACK_KIND_LABELS: Record<OmpFallbackErrorKind, string> = {
+  no_accounts: "503 no available accounts",
+  refusal: "refusal",
+  timeout: "timeout",
+  concurrency_limit: "concurrency limit",
   rate_limit: "rate limit",
   upstream: "upstream error",
-  refusal: "refusal",
 };
 
 type JsonObject = Record<string, unknown>;
@@ -52,10 +55,51 @@ export function ompFallbackChain(config: Record<string, unknown>): { key: string
   return chain.length > 0 ? { key, chain } : null;
 }
 
+export const OMP_MODEL_PROBATION_KEY = "modelProbation";
+const HOLD_ATTEMPTS = 2;
+const PROBATION_HOLD_ATTEMPTS = 3;
+const HOLD_MS = 10 * 60_000;
+
+export interface OmpFallbackHold {
+  primary: string;
+  start: string;
+  selectors: string[];
+  holdAttempts: number;
+  holdMs: number;
+  probation: { selector: string; firstEventTimeoutSec: number; holdAttempts: number } | null;
+}
+
+function probationOf(config: Record<string, unknown>): { selector: string; firstEventTimeoutSec: number } | null {
+  const raw = object(config[OMP_MODEL_PROBATION_KEY]);
+  const selector = stripOmpThinkingSuffix(text(raw?.selector));
+  const seconds = raw?.firstEventTimeoutSec;
+  if (!selector || typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return null;
+  return { selector, firstEventTimeoutSec: Math.floor(seconds) };
+}
+
+/** What the run's OMP extension needs to keep a transient failure on the model it hit before the chain moves on. */
+export function ompFallbackHold(config: Record<string, unknown>, primary: string): OmpFallbackHold | null {
+  const fallback = ompFallbackChain(config);
+  if (!fallback) return null;
+  const start = stripOmpThinkingSuffix(fallback.key);
+  const selectors = [start, ...fallback.chain.map(stripOmpThinkingSuffix)].filter((selector, index, all) => all.indexOf(selector) === index);
+  const probation = probationOf(config);
+  return {
+    primary: stripOmpThinkingSuffix(primary) || start,
+    start,
+    selectors,
+    holdAttempts: HOLD_ATTEMPTS,
+    holdMs: HOLD_MS,
+    probation: probation ? { ...probation, holdAttempts: PROBATION_HOLD_ATTEMPTS } : null,
+  };
+}
+
 export interface OmpModelFallbackSwitch {
   from: string;
   to: string;
   reason: OmpFallbackReason;
+  errorKind: OmpFallbackErrorKind;
+  error: string | null;
   retryAfterMs: number;
   retryAfterSource: "provider" | "default";
   at: string;
@@ -93,18 +137,20 @@ export function createOmpModelFallbackTracker(input: {
         const from = stripOmpThinkingSuffix(text(event.from));
         const to = stripOmpThinkingSuffix(text(event.to));
         if (!from || !to || from === to || from !== active) return;
-        const reason = classifyFallbackReason(lastRetryError);
-        const providerRetryAfterMs = retryDelayMsFromText(lastRetryError);
-        const retryAfterMs = providerRetryAfterMs ?? DEFAULT_COOLDOWN_MS;
-        const retryAfterSource = providerRetryAfterMs === null ? "default" : "provider";
+        const cause = classifyFallbackError(text(event.reason) || lastRetryError);
+        const { reason, error } = cause;
+        const errorKind = cause.kind;
+        const retryAfterMs = cause.retryAfterMs ?? DEFAULT_COOLDOWN_MS;
+        const retryAfterSource = cause.providerRetryAfter ? "provider" : "default";
+        lastRetryError = "";
         active = to;
-        switches.push({ from, to, reason, retryAfterMs, retryAfterSource, at: new Date().toISOString() });
+        switches.push({ from, to, reason, errorKind, error, retryAfterMs, retryAfterSource, at: new Date().toISOString() });
         await emit({
           eventType: "model.fallback",
           stream: "system",
           level: "warn",
-          message: `Fallback: ${to} (primary ${input.primary}: ${FALLBACK_REASON_LABELS[reason]})`,
-          payload: { phase: "in_run", from, to, primary: input.primary, reason, retryAfterMs, retryAfterSource },
+          message: `Fallback: ${to} (primary ${input.primary}: ${FALLBACK_KIND_LABELS[errorKind]}${error ? ` — ${error}` : ""})`,
+          payload: { phase: "in_run", from, to, primary: input.primary, reason, errorKind, error, retryAfterMs, retryAfterSource },
         });
         return;
       }

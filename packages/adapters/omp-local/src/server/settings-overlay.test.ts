@@ -73,6 +73,7 @@ describe("OMP settings overlay", () => {
     });
     expect(overlay.retry).toEqual({
       modelFallback: true,
+      baseDelayMs: 4000,
       fallbackRevertPolicy: "cooldown-expiry",
       fallbackChains: { "anthropic/claude-opus": ["openai/gpt-5", "google/gemini"] },
     });

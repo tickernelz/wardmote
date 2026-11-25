@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AdapterRuntimeEvent } from "@tickernelz/wardmote-adapter-utils";
-import { createOmpModelFallbackTracker, ompFallbackChain, stripOmpThinkingSuffix } from "./model-fallback.js";
+import { createOmpModelFallbackTracker, ompFallbackChain, ompFallbackHold, stripOmpThinkingSuffix } from "./model-fallback.js";
 
 describe("OMP model fallback tracker", () => {
   it("reports an in-run switch with the reason and retry-after of the error that caused it", async () => {
@@ -22,6 +22,48 @@ describe("OMP model fallback tracker", () => {
     await tracker.ingest({ type: "auto_retry_start", errorMessage: "503 Service Unavailable" });
     await tracker.ingest({ type: "retry_fallback_applied", from: "a/primary", to: "b/backup", role: "a/primary" });
     expect(emit.mock.calls[0]![0]).toMatchObject({ payload: { reason: "upstream", retryAfterMs: 300000, retryAfterSource: "default" } });
+  });
+
+  it("classifies a switch from the reason OMP puts on the event, which arrives before auto_retry_start", async () => {
+    const emit = vi.fn(async (_event: AdapterRuntimeEvent) => {});
+    const tracker = createOmpModelFallbackTracker({ primary: "a/primary", start: "a/primary", emit });
+    await tracker.ingest({
+      type: "retry_fallback_applied",
+      from: "a/primary:high",
+      to: "b/backup:max",
+      role: "a/primary",
+      reason: "Request failed: Refusal (reasoning_extraction): This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs.",
+    });
+    await tracker.ingest({ type: "auto_retry_start", errorMessage: "Refusal (reasoning_extraction): blocked" });
+    await tracker.ingest({
+      type: "retry_fallback_applied",
+      from: "b/backup",
+      to: "c/last",
+      role: "a/primary",
+      reason: "Request failed: 503 {\"error\":{\"message\":\"No available accounts: no available accounts\",\"type\":\"api_error\"}}",
+    });
+    expect(emit.mock.calls[0]![0]).toMatchObject({
+      payload: { reason: "refusal", errorKind: "refusal", error: expect.stringMatching(/^Refusal \(reasoning_extraction\)/) },
+    });
+    expect(emit.mock.calls[0]![0].message).toContain("refusal — Refusal (reasoning_extraction)");
+    expect(emit.mock.calls[1]![0]).toMatchObject({
+      payload: { reason: "upstream", errorKind: "no_accounts", retryAfterMs: 300000, retryAfterSource: "default" },
+    });
+  });
+
+  it("treats a gateway concurrency cap as a short provider-timed rate limit", async () => {
+    const emit = vi.fn(async (_event: AdapterRuntimeEvent) => {});
+    const tracker = createOmpModelFallbackTracker({ primary: "a/primary", start: "a/primary", emit });
+    await tracker.ingest({
+      type: "retry_fallback_applied",
+      from: "a/primary",
+      to: "b/backup",
+      role: "a/primary",
+      reason: "Request failed: 429 Concurrency limit exceeded for user, please retry later (gateway_concurrency_limit)",
+    });
+    expect(emit.mock.calls[0]![0]).toMatchObject({
+      payload: { reason: "rate_limit", errorKind: "concurrency_limit", retryAfterMs: 30000, retryAfterSource: "default" },
+    });
   });
 
   it("ignores switches of other roles and reports the return to the primary", async () => {
@@ -59,6 +101,23 @@ describe("OMP model fallback tracker", () => {
       ["a/primary", "b/backup", 60000],
       ["a/primary", "b/backup", 900000],
     ]);
+  });
+
+  it("holds every chain model but the active one and the primary, with a longer hold for the model on probation", () => {
+    expect(ompFallbackHold({ model: "a/x", fallbackModels: [] }, "a/x")).toBeNull();
+    expect(ompFallbackHold({
+      model: "a/x",
+      fallbackModels: ["b/y", "c/z"],
+      modelEfforts: { "b/y": "max" },
+      modelProbation: { selector: "a/x:high", firstEventTimeoutSec: 60 },
+    }, "a/x")).toEqual({
+      primary: "a/x",
+      start: "a/x",
+      selectors: ["a/x", "b/y", "c/z"],
+      holdAttempts: 2,
+      holdMs: 600000,
+      probation: { selector: "a/x", firstEventTimeoutSec: 60, holdAttempts: 3 },
+    });
   });
 
   it("builds the chain from config and strips thinking suffixes only", () => {

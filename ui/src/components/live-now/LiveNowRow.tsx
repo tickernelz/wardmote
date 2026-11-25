@@ -34,7 +34,7 @@ import {
   withIssueDetailHeaderSeed,
 } from "../../lib/issueDetailBreadcrumb";
 import { describeDeliveryDowngrade } from "../../lib/message-delivery-command";
-import { describeFallbackModel, modelFallbackReasonLabel } from "../../lib/model-fallback";
+import { describeFallbackModel, modelFallbackCauseLabel } from "../../lib/model-fallback";
 import { RestorePrimaryModelControl } from "../task-chat/RestorePrimaryModelControl";
 import { modelValueText } from "../task-chat/model-option-display";
 import { useConfigSchema } from "../../adapters/schema-config-fields";
@@ -553,13 +553,14 @@ function LiveNowModelFallbackPill({ adapterType, fallback }: { adapterType: stri
   return (
     <span
       data-slot="live-now-model-fallback"
-      title={`${fallback.activeModel} (primary ${fallback.primaryModel})`}
+      title={`${fallback.activeModel} (primary ${fallback.primaryModel})${fallback.error ? `\n${fallback.error}` : ""}`}
       className="inline-flex min-w-0 max-w-full items-start gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-left text-xs font-medium leading-snug text-amber-800 dark:text-amber-200"
     >
       <TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-amber-500 dark:text-amber-400" />
       <span className="min-w-0 whitespace-normal break-words">
         {modelValueText(describeFallbackModel(fallback.activeModel, options))}
-        <span className="text-ink-3">{" · primary: "}{modelFallbackReasonLabel(fallback.reason)}</span>
+        <span className="text-ink-3">{" · primary: "}{modelFallbackCauseLabel(fallback.reason, fallback.errorKind)}</span>
+        {fallback.error ? <span className="block text-ink-3 font-normal">{fallback.error}</span> : null}
       </span>
     </span>
   );

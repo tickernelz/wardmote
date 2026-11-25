@@ -298,6 +298,56 @@ describeEmbeddedPostgres("per-agent fallback models", () => {
     expect(startEvents[0]!.payload).toMatchObject({ phase: "run_start", from: PRIMARY, to: BACKUP, reason: "refusal" });
   }, 60_000);
 
+  it("cools a model for the gateway's concurrency cap only briefly, writes nothing for a refusal, and keeps the error on the run", async () => {
+    const target = await seed({ model: PRIMARY, fallbackModels: [BACKUP, SECOND] });
+    const capError = "429 Concurrency limit exceeded for user, please retry later (gateway_concurrency_limit)";
+    behaviors.set(target.agentId, [
+      async (ctx) => {
+        await ctx.onEvent?.({
+          eventType: "model.fallback",
+          stream: "system",
+          level: "warn",
+          message: `Fallback: ${BACKUP}`,
+          payload: {
+            phase: "in_run", from: PRIMARY, to: BACKUP, primary: PRIMARY, reason: "rate_limit",
+            errorKind: "concurrency_limit", error: capError, retryAfterMs: 30_000, retryAfterSource: "default",
+          },
+        });
+        await ctx.onEvent?.({
+          eventType: "model.fallback",
+          stream: "system",
+          level: "warn",
+          message: `Fallback: ${SECOND}`,
+          payload: {
+            phase: "in_run", from: BACKUP, to: SECOND, primary: PRIMARY, reason: "refusal",
+            errorKind: "refusal", error: "Refusal (reasoning_extraction): blocked", retryAfterMs: 300_000, retryAfterSource: "default",
+          },
+        });
+        return ok(ctx);
+      },
+    ]);
+    const before = Date.now();
+    const first = await runOnce(target);
+    expect(first.run.status).toBe("succeeded");
+    const cooldowns = await cooldownRows(target.companyId);
+    expect(cooldowns.map((row) => row.selector)).toEqual([PRIMARY]);
+    expect(cooldowns[0]!.reason).toBe("rate_limit");
+    expect(cooldowns[0]!.cooldownUntil.getTime() - before).toBeLessThan(60_000);
+    expect(cooldowns[0]!.probeAfter).toBeNull();
+    const activity = await db.select().from(activityLog).where(and(
+      eq(activityLog.companyId, target.companyId),
+      eq(activityLog.action, "issue.run_model_fallback"),
+    ));
+    expect(activity.map((row) => row.details)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: PRIMARY, to: BACKUP, errorKind: "concurrency_limit", error: capError }),
+      expect.objectContaining({ from: BACKUP, to: SECOND, reason: "refusal", errorKind: "refusal" }),
+    ]));
+    const [stored] = await db.select({ context: heartbeatRuns.contextSnapshot }).from(heartbeatRuns).where(eq(heartbeatRuns.id, first.run.id));
+    expect((stored!.context as Record<string, unknown>).wardmoteModelFallback).toMatchObject({
+      activeModel: SECOND, reason: "refusal", errorKind: "refusal", error: "Refusal (reasoning_extraction): blocked",
+    });
+  }, 60_000);
+
   it("retries on the primary when only the fallback the run ended on asked for a long wait", async () => {
     const target = await seed({ model: PRIMARY, fallbackModels: [BACKUP] });
     const fallbackRetryNotBefore = new Date(Date.now() + 14 * 60 * 60_000).toISOString();

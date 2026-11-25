@@ -186,3 +186,103 @@ describe("OMP tool guard extension in a read_only run", () => {
     });
   });
 });
+
+type HoldHandler = (event: Record<string, unknown>, ctx: { modelRegistry: FakeRegistry }) => void;
+
+class FakeRegistry {
+  readonly suppressed = new Map<string, number>();
+  suppressSelector(selector: string, until: number) {
+    this.suppressed.set(selector, until);
+  }
+  isSelectorSuppressed(selector: string) {
+    return (this.suppressed.get(selector) ?? 0) > Date.now();
+  }
+  clearSuppressedSelector(selector: string) {
+    this.suppressed.delete(selector);
+  }
+}
+
+async function loadHold(dir: string, name: string, probation: boolean) {
+  const file = path.join(dir, `hold-${name}-${OMP_TOOL_GUARD_FILE_NAME}`);
+  await fs.writeFile(file, renderOmpToolGuardExtension("full", {
+    primary: "a/primary",
+    start: "a/primary",
+    selectors: ["a/primary", "b/backup", "c/last"],
+    holdAttempts: 2,
+    holdMs: 600_000,
+    probation: probation ? { selector: "a/primary", firstEventTimeoutSec: 60, holdAttempts: 3 } : null,
+  }), "utf8");
+  const module = (await import(pathToFileURL(file).href)) as {
+    default: (pi: { on: (event: string, fn: HoldHandler) => void }) => void;
+  };
+  const handlers = new Map<string, HoldHandler>();
+  module.default({ on: (event, fn) => handlers.set(event, fn) });
+  const registry = new FakeRegistry();
+  const fire = (event: Record<string, unknown>) => handlers.get(String(event.type))?.({ ...event }, { modelRegistry: registry });
+  const failOn = (provider: string, model: string, errorMessage: string) =>
+    fire({ type: "message_end", message: { role: "assistant", provider, model, stopReason: "error", errorMessage } });
+  return { registry, fire, failOn, held: () => [...registry.suppressed.keys()].filter((key) => registry.isSelectorSuppressed(key)).sort() };
+}
+
+describe("OMP fallback hold", () => {
+  let dir: string;
+  const saved = process.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+
+  beforeAll(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "wardmote-omp-hold-test-"));
+  });
+
+  afterAll(async () => {
+    if (saved === undefined) delete process.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+    else process.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = saved;
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps the chain closed for one transient failure, then opens it for the next", async () => {
+    const hold = await loadHold(dir, "transient", false);
+    hold.fire({ type: "turn_start" });
+    expect(hold.held()).toEqual(["b/backup", "c/last"]);
+    hold.failOn("a", "primary", "503 No available accounts: no available accounts (type=api_error)");
+    expect(hold.held()).toEqual(["b/backup", "c/last"]);
+    hold.failOn("a", "primary", "OpenAI responses stream timed out while waiting for the first event");
+    expect(hold.held()).toEqual([]);
+  });
+
+  it("opens the chain at once for a refusal or a quota error", async () => {
+    for (const message of ["Refusal (reasoning_extraction): This request was blocked", "429 Too Many Requests: usage limit reached"]) {
+      const hold = await loadHold(dir, message.slice(0, 3), false);
+      hold.fire({ type: "turn_start" });
+      hold.failOn("a", "primary", message);
+      expect(hold.held()).toEqual([]);
+    }
+  });
+
+  it("closes the chain again after a success and after a switch, without touching OMP's own cooldowns", async () => {
+    const hold = await loadHold(dir, "switch", false);
+    hold.fire({ type: "turn_start" });
+    hold.failOn("a", "primary", "503 Service Unavailable");
+    hold.fire({ type: "message_end", message: { role: "assistant", provider: "a", model: "primary", stopReason: "stop" } });
+    hold.failOn("a", "primary", "503 Service Unavailable");
+    expect(hold.held()).toEqual(["b/backup", "c/last"]);
+    hold.failOn("a", "primary", "503 Service Unavailable");
+    hold.registry.suppressSelector("a/primary", Date.now() + 300_000);
+    hold.fire({ type: "retry_fallback_applied", from: "a/primary:high", to: "b/backup:max", role: "a/primary" });
+    expect(hold.held()).toEqual(["a/primary", "c/last"]);
+    hold.failOn("b", "backup", "503 Service Unavailable");
+    expect(hold.held()).toEqual(["a/primary", "c/last"]);
+  });
+
+  it("limits the first response only while the model on probation is active, and holds it one attempt longer", async () => {
+    delete process.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+    const hold = await loadHold(dir, "probation", true);
+    expect(process.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS).toBe("60000");
+    hold.fire({ type: "turn_start" });
+    hold.failOn("a", "primary", "stream timed out while waiting for the first event");
+    hold.failOn("a", "primary", "stream timed out while waiting for the first event");
+    expect(hold.held()).toEqual(["b/backup", "c/last"]);
+    hold.failOn("a", "primary", "stream timed out while waiting for the first event");
+    expect(hold.held()).toEqual([]);
+    hold.fire({ type: "retry_fallback_applied", from: "a/primary", to: "b/backup", role: "a/primary" });
+    expect(process.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS).toBeUndefined();
+  });
+});

@@ -1388,6 +1388,7 @@ export type {
   HeartbeatRun,
   HeartbeatRunEvent,
   HeartbeatRunStatusPhase,
+  RunModelFallbackErrorKind,
   RunModelFallbackReason,
   RunModelFallbackState,
   RestorePrimaryModelResult,

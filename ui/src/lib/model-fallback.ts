@@ -1,4 +1,9 @@
-import type { IssueRunModelOverrideOption, RunModelFallbackReason, RunModelFallbackState } from "@tickernelz/wardmote-shared";
+import type {
+  IssueRunModelOverrideOption,
+  RunModelFallbackErrorKind,
+  RunModelFallbackReason,
+  RunModelFallbackState,
+} from "@tickernelz/wardmote-shared";
 import {
   describeModelValue,
   modelValueText,
@@ -9,6 +14,15 @@ export const MODEL_FALLBACK_REASON_LABELS: Record<RunModelFallbackReason, string
   rate_limit: "rate limit",
   upstream: "upstream error",
   refusal: "refusal",
+};
+
+export const MODEL_FALLBACK_ERROR_KIND_LABELS: Record<RunModelFallbackErrorKind, string> = {
+  no_accounts: "503 no available accounts",
+  refusal: "refusal",
+  timeout: "timeout",
+  concurrency_limit: "concurrency limit",
+  rate_limit: "rate limit",
+  upstream: "upstream error",
 };
 
 const THINKING_SUFFIX = /:(off|minimal|low|medium|high|xhigh|max|auto)$/;
@@ -33,13 +47,20 @@ export function modelFallbackReasonLabel(reason: string): string {
   return MODEL_FALLBACK_REASON_LABELS[reason as RunModelFallbackReason] ?? reason.replace(/_/g, " ");
 }
 
+/** Label for why a run left its model: the error kind when known, else the reason. */
+export function modelFallbackCauseLabel(reason: string, errorKind?: string | null): string {
+  const kind = errorKind ? MODEL_FALLBACK_ERROR_KIND_LABELS[errorKind as RunModelFallbackErrorKind] : undefined;
+  return kind ?? modelFallbackReasonLabel(reason);
+}
+
 /** Live-run badge text such as "Fallback: GPT · openai (primary: rate limit)". */
 export function formatModelFallbackLabel(
   state: RunModelFallbackState,
   options: readonly IssueRunModelOverrideOption[],
 ): string {
   const active = modelValueText(describeFallbackModel(state.activeModel, options));
-  return `Fallback: ${active} (primary: ${modelFallbackReasonLabel(state.reason)})`;
+  const cause = modelFallbackCauseLabel(state.reason, state.errorKind);
+  return `Fallback: ${active} (primary: ${cause}${state.error ? ` — ${state.error}` : ""})`;
 }
 
 function payloadText(payload: Record<string, unknown> | null | undefined, key: string): string | null {
@@ -56,8 +77,12 @@ export function describeModelFallbackEvent(
     const to = payloadText(payload, "to") ?? "next model";
     const primary = payloadText(payload, "primary") ?? payloadText(payload, "from");
     const reason = payloadText(payload, "reason");
-    const detail = [primary, reason ? modelFallbackReasonLabel(reason) : null].filter(Boolean).join(": ");
-    return detail ? `Fallback: ${to} (primary ${detail})` : `Fallback: ${to}`;
+    const errorKind = payloadText(payload, "errorKind");
+    const error = payloadText(payload, "error");
+    const cause = reason || errorKind ? modelFallbackCauseLabel(reason ?? "", errorKind) : null;
+    const detail = [primary, cause].filter(Boolean).join(": ");
+    const head = detail ? `Fallback: ${to} (primary ${detail})` : `Fallback: ${to}`;
+    return error ? `${head} — ${error}` : head;
   }
   if (eventType === "model.fallback_restored") {
     const to = payloadText(payload, "to");

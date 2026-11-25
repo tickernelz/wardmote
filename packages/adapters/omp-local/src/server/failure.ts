@@ -17,6 +17,11 @@ const REFRESH_INVALID_RE = /\brefresh token (?:is )?(?:invalid|revoked|invalidat
 const AGENT_START_POLICY_CHANGED_RE = /\bsystem prompt changed repeatedly during before_agent_start\b/i;
 const PROVIDER_REQUEST_REJECTED_RE = /\b4(?!29)\d\d\b[^\n]*\binvalid_request_error\b/i;
 const PROMPT_TOO_LONG_RE = /\b(?:prompt is too long|context_length_exceeded|maximum context length|exceeds? the (?:model's )?context window|input is too long for)\b/i;
+const CONCURRENCY_RE = /\b(?:concurrency limit|concurrent (?:requests?|connections?) limit|too many concurrent|gateway_concurrency_limit)\b/i;
+const NO_ACCOUNTS_RE = /\bno available accounts?\b/i;
+const TIMEOUT_RE = /\b(?:timed out|timeout|etimedout)\b/i;
+const CONCURRENCY_RETRY_MS = 30_000;
+const FALLBACK_ERROR_MAX_CHARS = 200;
 
 const RETRY_AFTER_SECONDS_RE = /\bretry[- ]?after["':\s]+(\d+(?:\.\d+)?)\b/i;
 const RETRY_IN_RE = /\btry again in (\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|seconds?|m|minutes?|h|hours?)\b/i;
@@ -25,12 +30,35 @@ const REQUESTED_WAIT_RE = /\bprovider requested (\d+)\s*ms wait\b/i;
 const RETRY_AFTER_MS_RE = /\bretry-after-ms\s*[:=]\s*(\d+)\b/i;
 
 export type OmpFallbackReason = "rate_limit" | "upstream" | "refusal";
+export type OmpFallbackErrorKind = "no_accounts" | "refusal" | "timeout" | "concurrency_limit" | "rate_limit" | "upstream";
+
+export interface OmpFallbackError {
+  reason: OmpFallbackReason;
+  kind: OmpFallbackErrorKind;
+  error: string | null;
+  retryAfterMs: number | null;
+  providerRetryAfter: boolean;
+}
 
 /** Maps the error that made OMP switch models onto the fallback reason shown to operators. */
 export function classifyFallbackReason(text: string): OmpFallbackReason {
-  if (QUOTA_RE.test(text)) return "rate_limit";
-  if (REFUSAL_RE.test(text) && !TRANSIENT_RE.test(text)) return "refusal";
-  return "upstream";
+  return classifyFallbackError(text).reason;
+}
+
+/** Reason, kind, readable excerpt and wait of the error that made OMP switch models. */
+export function classifyFallbackError(raw: string): OmpFallbackError {
+  const text = raw.trim();
+  const error = text ? text.replace(/^request failed:\s*/i, "").replace(/\s+/g, " ").slice(0, FALLBACK_ERROR_MAX_CHARS) : null;
+  const providerRetryAfterMs = retryDelayMsFromText(text);
+  const providerRetryAfter = providerRetryAfterMs !== null;
+  const cause = (reason: OmpFallbackReason, kind: OmpFallbackErrorKind, retryAfterMs = providerRetryAfterMs): OmpFallbackError =>
+    ({ reason, kind, error, retryAfterMs, providerRetryAfter });
+  if (CONCURRENCY_RE.test(text)) return cause("rate_limit", "concurrency_limit", providerRetryAfterMs ?? CONCURRENCY_RETRY_MS);
+  if (QUOTA_RE.test(text)) return cause("rate_limit", "rate_limit");
+  if (REFUSAL_RE.test(text) && !TRANSIENT_RE.test(text)) return cause("refusal", "refusal", null);
+  if (NO_ACCOUNTS_RE.test(text)) return cause("upstream", "no_accounts");
+  if (TIMEOUT_RE.test(text)) return cause("upstream", "timeout");
+  return cause("upstream", "upstream");
 }
 
 /** Provider-requested wait parsed from an error message, in milliseconds. */
@@ -92,6 +120,13 @@ export function classifyOmpFailure(input: {
   }
   if (REFRESH_INVALID_RE.test(text)) {
     return { errorCode: "omp_refresh_token_invalidated", errorFamily: "refresh_token_invalidated", retryNotBefore: null };
+  }
+  if (CONCURRENCY_RE.test(text)) {
+    return {
+      errorCode: "omp_provider_concurrency_limit",
+      errorFamily: "provider_quota",
+      retryNotBefore: retryNotBefore(text) ?? new Date(Date.now() + CONCURRENCY_RETRY_MS).toISOString(),
+    };
   }
   if (QUOTA_RE.test(text)) {
     return { errorCode: "omp_provider_quota", errorFamily: "provider_quota", retryNotBefore: retryNotBefore(text) };

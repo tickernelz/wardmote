@@ -6,7 +6,7 @@ import {
   AGENT_FALLBACK_MODELS_KEY,
   adapterSupportsFallbackModels,
   fitAgentFallbackEfforts,
-  OMP_FIRST_EVENT_TIMEOUT_SETTING,
+  OMP_MODEL_PROBATION_KEY,
   readAgentFallbackEfforts,
   readAgentFallbackModels,
   validateAgentFallbackModels,
@@ -526,10 +526,7 @@ export async function prepareRunModelFallback(input: {
       : states.get(primary)?.reason ?? "upstream";
   const probation = probationFor(start, states.get(start), input.now);
   if (probation) {
-    const ompSettings = asRecord(input.config.ompSettings);
-    if (ompSettings[OMP_FIRST_EVENT_TIMEOUT_SETTING] === undefined) {
-      input.config.ompSettings = { ...ompSettings, [OMP_FIRST_EVENT_TIMEOUT_SETTING]: probation.firstEventTimeoutSec };
-    }
+    input.config[OMP_MODEL_PROBATION_KEY] = { selector: probation.selector, firstEventTimeoutSec: probation.firstEventTimeoutSec };
   }
   const primaryEffort = text(input.config.thinking);
   if (start !== primary && primaryEffort) {

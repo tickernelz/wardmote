@@ -31,7 +31,10 @@ export const MODEL_COOLDOWN_PROBE_SUCCESSES = 2;
 export const MODEL_COOLDOWN_PROBE_HOURLY_LIMIT = 20;
 /** One omp bench process holds 350-385 MB RSS; two fit the smallest host (integron, about 2 GB available). */
 export const MODEL_COOLDOWN_PROBE_CONCURRENCY = 2;
+/** Wait before probing again when the provider is busy with live runs or the gateway reported its concurrency cap. */
+export const MODEL_COOLDOWN_PROBE_BUSY_DELAY_MS = 30_000;
 export const MODEL_COOLDOWN_RELEASED_EVENT = "model.cooldown_released";
+const CONCURRENCY_LIMIT_RE = /\b(?:concurrency limit|concurrent (?:requests?|connections?) limit|too many concurrent|gateway_concurrency_limit)\b/i;
 export const MODEL_COOLDOWN_RELEASED_ACTION = "issue.run_model_cooldown_released";
 const HOUR_MS = 60 * 60_000;
 
@@ -47,6 +50,7 @@ export interface ModelCooldownProberDeps {
   setTimer: (callback: () => void, delayMs: number) => { cancel: () => void };
   resolveTarget: (cooldown: ProbeableModelCooldown) => Promise<ModelCooldownProbeTarget | null>;
   probe: (target: ModelCooldownProbeTarget, selector: string) => Promise<AdapterModelProbeResult>;
+  providerBusy: (companyId: string, selector: string) => Promise<boolean>;
 }
 
 interface ProbeState {
@@ -106,6 +110,7 @@ export function createModelCooldownProber(db: Db): ModelCooldownProber {
       return { cancel: () => clearTimeout(handle) };
     },
     resolveTarget: (cooldown) => resolveProbeTarget(db, cooldown),
+    providerBusy: (companyId, selector) => providerHasLiveRuns(db, companyId, selector),
     probe: async (target, selector) => {
       const adapter = findServerAdapter(target.adapterType);
       if (!adapter?.probeModel) return { ok: false, latencyMs: 0, costUsd: null, error: "adapter cannot probe models" };
@@ -166,8 +171,18 @@ export function createModelCooldownProber(db: Db): ModelCooldownProber {
     const target = await deps.resolveTarget(cooldown);
     if (!target) return drop(state);
     const streakBase = state.streakBase ?? cooldown.updatedAt;
+    if (await deps.providerBusy(state.companyId, state.selector)) {
+      return schedule(state, jittered(MODEL_COOLDOWN_PROBE_BUSY_DELAY_MS, deps.random));
+    }
     const result = await withSlot(() => deps!.probe(target, state.selector));
     const probedAt = deps.now();
+    if (!result.ok && CONCURRENCY_LIMIT_RE.test(result.error ?? "")) {
+      state.recentPings.push(probedAt.getTime());
+      state.pings += 1;
+      state.costUsd += result.costUsd ?? 0;
+      logger.info({ companyId: state.companyId, selector: state.selector, pings: state.pings }, "model cooldown probe hit the gateway concurrency cap; not counted as a failure");
+      return schedule(state, jittered(MODEL_COOLDOWN_PROBE_BUSY_DELAY_MS, deps.random));
+    }
     state.recentPings.push(probedAt.getTime());
     state.pings += 1;
     state.costUsd += result.costUsd ?? 0;
@@ -321,6 +336,26 @@ export function createModelCooldownProber(db: Db): ModelCooldownProber {
       while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
     },
   };
+}
+
+/** True while a running run of the company uses a model of the selector's provider, so a probe would add to its concurrency. */
+export async function providerHasLiveRuns(db: Db, companyId: string, selector: string): Promise<boolean> {
+  const slash = selector.indexOf("/");
+  if (slash <= 0) return false;
+  const provider = selector.slice(0, slash);
+  const rows = await db.execute(sql`
+    select 1 as busy
+    from ${heartbeatRuns} run
+    join ${agents} agent on agent.id = run.agent_id and agent.company_id = run.company_id
+    where run.company_id = ${companyId}::uuid
+      and run.status = 'running'
+      and split_part(coalesce(
+        nullif(run.context_snapshot -> 'wardmoteModelFallback' ->> 'activeModel', ''),
+        nullif(run.context_snapshot ->> 'wardmotePrimaryModel', ''),
+        agent.adapter_config ->> 'model'
+      ), '/', 1) = ${provider}
+    limit 1`);
+  return Array.from(rows as Iterable<unknown>).length > 0;
 }
 
 /** The agent whose run wrote the cooldown, with its runtime config resolved; null when its run cannot be reproduced on this host. */

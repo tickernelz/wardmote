@@ -56,4 +56,15 @@ describe("describeModelFallbackEvent", () => {
     })).toBe("Fallback models exhausted (primary a/one; tried a/one, b/two; refusal)");
     expect(describeModelFallbackEvent("run.terminal", {})).toBeNull();
   });
+
+  it("names the error kind and quotes the provider's error", () => {
+    expect(describeModelFallbackEvent("model.fallback", {
+      phase: "in_run", from: "a/one", to: "b/two", primary: "a/one", reason: "upstream",
+      errorKind: "no_accounts", error: "503 No available accounts: no available accounts",
+    })).toBe("Fallback: b/two (primary a/one: 503 no available accounts) — 503 No available accounts: no available accounts");
+    expect(formatModelFallbackLabel({
+      primaryModel: "a/one", activeModel: "b/two", reason: "refusal", switchedAt: "2026-11-25T00:00:00Z",
+      errorKind: "refusal", error: "Refusal (reasoning_extraction): blocked",
+    }, [])).toBe("Fallback: two · b (primary: refusal — Refusal (reasoning_extraction): blocked)");
+  });
 });

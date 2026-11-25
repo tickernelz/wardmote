@@ -22,7 +22,7 @@ import {
   createModelCooldownProber,
   type ModelCooldownProber,
 } from "../services/model-cooldown-prober.ts";
-import { OMP_FIRST_EVENT_TIMEOUT_SETTING } from "@tickernelz/wardmote-shared";
+import { OMP_MODEL_PROBATION_KEY } from "@tickernelz/wardmote-shared";
 import {
   MODEL_FALLBACK_DEFAULT_COOLDOWN_MS,
   prepareRunModelFallback,
@@ -87,6 +87,7 @@ describeEmbeddedPostgres("model cooldown prober", () => {
     let nowMs = T0;
     const timers: Array<{ at: number; callback: () => void; cancelled: boolean }> = [];
     const calls: number[] = [];
+    const busy = { value: false };
     const prober: ModelCooldownProber = createModelCooldownProber(db);
     const deps = {
       now: () => new Date(nowMs),
@@ -102,6 +103,7 @@ describeEmbeddedPostgres("model cooldown prober", () => {
         calls.push(nowMs);
         return script(calls.length, selector);
       },
+      providerBusy: async (_companyId: string, _selector: string) => busy.value,
     };
     async function advance(ms: number) {
       const until = nowMs + ms;
@@ -116,7 +118,7 @@ describeEmbeddedPostgres("model cooldown prober", () => {
       nowMs = until;
     }
     const pending = () => timers.filter((timer) => !timer.cancelled).length;
-    return { prober, deps, advance, calls, pending, now: () => new Date(nowMs) };
+    return { prober, deps, advance, calls, pending, busy, now: () => new Date(nowMs) };
   }
 
   async function cool(
@@ -182,12 +184,13 @@ describeEmbeddedPostgres("model cooldown prober", () => {
     expect(next!.selection.start).toBe(PRIMARY);
     expect(next!.state).toBeNull();
     expect(next!.selection.probation).toMatchObject({ selector: PRIMARY, firstEventTimeoutSec: 60 });
-    expect(nextConfig.ompSettings).toEqual({ [OMP_FIRST_EVENT_TIMEOUT_SETTING]: 60 });
+    expect(nextConfig[OMP_MODEL_PROBATION_KEY]).toEqual({ selector: PRIMARY, firstEventTimeoutSec: 60 });
+    expect(nextConfig.ompSettings).toBeUndefined();
 
-    const laterConfig: Record<string, unknown> = { model: PRIMARY, fallbackModels: [BACKUP], ompSettings: { [OMP_FIRST_EVENT_TIMEOUT_SETTING]: 120 } };
+    const laterConfig: Record<string, unknown> = { model: PRIMARY, fallbackModels: [BACKUP] };
     const later = await prepareRunModelFallback({ db, companyId: target.companyId, adapterType: "omp_local", config: laterConfig, context: {}, now: new Date(T0 + 20 * 60_000) });
     expect(later!.selection.probation).toBeNull();
-    expect(laterConfig.ompSettings).toEqual({ [OMP_FIRST_EVENT_TIMEOUT_SETTING]: 120 });
+    expect(laterConfig[OMP_MODEL_PROBATION_KEY]).toBeUndefined();
     h.prober.stop();
   });
 
@@ -209,6 +212,48 @@ describeEmbeddedPostgres("model cooldown prober", () => {
     expect(h.calls).toHaveLength(4);
     expect((await row(target.companyId)).releasedAt?.getTime()).toBe(h.calls[3]);
     h.prober.stop();
+  });
+
+  it("waits while live runs use the provider and never extends a cooldown for the gateway's concurrency cap", async () => {
+    const target = await seed();
+    const capped: AdapterModelProbeResult = { ok: false, latencyMs: 30, costUsd: null, error: "Concurrency limit exceeded for user, please retry later (gateway_concurrency_limit)" };
+    const outcomes = [capped, ok, ok];
+    const h = harness(target.companyId, (call) => outcomes[call - 1] ?? ok);
+    await h.prober.start(h.deps);
+    await cool(target, h.now());
+    const until = (await row(target.companyId)).cooldownUntil.getTime();
+    h.busy.value = true;
+    h.prober.arm(target.companyId, PRIMARY);
+    await h.advance(60_000);
+    expect(h.calls).toHaveLength(0);
+    h.busy.value = false;
+    await h.advance(30_000);
+    expect(h.calls).toHaveLength(1);
+    const afterCap = await row(target.companyId);
+    expect(afterCap.cooldownUntil.getTime()).toBe(until);
+    expect(afterCap.probeFailingSince).toBeNull();
+    await h.advance(30_000);
+    await h.advance(15_000);
+    expect(h.calls).toHaveLength(3);
+    expect((await row(target.companyId)).releasedAt?.getTime()).toBe(h.calls[2]);
+    h.prober.stop();
+  });
+
+  it("counts a live run on another model of the same provider as busy, and ignores other providers", async () => {
+    const target = await seed();
+    const { providerHasLiveRuns } = await import("../services/model-cooldown-prober.ts");
+    expect(await providerHasLiveRuns(db, target.companyId, PRIMARY)).toBe(false);
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId, companyId: target.companyId, agentId: target.agentId, status: "running", issueId: target.issueId, scopeKind: "issue",
+      responsibleUserId: "board-user", contextSnapshot: { issueId: target.issueId, wardmotePrimaryModel: PRIMARY, wardmoteModelFallback: { activeModel: "other/model" } },
+    });
+    expect(await providerHasLiveRuns(db, target.companyId, PRIMARY)).toBe(false);
+    expect(await providerHasLiveRuns(db, target.companyId, "other/anything")).toBe(true);
+    await db.update(heartbeatRuns).set({ contextSnapshot: { issueId: target.issueId } }).where(eq(heartbeatRuns.id, runId));
+    expect(await providerHasLiveRuns(db, target.companyId, "fake/another")).toBe(true);
+    await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, runId));
+    expect(await providerHasLiveRuns(db, target.companyId, "fake/another")).toBe(false);
   });
 
   it("never probes before the provider's own retry-after", async () => {
