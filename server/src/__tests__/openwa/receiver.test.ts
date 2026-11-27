@@ -4,6 +4,7 @@ import {
   createOpenwaEventSocket,
   normalizeOpenwaInbound,
   OpenwaReceiver,
+  OpenwaReceiverError,
   type OpenwaIngressEvent,
 } from "../../services/openwa/receiver.js";
 import { OpenwaState, readOpenwaCursor, writeOpenwaCursor } from "../../services/openwa/state.js";
@@ -32,7 +33,7 @@ describe("OpenWA receiver", () => {
     for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   });
 
-  async function harness(options: { liveBufferLimit?: number; restLatencyMs?: number; intakeAfter?: number; sessionReconcileIntervalMs?: number; seed?: (gateway: FakeOpenwaGateway, state: OpenwaState) => Promise<void> } = {}) {
+  async function harness(options: { assertOwned?: () => Promise<void>; liveBufferLimit?: number; restLatencyMs?: number; intakeAfter?: number; sessionReconcileIntervalMs?: number; seed?: (gateway: FakeOpenwaGateway, state: OpenwaState) => Promise<void> } = {}) {
     const gateway = new FakeOpenwaGateway({ sessionId: SESSION_ID, ownPhone: OWN_PHONE, restLatencyMs: options.restLatencyMs });
     await gateway.start();
     cleanups.push(() => gateway.close());
@@ -49,7 +50,7 @@ describe("OpenWA receiver", () => {
       sessionId: SESSION_ID,
       intakeAfter: options.intakeAfter ?? 0,
       liveBufferLimit: options.liveBufferLimit,
-      assertOwned: async () => {},
+      assertOwned: options.assertOwned ?? (async () => {}),
       admit: async (event, key) => {
         admitted.push({ event, key });
       },
@@ -90,6 +91,26 @@ describe("OpenWA receiver", () => {
         ],
       },
     ]);
+  });
+
+  it("reconnects and reports a lease it could not confirm instead of stopping silently", async () => {
+    let refuse = false;
+    const h = await harness({
+      assertOwned: async () => {
+        if (!refuse) return;
+        refuse = false;
+        throw new OpenwaReceiverError("ownership", "OpenWA receiver could not confirm its lease", false);
+      },
+    });
+    h.receiver.start();
+    await until(() => h.liveCount() === 1);
+    refuse = true;
+    h.gateway.inbound({ chatId: PEER });
+    await until(() => h.liveCount() === 2);
+    h.gateway.inbound({ chatId: PEER });
+    await until(() => h.admitted.length === 2);
+    expect(h.admitted.map((entry) => sequenceOf(entry.event))).toEqual([1, 2]);
+    expect(h.failures).toEqual([expect.objectContaining({ code: "ownership" })]);
   });
 
   it("processes every message exactly once across a mid-stream socket kill, including stored rows without a waMessageId", async () => {

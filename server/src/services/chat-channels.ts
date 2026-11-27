@@ -3418,6 +3418,8 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       // callbacks. A standby takeover changes the token, so the CAS fails and
       // the old listener remains fenced.
       await refreshDiscordGatewayOwnership(ownership);
+      if (ownership.expiresAt.getTime() <= Date.now() && !ownership.stopping)
+        await refreshDiscordGatewayOwnership(ownership);
     }
     return discordGatewayRuntimeIsCurrent(endpointId, context);
   }

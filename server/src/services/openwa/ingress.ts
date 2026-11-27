@@ -9,6 +9,7 @@ import { maskOpenwaPhoneNumber, type OpenwaPreviousNumber } from "@tickernelz/wa
 import type { ChatSdkStatePersistence } from "../chat-sdk-state.js";
 import type { OpenwaGatewayClient } from "./gateway.js";
 import type { OpenwaOutboundRegistry } from "./outbound.js";
+import { logger } from "../../middleware/logger.js";
 import { recordOpenwaAudit } from "./audit.js";
 import {
   createOpenwaDispatcher,
@@ -279,7 +280,7 @@ export function createOpenwaIngressCallbacks(deps: OpenwaIngressDeps): OpenwaIng
     async onOpenwaAssertOwned() {
       if (deps.ownershipIsCurrent()) return;
       if (!(await deps.refreshOwnership()) || !deps.ownershipIsCurrent())
-        throw new OpenwaReceiverError("ownership", "OpenWA receiver ownership changed", true);
+        throw new OpenwaReceiverError("ownership", "OpenWA receiver could not confirm its lease", false);
     },
     onOpenwaEvent: (event, dedupeKey) => dispatcher.dispatch(event, dedupeKey),
     async onOpenwaCursor(cursor) {
@@ -314,6 +315,7 @@ export function createOpenwaIngressCallbacks(deps: OpenwaIngressDeps): OpenwaIng
     },
     async onOpenwaFailure(error) {
       const fatal = isFatalOpenwaReceiverError(error);
+      logger.warn({ endpointId: deps.endpointId, error: deps.redact(error), fatal }, fatal ? "OpenWA receiver stopped" : "OpenWA receiver reconnecting");
       await transition({
         healthy: false,
         prefix: OPENWA_CONNECTION_HEALTH_PREFIX,

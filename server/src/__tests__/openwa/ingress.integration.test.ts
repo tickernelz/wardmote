@@ -45,6 +45,7 @@ async function until(predicate: () => boolean | Promise<boolean>, timeoutMs = 15
 
 function countingDb(db: Db) {
   const counts = { queries: 0, transactions: 0 };
+  let renewalHold: { enter(): void; released: Promise<void> } | null = null;
   const proxy = new Proxy(db, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
@@ -57,12 +58,34 @@ function countingDb(db: Db) {
       if (property === "transaction")
         return (...args: unknown[]) => {
           counts.transactions++;
+          const hold = renewalHold;
+          if (hold && /at renewDiscordGatewayOwnership \(/.test(new Error().stack ?? "")) {
+            renewalHold = null;
+            const [work, ...rest] = args as [(tx: unknown) => Promise<unknown>, ...unknown[]];
+            return value.apply(target, [
+              async (tx: unknown) => {
+                const result = await work(tx);
+                hold.enter();
+                await hold.released;
+                return result;
+              },
+              ...rest,
+            ]);
+          }
           return value.apply(target, args);
         };
       return value.bind(target);
     },
   });
-  return { db: proxy as Db, counts };
+  function holdNextRenewal() {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => (enter = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    renewalHold = { enter, released };
+    return { entered, release };
+  }
+  return { db: proxy as Db, counts, holdNextRenewal };
 }
 
 describe("OpenWA ingress (embedded Postgres + fake gateway)", () => {
@@ -441,6 +464,31 @@ describe("OpenWA ingress (embedded Postgres + fake gateway)", () => {
     t.gateway.emit("message.received", { id: "false_x_1", chatId: PEER, from: PEER, body: "late", type: "text", timestamp: Math.floor(Date.now() / 1000) });
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(t.inbound).toHaveLength(count);
+  }, 60_000);
+
+  it("keeps receiving after an event-loop stall longer than the lease TTL while a renewal is in flight", async () => {
+    const leaseTtlMs = 1_000;
+    const t = await setup({ leaseTtlMs, renewalMs: 200 });
+    await goLive(t, t.first.service);
+    t.gateway.inbound({ chatId: PEER });
+    await settled(t, 1);
+    const leaseWhere = and(eq(chatEndpointLeases.endpointId, t.endpointId), eq(chatEndpointLeases.leaseKey, "openwa_receiver_runtime"));
+    const [leaseBefore] = await db.select().from(chatEndpointLeases).where(leaseWhere);
+    const hold = t.counted.holdNextRenewal();
+    await hold.entered;
+    const stalledUntil = Date.now() + leaseTtlMs * 2;
+    while (Date.now() < stalledUntil);
+    t.gateway.inbound({ chatId: PEER });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    hold.release();
+    t.gateway.inbound({ chatId: PEER });
+    await settled(t, 3);
+    const sequences = t.inbound.map((event) => event.body);
+    expect(new Set(sequences).size).toBe(3);
+    await until(() => t.gateway.subscriberCount === 1);
+    const [leaseAfter] = await db.select().from(chatEndpointLeases).where(leaseWhere);
+    expect(leaseAfter.token).toBe(leaseBefore.token);
+    await until(async () => (await db.select().from(chatEndpoints).where(eq(chatEndpoints.id, t.endpointId)))[0].status === "active");
   }, 60_000);
 
   it("moves the endpoint to attention on session status and restriction events and back when ready", async () => {

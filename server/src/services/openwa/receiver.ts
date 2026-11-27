@@ -395,6 +395,7 @@ export class OpenwaReceiver {
   }
 
   private async recover(epoch: number): Promise<void> {
+    await this.options.assertOwned();
     await this.options.beforeCatchUp?.();
     await this.reconcileSession("reconnect");
     for (;;) {
@@ -555,10 +556,6 @@ export class OpenwaReceiver {
 
   private async fail(error: unknown): Promise<void> {
     if (this.stopped) return;
-    if (error instanceof OpenwaReceiverError && error.code === "ownership") {
-      this.halt();
-      return;
-    }
     if (isFatalOpenwaReceiverError(error)) this.halt();
     else {
       this.live = false;
