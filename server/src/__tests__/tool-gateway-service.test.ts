@@ -561,6 +561,58 @@ describeEmbeddedPostgres("tool gateway service", () => {
     expect(await db.select().from(toolCallEvents).where(eq(toolCallEvents.reasonCode, "approved_action_executed"))).toHaveLength(0);
   });
 
+  async function pendingReviewAfterRunFinished() {
+    const fixture = await createRunFixture(db);
+    await db.insert(toolPolicies).values({ companyId: fixture.company.id, name: "Ask first", policyType: "require_approval", selectors: { toolName: "mcp-remote-fixture:update_note" } });
+    const wakeup = vi.fn(async (agentId: string, input: any) => {
+      const [wake] = await db.insert(agentWakeupRequests).values({ companyId: fixture.company.id, agentId, source: input.source, idempotencyKey: input.idempotencyKey, payload: input.payload }).returning();
+      return wake as any;
+    });
+    const gateway = createTestToolGatewayService(db, { onToolActionSettled: toolActionDeliveryService(db, { wakeup }).deliver });
+    const session = await gateway.createSession({ companyId: fixture.company.id, agentId: fixture.agent.id, runId: fixture.run.id });
+    await expect(gateway.executeTool({ sessionToken: session.token, tool: "mcp-remote-fixture:update_note", parameters: { noteId: "late", body: "late approval" } })).rejects.toMatchObject({ reasonCode: "approval_required" });
+    await db.update(heartbeatRuns).set({ status: "succeeded", finishedAt: new Date() }).where(eq(heartbeatRuns.id, fixture.run.id));
+    const [request] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.issueId, fixture.issue.id));
+    const approve = () => gateway.approveActionRequest({ companyId: fixture.company.id, issueId: fixture.issue.id, interactionId: request.interactionId!, actionRequestId: request.id, actor: { userId: "reviewer" } });
+    return { ...fixture, gateway, wakeup, request, approve };
+  }
+
+  it("settles an expired review on a late Approve and wakes the assignee through a new run", async () => {
+    const { request, approve, wakeup } = await pendingReviewAfterRunFinished();
+    await db.update(toolActionRequests).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(toolActionRequests.id, request.id));
+
+    await expect(approve()).rejects.toMatchObject({ status: 409, reasonCode: "action_expired" });
+
+    expect((await db.select().from(toolActionRequests).where(eq(toolActionRequests.id, request.id)))[0]!.status).toBe("expired");
+    const [interaction] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, request.interactionId!));
+    expect(interaction).toMatchObject({ status: "expired", result: { outcome: "stale_target", toolAction: { status: "expired", errorCode: "action_expired" } } });
+    expect(wakeup).toHaveBeenCalledTimes(1);
+    expect(wakeup.mock.calls[0]![1].payload.toolAction).toMatchObject({ actionRequestId: request.id, executionStatus: "expired" });
+    await expect(approve()).rejects.toMatchObject({ status: 409, reasonCode: "action_not_pending" });
+    expect(wakeup).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a review whose task closed before a late Approve", async () => {
+    const { issue, request, approve, wakeup } = await pendingReviewAfterRunFinished();
+    await db.update(issues).set({ status: "done" }).where(eq(issues.id, issue.id));
+
+    await expect(approve()).rejects.toMatchObject({ status: 409, reasonCode: "action_task_closed" });
+
+    expect((await db.select().from(toolActionRequests).where(eq(toolActionRequests.id, request.id)))[0]!.status).toBe("cancelled");
+    const [interaction] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, request.interactionId!));
+    expect(interaction).toMatchObject({ status: "cancelled", result: { toolAction: { errorCode: "action_task_closed" } } });
+    expect(wakeup).not.toHaveBeenCalled();
+  });
+
+  it("still executes a reviewed action approved after its source run finished", async () => {
+    const { request, approve } = await pendingReviewAfterRunFinished();
+
+    await expect(approve()).resolves.toMatchObject({ status: "executed" });
+
+    const [interaction] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, request.interactionId!));
+    expect(interaction.result).toMatchObject({ toolAction: { status: "executed" } });
+  });
+
   it("remembers a read action atomically, allows changed arguments, and preserves explicit denials and definition review", async () => {
     const { company, agent, issue, run } = await createRunFixture(db);
     const [project] = await db.insert(projects).values({ companyId: company.id, name: "Reviewed project" }).returning();

@@ -361,6 +361,8 @@ export interface ToolGatewaySession {
 
 export type ToolGatewayRuntimeSlot = ToolRuntimeSlotView;
 
+const ACTION_EXPIRED_MESSAGE = "The approval request expired before a decision.";
+
 export class ToolGatewayHttpError extends Error {
   constructor(
     public readonly status: number,
@@ -2328,6 +2330,44 @@ export function createToolGatewayService(
             "Tool review continuation will be retried",
           ),
         );
+  }
+
+  async function settleActionRequest(
+    request: typeof toolActionRequests.$inferSelect,
+    status: "expired" | "cancelled" | "failed",
+    errorCode: string,
+    errorMessage: string,
+  ): Promise<void> {
+    const now = new Date();
+    const [changed] = await db
+      .update(toolActionRequests)
+      .set({ status, resolvedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(toolActionRequests.id, request.id),
+          eq(toolActionRequests.status, request.status),
+          eq(toolActionRequests.updatedAt, request.updatedAt),
+        ),
+      )
+      .returning();
+    if (!changed) return;
+    await db
+      .update(toolInvocations)
+      .set({
+        status: "failed",
+        errorCode,
+        errorMessage,
+        completedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(toolInvocations.id, request.invocationId));
+    void emitConnectionInvoked(db, request.invocationId);
+    await reflectToolActionInteractionLifecycle({
+      actionRequestId: request.id,
+      status,
+      errorCode,
+      errorMessage,
+    });
   }
 
   async function approvalRequiredInstructions(
@@ -9514,44 +9554,15 @@ export function createToolGatewayService(
             );
             continue;
           }
-          const status = row.status === "pending" ? "expired" : "failed";
-          const errorCode =
-            status === "failed"
-              ? "tool_execution_outcome_unknown"
-              : "action_expired";
-          const errorMessage =
-            status === "failed"
-              ? "Execution was interrupted; the external outcome is unknown. Inspect the provider before retrying."
-              : "The approval request expired before a decision.";
-          const [changed] = await db
-            .update(toolActionRequests)
-            .set({ status, resolvedAt: now, updatedAt: now })
-            .where(
-              and(
-                eq(toolActionRequests.id, row.id),
-                eq(toolActionRequests.status, row.status),
-                eq(toolActionRequests.updatedAt, row.updatedAt),
-              ),
-            )
-            .returning();
-          if (!changed) continue;
-          await db
-            .update(toolInvocations)
-            .set({
-              status: "failed",
-              errorCode,
-              errorMessage,
-              completedAt: now,
-              updatedAt: now,
-            })
-            .where(eq(toolInvocations.id, row.invocationId));
-          void emitConnectionInvoked(db, row.invocationId);
-          await reflectToolActionInteractionLifecycle({
-            actionRequestId: row.id,
-            status,
-            errorCode,
-            errorMessage,
-          });
+          if (row.status === "pending")
+            await settleActionRequest(row, "expired", "action_expired", ACTION_EXPIRED_MESSAGE);
+          else
+            await settleActionRequest(
+              row,
+              "failed",
+              "tool_execution_outcome_unknown",
+              "Execution was interrupted; the external outcome is unknown. Inspect the provider before retrying.",
+            );
         }
         scanned += rows.length;
         if (rows.length < 100) break;
@@ -9730,12 +9741,14 @@ export function createToolGatewayService(
         }
         return actionRequest;
       }
-      if (actionRequest.expiresAt && actionRequest.expiresAt <= new Date())
+      if (actionRequest.expiresAt && actionRequest.expiresAt <= new Date()) {
+        await settleActionRequest(actionRequest, "expired", "action_expired", ACTION_EXPIRED_MESSAGE);
         throw new ToolGatewayHttpError(
           409,
           "Tool review has expired",
           "action_expired",
         );
+      }
       if (
         !isTestOriginInvocation(invocation) &&
         signedPayload.executionOnApprove === true
@@ -9750,12 +9763,14 @@ export function createToolGatewayService(
             ),
           )
           .limit(1);
-        if (!issue || issue.status === "done" || issue.status === "cancelled")
+        if (!issue || issue.status === "done" || issue.status === "cancelled") {
+          await settleActionRequest(actionRequest, "cancelled", "action_task_closed", "The task closed before the review was approved.");
           throw new ToolGatewayHttpError(
             409,
             "Task is closed",
             "action_task_closed",
           );
+        }
         const session: ToolGatewaySession = {
           id: `review:${actionRequest.id}`,
           token: "",
@@ -9778,12 +9793,19 @@ export function createToolGatewayService(
             signedPayload.approvalSnapshot,
             await connectedRemoteApprovalSnapshot(session, tool),
           )
-        )
+        ) {
+          await settleActionRequest(
+            actionRequest,
+            "cancelled",
+            "approved_tool_target_changed",
+            "The tool or its connection changed after the review was requested; call the tool again to request a new review.",
+          );
           throw new ToolGatewayHttpError(
             409,
-            "Tool definition or connection changed; request a new review",
+            "The tool or its connection changed after this review was requested, so it can no longer be approved; the agent must request a new review",
             "approved_tool_target_changed",
           );
+        }
         const access = await policyService.decide(
           policyInputForTool({
             session,

@@ -307,6 +307,7 @@ import {
   unprocessable,
 } from "../errors.js";
 import { privateJsonEtag } from "../middleware/private-json-etag.js";
+import { ToolGatewayHttpError } from "../services/tool-gateway.js";
 import { createRequestPromiseMemo } from "../lib/request-promise-memo.js";
 import {
   assertBoard,
@@ -2585,6 +2586,19 @@ function buildRequestItemVerdictsWakeIdempotencyKey(args: {
     now.getTime() / REQUEST_ITEM_VERDICTS_WAKE_COALESCE_WINDOW_MS,
   );
   return `request_item_verdicts:${args.issueId}:${args.interactionId}:${bucket}`;
+}
+
+async function resolveToolReview<T>(review: Promise<T>): Promise<T> {
+  try {
+    return await review;
+  } catch (error) {
+    if (error instanceof ToolGatewayHttpError)
+      throw new HttpError(error.status, error.message, {
+        ...error.details,
+        code: error.reasonCode,
+      });
+    throw error;
+  }
 }
 
 async function queueResolvedInteractionContinuationWakeup(input: {
@@ -19070,7 +19084,7 @@ export function issueRoutes(
       ) {
         if (!opts.approveToolActionRequest)
           throw unprocessable("Tool review resolution is unavailable");
-        await opts.approveToolActionRequest({
+        await resolveToolReview(opts.approveToolActionRequest({
           companyId: issue.companyId,
           issueId: issue.id,
           interactionId: current.id,
@@ -19080,7 +19094,7 @@ export function issueRoutes(
             agentId: actor.agentId,
             userId: actor.actorType === "user" ? actor.actorId : null,
           },
-        });
+        }));
         res.json(await interactionSvc.getById(current.id));
         return;
       }
@@ -19123,7 +19137,7 @@ export function issueRoutes(
         typeof toolAction?.actionRequestId === "string" &&
         opts.approveToolActionRequest
       ) {
-        const approvalResult = await opts.approveToolActionRequest({
+        const approvalResult = await resolveToolReview(opts.approveToolActionRequest({
           companyId: issue.companyId,
           issueId: issue.id,
           interactionId: interaction.id,
@@ -19132,7 +19146,7 @@ export function issueRoutes(
             agentId: actor.agentId,
             userId: actor.actorType === "user" ? actor.actorId : null,
           },
-        });
+        }));
         const approval = readObject(approvalResult);
         const executionStatus = readToolActionExecutionStatus(approval.status);
         if (executionStatus) {
@@ -19406,7 +19420,7 @@ export function issueRoutes(
       ) {
         if (!opts.declineToolActionRequest)
           throw unprocessable("Tool review resolution is unavailable");
-        await opts.declineToolActionRequest({
+        await resolveToolReview(opts.declineToolActionRequest({
           companyId: issue.companyId,
           issueId: issue.id,
           interactionId: current.id,
@@ -19416,7 +19430,7 @@ export function issueRoutes(
             agentId: actor.agentId,
             userId: actor.actorType === "user" ? actor.actorId : null,
           },
-        });
+        }));
         res.json(await interactionSvc.getById(current.id));
         return;
       }

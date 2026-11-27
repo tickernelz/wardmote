@@ -1377,6 +1377,67 @@ describe("issue thread interaction routes", () => {
     );
   });
 
+  function pendingToolReview(id: string) {
+    return {
+      id,
+      kind: "request_confirmation",
+      status: "pending",
+      createdByAgentId: CREATED_AGENT_ID,
+      sourceRunId: RUN_1,
+      requestedResolverPolicy: "anyone",
+      effectiveResolverPolicy: "anyone",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        prompt: "Approve the action?",
+        toolAction: { version: 1, actionRequestId: `${id}-request`, toolName: "google_call" },
+      },
+    };
+  }
+
+  it.each([
+    ["the connection changed after the source run finished", 409, "approved_tool_target_changed"],
+    ["the review expired", 409, "action_expired"],
+    ["the task closed", 409, "action_task_closed"],
+    ["the review was already answered", 409, "action_not_pending"],
+    ["the review row is gone", 404, "action_request_not_found"],
+  ])("answers Approve with %s as a coded client error, not 500", async (_case, status, reasonCode) => {
+    mockInteractionService.getForIssue.mockResolvedValueOnce(pendingToolReview("interaction-stale-review"));
+    const app = await createApp(undefined, {
+      approveToolActionRequest: vi.fn(async () => {
+        const { ToolGatewayHttpError } = await import("../services/tool-gateway.js");
+        throw new ToolGatewayHttpError(status, `review refused: ${reasonCode}`, reasonCode);
+      }),
+    });
+
+    const res = await request(app)
+      .post(`/api/issues/${ISSUE_ID}/interactions/interaction-stale-review/accept`)
+      .send({});
+
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ error: `review refused: ${reasonCode}`, code: reasonCode });
+    expect(mockInteractionService.acceptInteraction).not.toHaveBeenCalled();
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("answers Reject on a tool review that can no longer be declined as a coded client error, not 500", async () => {
+    mockInteractionService.getForIssue.mockResolvedValueOnce(pendingToolReview("interaction-stale-decline"));
+    const app = await createApp(undefined, {
+      declineToolActionRequest: vi.fn(async () => {
+        const { ToolGatewayHttpError } = await import("../services/tool-gateway.js");
+        throw new ToolGatewayHttpError(409, "Tool action request is no longer pending", "action_not_pending");
+      }),
+    });
+
+    const res = await request(app)
+      .post(`/api/issues/${ISSUE_ID}/interactions/interaction-stale-decline/reject`)
+      .send({ reason: "Not now" });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: "Tool action request is no longer pending", code: "action_not_pending" });
+    expect(mockInteractionService.rejectInteraction).not.toHaveBeenCalled();
+  });
+
   it("rejects client-supplied tool-action metadata on interaction creation", async () => {
     const app = await createApp();
 

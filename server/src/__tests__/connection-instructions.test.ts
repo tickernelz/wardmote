@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { access, mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, companyMemberships, connectionGrants, createDb, heartbeatRuns, issues, toolApplications, toolCatalogEntries, toolConnections, toolPolicies, toolProfileBindings, toolActionRequests } from "@tickernelz/wardmote-db";
+import { agents, companies, companyMemberships, connectionGrants, createDb, heartbeatRuns, issues, issueThreadInteractions, toolApplications, toolCatalogEntries, toolConnections, toolPolicies, toolProfileBindings, toolActionRequests } from "@tickernelz/wardmote-db";
 import { createToolGatewayService } from "../services/tool-gateway.js";
 import { toolDiscoveryScheduler } from "../services/tool-discovery-scheduler.js";
 import { toolAccessService, projectedConnectionToolArguments, projectedConnectionToolInputSchema } from "../services/tool-access.js";
@@ -221,7 +221,13 @@ async function createRemoteMcpToolFixture(db: ReturnType<typeof createDb>, compa
     await expect(gateway.executeTool({ sessionToken: session.token, tool: tool.name, parameters: { query: "release", workspace_id: "forged" } })).rejects.toMatchObject({ reasonCode: "approval_required" });
     const [approval] = await db.select().from(toolActionRequests).where(eq(toolActionRequests.issueId, f.issue.id));
     await f.service.updateConnection(f.connection.id, { config: { ...config, methodConfig: { workspaceId: "after" } } });
-    await expect(gateway.approveActionRequest({ companyId: f.company.id, actionRequestId: approval.id, actor: { userId: "reviewer" } })).rejects.toMatchObject({ reasonCode: "approved_tool_target_changed" });
+    const approve = () => gateway.approveActionRequest({ companyId: f.company.id, issueId: f.issue.id, interactionId: approval.interactionId!, actionRequestId: approval.id, actor: { userId: "reviewer" } });
+    await expect(approve()).rejects.toMatchObject({ status: 409, reasonCode: "approved_tool_target_changed" });
+    expect(providerCalls).toBe(0);
+    expect((await db.select().from(toolActionRequests).where(eq(toolActionRequests.id, approval.id)))[0]!.status).toBe("cancelled");
+    const [card] = await db.select().from(issueThreadInteractions).where(eq(issueThreadInteractions.id, approval.interactionId!));
+    expect(card).toMatchObject({ status: "cancelled", result: { outcome: "stale_target", toolAction: { errorCode: "approved_tool_target_changed" } } });
+    await expect(approve()).rejects.toMatchObject({ status: 409, reasonCode: "action_not_pending" });
     expect(providerCalls).toBe(0);
   });
 
