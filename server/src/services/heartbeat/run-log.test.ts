@@ -173,3 +173,20 @@ describe("heartbeat run-log chunk formatting", () => {
     expect(compacted).not.toContain("[wardmote truncated");
   });
 });
+
+
+describe("heartbeat run-log redaction cost", () => {
+  it("redacts a long identifier-like run in linear time and still masks the secret next to it", () => {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+    let blob = "";
+    for (let i = 0; i < 160_000; i += 1) blob += alphabet[(i * 7919) % alphabet.length];
+    const line = JSON.stringify({
+      type: "tool_execution_end",
+      result: { text: `api token file\n"api_key": "sk-live-value-123"\n${blob}` },
+    });
+    const startedAt = performance.now();
+    const compacted = compactRunLogChunk(`${line}\n`);
+    expect(performance.now() - startedAt).toBeLessThan(2_000);
+    expect(compacted).not.toContain("sk-live-value-123");
+  });
+});

@@ -20,7 +20,7 @@ const COMMAND_CLI_SECRET_OPTION_RE = new RegExp(
   "gi",
 );
 const COMMAND_ENV_SECRET_ASSIGNMENT_RE = new RegExp(
-  String.raw`(\b${SECRET_NAME_PATTERN}\s*=\s*)(?:(\\["'])([\s\S]*?)\2|(["'])([^"'` +
+  String.raw`((?<![A-Za-z0-9_-])${SECRET_NAME_PATTERN}\s*=\s*)(?:(\\["'])([\s\S]*?)\2|(["'])([^"'` +
     "`" +
     String.raw`\r\n]*)\4|([^\s"'\\` +
     "`" +
@@ -32,7 +32,7 @@ const COMMAND_AUTHORIZATION_BEARER_RE =
 const COMMAND_OPENAI_KEY_RE = /\bsk-[A-Za-z0-9_-]{12,}\b/g;
 const COMMAND_GITHUB_TOKEN_RE = /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g;
 const COMMAND_JWT_RE =
-  /\b[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,}){2}(?:\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})?\b/g;
+  /(?<![A-Za-z0-9_]-*)\b[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,}){2}(?:\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})?\b/g;
 /** Recognize encoded JSON headers, without treating dotted identifiers as tokens. */
 export function looksLikeCredentialJwt(value: string): boolean {
   const segments = value.split(".");

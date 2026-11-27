@@ -349,13 +349,13 @@ const CLI_SECRET_FLAG_RE = new RegExp(
   "i",
 );
 const JSON_SECRET_FIELD_TEXT_RE = new RegExp(
-  String.raw`((?:"|')?${SECRET_FIELD_NAME_PATTERN}(?:"|')?\s*:\s*(?:"|'))(?:\\[\s\S]|[^"'` +
+  String.raw`((?:"|')?(?<![A-Za-z0-9_-])${SECRET_FIELD_NAME_PATTERN}(?:"|')?\s*:\s*(?:"|'))(?:\\[\s\S]|[^"'` +
     "`" +
     String.raw`\\\r\n])+((?:"|'))`,
   "gi",
 );
 const ESCAPED_JSON_SECRET_FIELD_TEXT_RE = new RegExp(
-  String.raw`((?:\\")?${SECRET_FIELD_NAME_PATTERN}(?:\\")?\s*:\s*(?:\\"))[^\\\r\n]+((?:\\"))`,
+  String.raw`((?:\\")?(?<![A-Za-z0-9_-])${SECRET_FIELD_NAME_PATTERN}(?:\\")?\s*:\s*(?:\\"))[^\\\r\n]+((?:\\"))`,
   "gi",
 );
 const SECRET_TEXT_HINTS = [
@@ -686,7 +686,7 @@ function authorizationCredentialRange(
 function redactAuthorizationCredentials(input: string): string {
   // Include compound diagnostic labels such as proxyAuthorization while the
   // value parser still requires a Basic/Bearer scheme before redacting.
-  const authorizationWord = /\b[A-Za-z0-9_-]*Authorization[A-Za-z0-9_-]*\b/gi;
+  const authorizationWord = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]*Authorization[A-Za-z0-9_-]*\b/gi;
   const parts: string[] = [];
   let copiedThrough = 0;
   let match: RegExpExecArray | null;

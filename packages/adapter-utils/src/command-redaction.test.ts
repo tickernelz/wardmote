@@ -114,3 +114,13 @@ second-line\" status=401`;
     expect(output).toContain(REDACTED_COMMAND_TEXT_VALUE);
   });
 });
+
+
+describe("secret names at the start of a dash-joined run", () => {
+  it("masks an assignment or JWT whose run begins with dashes", () => {
+    const jwt = `${Buffer.from('{"alg":"HS256","typ":"JWT"}').toString("base64url")}.abcdefghijk.abcdefghijkl`;
+    expect(redactCommandText("env -API_TOKEN=plainsecret run")).not.toContain("plainsecret");
+    expect(redactCommandText("env x-api-token=plainsecret run")).not.toContain("plainsecret");
+    expect(redactCommandText(`header --${jwt}`)).not.toContain(jwt);
+  });
+});
