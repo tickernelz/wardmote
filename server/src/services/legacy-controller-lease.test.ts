@@ -122,6 +122,19 @@ const support = await getEmbeddedPostgresTestSupport();
       await vi.waitFor(() => { expect(controller.signal.aborted).toBe(true); }, { timeout: 5000 });
     } finally { watch.stop(); }
   });
+  it.each(["succeeded", "failed", "timed_out"] as const)("a run this controller finished as %s releases the watch without a lease-loss abort", async (status) => {
+    const run = await seed();
+    await db.update(heartbeatRuns).set({ status, finishedAt: new Date() }).where(eq(heartbeatRuns.id, run.id));
+    await expire(run.id);
+    const controller = new AbortController();
+    const reclaim = vi.spyOn(db, "update");
+    const watch = watchLegacyControllerLease(db, { ...run, controllerLeaseExpiresAt: new Date(Date.now() - 65_000) }, controller);
+    try {
+      await vi.waitFor(() => { expect(reclaim).toHaveBeenCalled(); }, { timeout: 5000 });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(controller.signal.aborted).toBe(false);
+    } finally { reclaim.mockRestore(); watch.stop(); }
+  });
   it("only one competing recovery revokes the observed expired owner", async () => {
     const run = await seed();
     await expire(run.id);
