@@ -4,8 +4,8 @@ import type { Request, RequestHandler } from "express";
 import type { Logger } from "pino";
 import { logger as defaultLogger, requestLogUrl } from "../middleware/logger.js";
 
-export const EVENT_LOOP_STALL_THRESHOLD_MS = 5_000;
-export const GC_PAUSE_THRESHOLD_MS = 1_000;
+const EVENT_LOOP_STALL_THRESHOLD_MS = 5_000;
+const GC_PAUSE_THRESHOLD_MS = 1_000;
 const HEARTBEAT_MS = 250;
 const REQUEST_LOOKBACK_MS = 5 * 60_000;
 const MAX_REPORTED_REQUESTS = 15;
@@ -39,7 +39,7 @@ export const trackEventLoopStallRequests: RequestHandler = (req, res, next) => {
   next();
 };
 
-export function requestsAroundStall(stallStartedAt: number, stallEndedAt: number) {
+function requestsAroundStall(stallStartedAt: number, stallEndedAt: number) {
   const describe = (request: { method: string; rawUrl: string; routePath?: string; startedAt: number }, finishedAt: number | null) => ({
     method: request.method,
     url: requestLogUrl({ method: request.method, originalUrl: request.rawUrl, url: request.rawUrl }),
@@ -94,7 +94,7 @@ const summarize = (profile) => {
     }
     return { frame, pct: total ? Math.round((entry.samples * 100) / total) : 0, stack };
   });
-  return { samples: total, top };
+  return { samples: total, profiledMs: Math.round((profile.endTime - profile.startTime) / 1000), top };
 };
 const startProfile = (current) => {
   try {
@@ -154,7 +154,7 @@ type WatchdogReport = {
   watchdogLagMs: number;
   majorPageFaults: number;
   profileError?: string;
-  profile?: { samples: number; top: { frame: string; pct: number; stack: string[] }[] };
+  profile?: { samples: number; profiledMs: number; top: { frame: string; pct: number; stack: string[] }[] };
 };
 
 const mib = (bytes: number) => Math.round(bytes / 1048576);
@@ -181,7 +181,7 @@ export function startEventLoopStallMonitor(options: {
   const beat = () => Atomics.store(heartbeat, 0, BigInt(Date.now()));
   beat();
   const heartbeatTimer = setInterval(beat, HEARTBEAT_MS);
-  heartbeatTimer.unref();
+  heartbeatTimer.unref?.();
 
   const gcObserver = new PerformanceObserver((list) => {
     for (const entry of list.getEntries()) {
@@ -214,7 +214,7 @@ export function startEventLoopStallMonitor(options: {
       majorPageFaults: report.majorPageFaults,
       ...memorySnapshot(),
       requests: requestsAroundStall(report.startedAt, report.endedAt),
-      ...(report.profile ? { profile: report.profile } : {}),
+      ...(report.profile ? { unprofiledMs: Math.max(0, stalledMs - report.profile.profiledMs), profile: report.profile } : {}),
       ...(report.profileError ? { profileError: report.profileError } : {}),
     }, "event loop stalled");
   });

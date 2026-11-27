@@ -222,7 +222,6 @@ async function startServerWithDatabaseTeardown(
   extendStartTimeoutUntilReady();
   setStartupRecoveryPhase("starting");
   warnIfUnsupportedNodeVersion(process.versions.node, (message) => logger.warn(message));
-  const eventLoopStallMonitor = startEventLoopStallMonitor();
 
   // Tracing must be active (or have failed and logged) before the first DB
   // connection or the HTTP server exists — see instrumentation.ts.
@@ -1918,6 +1917,7 @@ async function startServerWithDatabaseTeardown(
     throw err;
   }
 
+  const eventLoopStallMonitor = startEventLoopStallMonitor();
   markIdleStartupComplete({ scheduledBackups: config.databaseBackupEnabled });
   setStartupRecoveryPhase("ready");
   logger.info(`Server startup recovery complete on ${config.host}:${listenPort}`);

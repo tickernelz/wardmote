@@ -304,6 +304,10 @@ vi.mock("../realtime/live-events-ws.js", () => ({
   setupLiveEventsWebSocketServer: vi.fn(),
 }));
 
+vi.mock("../services/event-loop-stall-monitor.js", () => ({
+  startEventLoopStallMonitor: vi.fn(() => ({ stop: vi.fn() })),
+}));
+
 vi.mock("../services/index.js", () => ({
   backfillLegacyToolOAuthTokens: vi.fn(async () => ({
     scannedConnections: 0,

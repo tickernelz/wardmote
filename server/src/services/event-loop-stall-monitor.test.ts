@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import express from "express";
 import type { AddressInfo } from "node:net";
@@ -64,6 +65,29 @@ describe("event loop stall monitor", () => {
       await new Promise((resolve) => server.close(resolve));
     }
   }, 20_000);
+
+  it("reports how much of a stall spent in native code the profile did not cover", async () => {
+    const { logger, entries } = captureLogger();
+    stop = startEventLoopStallMonitor({ logger, stallThresholdMs: 300 }).stop;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    execFileSync("sleep", ["1.5"]);
+    spinTheMainThreadFor(300);
+    const stall = await waitFor(() => entries.find((entry) => entry.msg === "event loop stalled"));
+    expect(stall.obj.stalledMs).toBeGreaterThanOrEqual(1_700);
+    expect(stall.obj.profile.profiledMs).toBeLessThan(stall.obj.stalledMs / 2);
+    expect(stall.obj.unprofiledMs).toBeGreaterThanOrEqual(1_000);
+  }, 20_000);
+
+  it("logs garbage collection pauses longer than the threshold with kind and heap size", async () => {
+    const { logger, entries } = captureLogger();
+    stop = startEventLoopStallMonitor({ logger, gcThresholdMs: 0 }).stop;
+    const ring: unknown[] = new Array(4096);
+    for (let i = 0; i < 2_000_000; i += 1) ring[i & 4095] = { i, label: `x${i & 1023}` };
+    const pause = await waitFor(() => entries.find((entry) => entry.msg === "long garbage collection pause"));
+    expect(pause.obj.durationMs).toEqual(expect.any(Number));
+    expect(["minor", "major", "incremental", "weakcb"]).toContain(pause.obj.kind);
+    expect(pause.obj.heapUsedMiB).toEqual(expect.any(Number));
+  });
 
   it("stays silent while the event loop keeps turning", async () => {
     const { logger, entries } = captureLogger();
