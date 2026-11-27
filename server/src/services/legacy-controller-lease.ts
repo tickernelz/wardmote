@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, gt, lte, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import { heartbeatRuns, type Db } from "@tickernelz/wardmote-db";
 import { logger } from "../middleware/logger.js";
 
@@ -78,6 +78,15 @@ export async function reclaimLegacyControllerLease(
   return Boolean(reclaimed);
 }
 
+async function finishedUnderThisController(db: Db, run: Pick<Run, "id" | "companyId">): Promise<boolean> {
+  const [finished] = await db.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(and(
+    eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.companyId, run.companyId),
+    eq(heartbeatRuns.controllerBootId, legacyControllerBootId),
+    inArray(heartbeatRuns.status, ["succeeded", "failed", "timed_out"]),
+  ));
+  return Boolean(finished);
+}
+
 export const LEGACY_CONTROLLER_LEASE_LOST_CODE = "controller_lease_lost";
 
 export class LegacyControllerLeaseLostError extends Error {
@@ -139,6 +148,11 @@ export function watchLegacyControllerLease(db: Db, run: Run, controller: AbortCo
       armDeadline(Date.now());
       return true;
     }
+    if (outcome === "lost" && await finishedUnderThisController(db, run).catch(() => false)) {
+      release();
+      return false;
+    }
+    if (stopped) return false;
     if (outcome === "lost" || failClosed) { abortLost(); return false; }
     unconfirmedSince ??= Date.now();
     logger.warn({ runId: run.id, overdueMs, unconfirmedMs: Date.now() - unconfirmedSince },
@@ -193,5 +207,6 @@ export function watchLegacyControllerLease(db: Db, run: Run, controller: AbortCo
     void renewInBackground().finally(() => { pending = false; });
   }, LEGACY_CONTROLLER_RENEW_MS);
   timer.unref();
-  return { assertOwned, stop() { stopped = true; clearInterval(timer); clearTimeout(deadline); } };
+  function release() { stopped = true; clearInterval(timer); clearTimeout(deadline); }
+  return { assertOwned, stop: release };
 }
