@@ -474,6 +474,7 @@ describe("OpenWA ingress (embedded Postgres + fake gateway)", () => {
     await settled(t, 1);
     const leaseWhere = and(eq(chatEndpointLeases.endpointId, t.endpointId), eq(chatEndpointLeases.leaseKey, "openwa_receiver_runtime"));
     const [leaseBefore] = await db.select().from(chatEndpointLeases).where(leaseWhere);
+    const subscriptionsBefore = t.gateway.subscriptions.length;
     const hold = t.counted.holdNextRenewal();
     await hold.entered;
     const stalledUntil = Date.now() + leaseTtlMs * 2;
@@ -485,7 +486,8 @@ describe("OpenWA ingress (embedded Postgres + fake gateway)", () => {
     await settled(t, 3);
     const sequences = t.inbound.map((event) => event.body);
     expect(new Set(sequences).size).toBe(3);
-    await until(() => t.gateway.subscriberCount === 1);
+    expect(t.gateway.subscriptions.length).toBe(subscriptionsBefore);
+    expect(t.gateway.subscriberCount).toBe(1);
     const [leaseAfter] = await db.select().from(chatEndpointLeases).where(leaseWhere);
     expect(leaseAfter.token).toBe(leaseBefore.token);
     await until(async () => (await db.select().from(chatEndpoints).where(eq(chatEndpoints.id, t.endpointId)))[0].status === "active");
