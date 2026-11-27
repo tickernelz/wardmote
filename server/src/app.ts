@@ -61,6 +61,7 @@ import type { InspectDatabaseBackupHealthOptions } from "./services/database-bac
 import type { DiskSpaceStatus } from "./services/disk-guard.js";
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
+import { trackEventLoopStallRequests } from "./services/event-loop-stall-monitor.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { agentAuthorityAudit } from "./middleware/agent-authority-audit.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
@@ -457,6 +458,7 @@ export async function createApp(
   },
 ) {
   const app = express();
+  app.use(trackEventLoopStallRequests);
   app.use(idleAdmissionMiddleware);
   app.use(openwaOwnerGroupRequestScope);
   const staticUi = express.Router();

@@ -138,6 +138,7 @@ import { createWardmoteUpdateService } from "./services/wardmote-updates.js";
 import { createInstanceUpdateInstaller, startInstanceAutoUpdater } from "./services/wardmote-update-runtime.js";
 import { getMaxAttachmentBytes } from "./attachment-types.js";
 import { setWardmoteBridgeAttachmentMaxBytesSource } from "@tickernelz/wardmote-adapter-utils/execution-target";
+import { startEventLoopStallMonitor } from "./services/event-loop-stall-monitor.js";
 import {
   createEmbeddedPostgresSupervisor,
   type EmbeddedPostgresSupervisor,
@@ -221,6 +222,7 @@ async function startServerWithDatabaseTeardown(
   extendStartTimeoutUntilReady();
   setStartupRecoveryPhase("starting");
   warnIfUnsupportedNodeVersion(process.versions.node, (message) => logger.warn(message));
+  const eventLoopStallMonitor = startEventLoopStallMonitor();
 
   // Tracing must be active (or have failed and logged) before the first DB
   // connection or the HTTP server exists — see instrumentation.ts.
@@ -1982,6 +1984,7 @@ async function startServerWithDatabaseTeardown(
     clearInterval(diskGuardInterval);
     clearInterval(runLogRetentionInterval);
     clearInterval(executionControlInterval);
+    eventLoopStallMonitor.stop();
     if (db) modelCooldownProber(db as any).stop();
     if (heartbeatSchedulerInterval) {
       clearInterval(heartbeatSchedulerInterval);

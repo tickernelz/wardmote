@@ -70,7 +70,7 @@ function privateWebhookLogUrl(url: unknown) {
     : "/api/chat-webhooks/:publicId/:provider";
 }
 
-function requestLogUrl(req: {
+export function requestLogUrl(req: {
   method?: string;
   originalUrl?: unknown;
   url?: unknown;
