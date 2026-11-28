@@ -9,8 +9,9 @@ import { UPDATE_NOTICE_HIDDEN_UNTIL_KEY, UpdateNotice } from "./UpdateNotice";
 const getCurrentBoardAccess = vi.hoisted(() => vi.fn());
 const getStatus = vi.hoisted(() => vi.fn());
 const getInstall = vi.hoisted(() => vi.fn());
+const startInstall = vi.hoisted(() => vi.fn());
 vi.mock("@/api/access", () => ({ accessApi: { getCurrentBoardAccess } }));
-vi.mock("@/api/instanceUpdates", () => ({ instanceUpdatesApi: { getStatus, getInstall, liveRuns: vi.fn(async () => ({ draining: false, pendingWakes: 0, count: 0, runs: [] })) } }));
+vi.mock("@/api/instanceUpdates", () => ({ instanceUpdatesApi: { getStatus, getInstall, startInstall, liveRuns: vi.fn(async () => ({ draining: false, pendingWakes: 0, count: 0, runs: [] })) } }));
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const T0 = Date.UTC(2026, 10, 12, 7, 0, 0);
@@ -121,6 +122,36 @@ describe("UpdateNotice", () => {
     const view = await renderNotice(() => T0 + 60_000);
     try {
       expect([...view.container.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Update now", "Hide"]);
+    } finally {
+      view.cleanup();
+    }
+  });
+
+  it("keeps the started update's outcome in the open dialog instead of returning to the start view", async () => {
+    getCurrentBoardAccess.mockResolvedValue(access({ isInstanceAdmin: true }));
+    getStatus.mockResolvedValue({ ...STATUS, install: { ...STATUS.install, canInstall: true } });
+    const installing = { id: "job-1", phase: "installing", mode: "wait", toVersion: "2026.1112.0", installedVersion: null, liveRuns: 0, finishedAt: null, error: null, rolledBackTo: null, logHint: null };
+    getInstall.mockResolvedValue({ job: null });
+    startInstall.mockResolvedValue({ job: installing });
+    const view = await renderNotice(() => T0);
+    const dialog = () => document.body.querySelector('[data-testid="update-install-dialog"]');
+    const click = async (scope: ParentNode | null, label: string) => {
+      const button = [...(scope?.querySelectorAll("button") ?? [])].find((candidate) => candidate.textContent === label);
+      expect(button, label).toBeDefined();
+      await act(async () => { button!.click(); });
+      for (let i = 0; i < 4; i += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    };
+    try {
+      await click(view.container, "Update now");
+      await click(dialog(), "Update now");
+      expect(startInstall).toHaveBeenCalledWith("2026.1112.0", "wait");
+      expect(view.notice()?.getAttribute("data-phase")).toBe("installing");
+      getInstall.mockResolvedValue({ job: { ...installing, phase: "succeeded", installedVersion: "2026.1112.0", finishedAt: new Date(T0).toISOString() } });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_200)); });
+      for (let i = 0; i < 4; i += 1) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      expect(getInstall.mock.calls.length).toBeGreaterThan(1);
+      expect(dialog()?.textContent).toContain("Wardmote 2026.1112.0 is installed and running.");
+      expect(dialog()?.textContent).not.toContain("No runs are active");
     } finally {
       view.cleanup();
     }

@@ -89,11 +89,16 @@ export function createUpdateInstaller(deps: UpdateInstallerDeps): UpdateInstalle
   }
 
   function resultPatch(result: UpdateResultFile): Partial<UpdateJob> {
+    const targetVersion = job?.toVersion;
+    const runningVersion = deps.status().currentVersion;
+    const stillOld = result.ok === true && targetVersion !== undefined && runningVersion !== targetVersion;
     return {
-      phase: result.ok === true ? "succeeded" : "failed",
+      phase: result.ok === true && !stillOld ? "succeeded" : "failed",
       installedVersion: typeof result.version === "string" ? result.version : null,
       rolledBackTo: typeof result.rolledBackTo === "string" ? result.rolledBackTo : null,
-      error: typeof result.error === "string" ? result.error : null,
+      error: stillOld
+        ? `The update process reported success, but this server still runs ${runningVersion}, not ${targetVersion}. Restart it with \`wardmote service restart --expected-version ${targetVersion}\`.`
+        : typeof result.error === "string" ? result.error : null,
       finishedAt: result.finishedAt as string,
     };
   }

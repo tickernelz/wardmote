@@ -26,8 +26,12 @@ const STATUS: InstanceUpdateStatus = {
 };
 
 let root: string;
+let runningVersion: string;
 const installers: Array<{ stop(): void }> = [];
-beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "zha5799-install-")); });
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "zha5799-install-"));
+  runningVersion = STATUS.currentVersion;
+});
 afterEach(() => {
   for (const installer of installers.splice(0)) installer.stop();
   fs.rmSync(root, { recursive: true, force: true });
@@ -52,7 +56,7 @@ function installer(overrides: Partial<UpdateInstallerDeps> & { runControl: Insta
   const launch = vi.fn(async (_job: UpdateJob, _resultPath: string) => ({ logHint: "journalctl --user -u wardmote-update-test", unit: "wardmote-update-test" }));
   const unitState = vi.fn(async (_unit: string) => unit.state);
   const created = createUpdateInstaller({
-    status: () => STATUS,
+    status: () => ({ ...STATUS, currentVersion: runningVersion }),
     launch,
     unitState,
     audit: async (event) => { audits.push(structuredClone(event)); },
@@ -74,6 +78,7 @@ async function until(check: () => boolean, timeoutMs = 2_000) {
 }
 
 function writeResult(result: Record<string, unknown>) {
+  if (result.ok === true) runningVersion = "2026.1112.0";
   fs.writeFileSync(path.join(root, "update-result.json"), JSON.stringify({ finishedAt: new Date(Date.now() + 1000).toISOString(), ...result }));
 }
 
@@ -159,6 +164,18 @@ describe("update installer", () => {
       ["instance.update.finished", "succeeded"],
     ]);
     expect(audits[0]?.job.requestedBy).toEqual(admin);
+  });
+
+  it("fails a reported success while this server still runs the old version, and reopens admission", async () => {
+    const control = runs(0);
+    const { installer: updates, audits } = installer({ runControl: control });
+    await updates.start({ version: "2026.1112.0", mode: "force", trigger: "manual", requestedBy: admin });
+    fs.writeFileSync(path.join(root, "update-result.json"), JSON.stringify({ ok: true, version: "2026.1112.0", finishedAt: new Date(Date.now() + 1000).toISOString() }));
+    await until(() => updates.current()?.phase === "failed");
+    expect(updates.current()).toMatchObject({ installedVersion: "2026.1112.0", rolledBackTo: null });
+    expect(updates.current()?.error).toContain("still runs 2026.1111.0, not 2026.1112.0");
+    expect(control.isDraining()).toBe(false);
+    expect(audits.map((event) => event.job.phase)).toEqual(["installing", "failed"]);
   });
 
   it("wait holds new runs, never turns into force on its own, and can be cancelled", async () => {

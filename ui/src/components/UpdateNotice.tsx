@@ -86,7 +86,7 @@ export function UpdateNotice({ now = Date.now }: { now?: () => number }) {
   const recentResult = job?.finishedAt ? now() - Date.parse(job.finishedAt) < RESULT_SHOWN_FOR_MS && seenJob !== job.id : false;
   const resultStillCurrent = job?.phase === "succeeded"
     ? !update.updateAvailable
-    : job?.phase === "failed" && update.latestVersion === job.toVersion;
+    : job?.phase === "failed" && update.updateAvailable && update.latestVersion === job.toVersion;
   const showJobStrip = job !== null && (isUpdateJobActive(job) || (recentResult && resultStillCurrent));
 
   const dialog = canInstall ? (
@@ -116,21 +116,23 @@ export function UpdateNotice({ now = Date.now }: { now?: () => number }) {
       setSeenJob(job.id);
     };
     return (
-      <section aria-label="Wardmote update" data-testid="update-notice" data-phase={job.phase} className={stripClass}>
-        {isUpdateJobActive(job)
-          ? <Loader2 className="size-4 shrink-0 animate-spin text-accent" aria-hidden="true" />
-          : <ArrowUpCircle className={`size-4 shrink-0 ${job.phase === "failed" ? "text-bad" : "text-accent"}`} aria-hidden="true" />}
-        <p className="min-w-0 flex-1 truncate font-semibold" role="status">{label}</p>
-        <Button type="button" variant="ghost" size="xs" onClick={() => setDialogOpen("result")}>Details</Button>
-        {isUpdateJobActive(job) ? null : (
-          <Button type="button" variant="ghost" size="xs" onClick={dismiss}>Dismiss</Button>
-        )}
+      <>
+        <section aria-label="Wardmote update" data-testid="update-notice" data-phase={job.phase} className={stripClass}>
+          {isUpdateJobActive(job)
+            ? <Loader2 className="size-4 shrink-0 animate-spin text-accent" aria-hidden="true" />
+            : <ArrowUpCircle className={`size-4 shrink-0 ${job.phase === "failed" ? "text-bad" : "text-accent"}`} aria-hidden="true" />}
+          <p className="min-w-0 flex-1 truncate font-semibold" role="status">{label}</p>
+          <Button type="button" variant="ghost" size="xs" onClick={() => setDialogOpen("result")}>Details</Button>
+          {isUpdateJobActive(job) ? null : (
+            <Button type="button" variant="ghost" size="xs" onClick={dismiss}>Dismiss</Button>
+          )}
+        </section>
         {dialog}
-      </section>
+      </>
     );
   }
 
-  if (!update.updateAvailable || !update.latestVersion || hidden) return null;
+  if (!update.updateAvailable || !update.latestVersion || hidden) return <>{null}{dialog}</>;
 
   const hide = () => {
     const until = updateNoticeHiddenUntil(now());
@@ -139,43 +141,45 @@ export function UpdateNotice({ now = Date.now }: { now?: () => number }) {
   };
 
   return (
-    <section aria-label="Wardmote update available" data-testid="update-notice" className={stripClass}>
-      <ArrowUpCircle className="size-4 shrink-0 text-accent" aria-hidden="true" />
-      <p className="min-w-0 flex-1 truncate" title={`Installed ${update.currentVersion}. ${update.install.command}`}>
-        <b className="font-semibold">Wardmote {update.latestVersion}<span className="hidden sm:inline"> is available</span></b>
-        <span className="hidden sm:inline"> · installed {update.currentVersion}</span>
-        {canInstall ? null : (
-          <span className="hidden lg:inline">
-            {" · "}
-            <code className="rounded bg-bg px-1 py-0.5 text-xs">{update.install.command}</code>
-          </span>
-        )}
-      </p>
-      {update.releaseNotesUrl ? (
-        <a
-          href={update.releaseNotesUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="shrink-0 text-sm font-medium text-accent underline-offset-2 hover:underline"
+    <>
+      <section aria-label="Wardmote update available" data-testid="update-notice" className={stripClass}>
+        <ArrowUpCircle className="size-4 shrink-0 text-accent" aria-hidden="true" />
+        <p className="min-w-0 flex-1 truncate" title={`Installed ${update.currentVersion}. ${update.install.command}`}>
+          <b className="font-semibold">Wardmote {update.latestVersion}<span className="hidden sm:inline"> is available</span></b>
+          <span className="hidden sm:inline"> · installed {update.currentVersion}</span>
+          {canInstall ? null : (
+            <span className="hidden lg:inline">
+              {" · "}
+              <code className="rounded bg-bg px-1 py-0.5 text-xs">{update.install.command}</code>
+            </span>
+          )}
+        </p>
+        {update.releaseNotesUrl ? (
+          <a
+            href={update.releaseNotesUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="shrink-0 text-sm font-medium text-accent underline-offset-2 hover:underline"
+          >
+            <span className="sm:hidden">Notes</span>
+            <span className="hidden sm:inline">Release notes</span>
+          </a>
+        ) : null}
+        {canInstall ? (
+          <Button type="button" variant="primary" size="xs" onClick={() => setDialogOpen("start")}>Update now</Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          onClick={hide}
+          title={`Hide for ${UPDATE_NOTICE_HIDE_DAYS} days`}
+          aria-label={`Hide the update notice for ${UPDATE_NOTICE_HIDE_DAYS} days`}
         >
-          <span className="sm:hidden">Notes</span>
-          <span className="hidden sm:inline">Release notes</span>
-        </a>
-      ) : null}
-      {canInstall ? (
-        <Button type="button" variant="primary" size="xs" onClick={() => setDialogOpen("start")}>Update now</Button>
-      ) : null}
-      <Button
-        type="button"
-        variant="ghost"
-        size="xs"
-        onClick={hide}
-        title={`Hide for ${UPDATE_NOTICE_HIDE_DAYS} days`}
-        aria-label={`Hide the update notice for ${UPDATE_NOTICE_HIDE_DAYS} days`}
-      >
-        Hide
-      </Button>
+          Hide
+        </Button>
+      </section>
       {dialog}
-    </section>
+    </>
   );
 }

@@ -38,7 +38,7 @@ function healthUrl(instanceId: string): string {
   return buildLocalHealthUrl(config?.server.host, config?.server.port ?? 3100);
 }
 
-async function probeHealth(instanceId: string, apiBase?: string): Promise<HealthResult> {
+export async function probeHealth(instanceId: string, apiBase?: string): Promise<HealthResult> {
   try {
     const response = await fetch(apiBase ? `${apiBase}/api/health` : healthUrl(instanceId), { signal: AbortSignal.timeout(2_000) });
     const body = await response.json() as { status?: unknown; serverVersion?: unknown; version?: unknown };

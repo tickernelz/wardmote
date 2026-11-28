@@ -314,6 +314,43 @@ describe("update command", () => {
     expect(JSON.parse(fs.readFileSync(resultFile, "utf8"))).toMatchObject({ ok: true, version: "2.0.0", rolledBackTo: null, error: null });
   });
 
+  function pinAhead() {
+    const paths = resolveInstallStorePaths(); initializeInstallStore(paths);
+    const oldPayload = payloadPathFor(paths, "npm", "1.0.0"); createPayload(oldPayload, "1.0.0");
+    const payload = payloadPathFor(paths, "npm", "2.0.0"); const executable = createPayload(payload, "2.0.0"); flipCurrentAtomic(payload, paths);
+    writeInstallManifestAtomic({ schemaVersion: 1, ...record(payload, "2.0.0"), previous: [record(oldPayload, "1.0.0")] }, paths);
+    const runCommand = vi.fn<CommandRunner>(async (_file, args) => ({ stdout: args[0] === "view" ? '"2.0.0"\n' : "2.0.0\n", stderr: "" }));
+    return { paths, oldPayload, payload, executable, runCommand, backup: vi.fn(async () => undefined), resultFile: path.join(root, "update-result.json") };
+  }
+
+  it("restarts a service still running an older version when the pin already matches the target", async () => {
+    const { paths, payload, executable, runCommand, backup, resultFile } = pinAhead();
+    const restartActiveService = vi.fn(async () => true);
+    await updateCommand({ version: "2.0.0", yes: true, resultFile }, { paths, executablePath: executable, runCommand, backup, restartActiveService, activeServiceVersion: async () => "1.0.0", hasInstanceData: () => true });
+    expect(restartActiveService).toHaveBeenCalledExactlyOnceWith("2.0.0");
+    expect(backup).toHaveBeenCalledTimes(1);
+    expect(runCommand.mock.calls.some(([, args]) => args[0] === "install")).toBe(false);
+    expect(fs.realpathSync(paths.currentPath)).toBe(fs.realpathSync(payload));
+    expect(JSON.parse(fs.readFileSync(resultFile, "utf8"))).toMatchObject({ ok: true, version: "2.0.0", rolledBackTo: null, error: null });
+  });
+
+  it("leaves the service alone when it already runs the pinned target", async () => {
+    const { paths, executable, runCommand, backup, resultFile } = pinAhead();
+    const restartActiveService = vi.fn(async () => true);
+    await updateCommand({ version: "2.0.0", yes: true, resultFile }, { paths, executablePath: executable, runCommand, backup, restartActiveService, activeServiceVersion: async () => "2.0.0", hasInstanceData: () => true });
+    expect(restartActiveService).not.toHaveBeenCalled();
+    expect(backup).not.toHaveBeenCalled();
+  });
+
+  it("rolls back to the previous payload when the pin-ahead restart fails validation", async () => {
+    const { paths, oldPayload, executable, runCommand, backup, resultFile } = pinAhead();
+    const restartActiveService = vi.fn(async (version: string) => { if (version === "2.0.0") throw new Error("health timeout"); return true; });
+    await expect(updateCommand({ version: "2.0.0", yes: true, resultFile }, { paths, executablePath: executable, runCommand, backup, restartActiveService, activeServiceVersion: async () => "1.0.0", hasInstanceData: () => true })).rejects.toThrow("rolled back to 1.0.0");
+    expect(restartActiveService).toHaveBeenLastCalledWith("1.0.0");
+    expect(fs.realpathSync(paths.currentPath)).toBe(fs.realpathSync(oldPayload));
+    expect(JSON.parse(fs.readFileSync(resultFile, "utf8"))).toMatchObject({ ok: false, version: "1.0.0", rolledBackTo: "1.0.0" });
+  });
+
   it("surfaces a failure to restart the rolled-back payload", async () => {
     const paths = resolveInstallStorePaths(); initializeInstallStore(paths);
     const oldPayload = payloadPathFor(paths, "npm", "1.0.0"); const executable = createPayload(oldPayload, "1.0.0"); flipCurrentAtomic(oldPayload, paths);
