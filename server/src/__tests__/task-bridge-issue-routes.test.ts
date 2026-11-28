@@ -222,7 +222,11 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
 
   it("rejects every other runless bridge-key update and leaves the issues unchanged", async () => {
     const fixture = await seed();
-    const issueIds = [fixture.bridgeIssue.id, fixture.otherBridgeIssue.id, fixture.foreignIssue.id];
+    await db
+      .update(issues)
+      .set({ assigneeAgentId: fixture.bridgeAgentId })
+      .where(eq(issues.id, fixture.standardIssue.id));
+    const issueIds = [fixture.bridgeIssue.id, fixture.otherBridgeIssue.id, fixture.foreignIssue.id, fixture.standardIssue.id];
     const snapshot = async () =>
       (await db.select().from(issues)).filter((row) => issueIds.includes(row.id)).map((row) => ({
         id: row.id,
@@ -249,6 +253,7 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
     attempts.push(
       { app: bridgeApp, issueId: fixture.otherBridgeIssue.id, body: { status: "cancelled" } },
       { app: bridgeApp, issueId: fixture.foreignIssue.id, body: { status: "cancelled" } },
+      { app: bridgeApp, issueId: fixture.standardIssue.id, body: { status: "cancelled" } },
       { app: createApp(fixture.bridgeActor(fixture.otherBridgeKeyId)), issueId: fixture.bridgeIssue.id, body: { status: "cancelled" } },
       { app: createApp(fixture.standardActor), issueId: fixture.bridgeIssue.id, body: { status: "cancelled" } },
     );
