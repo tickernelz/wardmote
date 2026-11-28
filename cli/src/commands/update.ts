@@ -11,7 +11,7 @@ import { assertReleaseSetPublished, assertSupportedNodeVersion, installGitPayloa
 import { resolveWardmoteInstanceId, resolveWardmoteInstanceRoot } from "../config/home.js";
 import { resolveConfigPath } from "../config/store.js";
 import { detectServiceManager } from "../services/service-manager.js";
-import { restartManagedService } from "./service.js";
+import { probeHealth, restartManagedService } from "./service.js";
 import { packageVersion } from "../version.js";
 import { compareVersions } from "@tickernelz/wardmote-shared";
 
@@ -29,7 +29,7 @@ export class UpdateRolledBackError extends Error {
     this.rolledBackTo = rolledBackTo;
   }
 }
-type Dependencies = { executablePath: string; runCommand: CommandRunner; backup: () => Promise<void>; confirm: (message: string) => Promise<boolean>; now: () => Date; paths: InstallStorePaths; restartActiveService: (expectedVersion: string) => Promise<boolean>; hasInstanceData: () => boolean };
+type Dependencies = { executablePath: string; runCommand: CommandRunner; backup: () => Promise<void>; confirm: (message: string) => Promise<boolean>; now: () => Date; paths: InstallStorePaths; restartActiveService: (expectedVersion: string) => Promise<boolean>; activeServiceVersion: () => Promise<string | null>; hasInstanceData: () => boolean };
 
 const DATABASE_UNREACHABLE_CODES = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ETIMEDOUT"]);
 
@@ -85,6 +85,13 @@ async function restartActiveManagedService(expectedVersion: string): Promise<boo
   if (!detection.supported || !(await detection.manager.status()).active) return false;
   await restartManagedService({ instanceId, expectedVersion });
   return true;
+}
+
+async function readActiveServiceVersion(): Promise<string | null> {
+  const instanceId = resolveWardmoteInstanceId();
+  const detection = await detectServiceManager({ instanceId });
+  if (!detection.supported || !(await detection.manager.status()).active) return null;
+  return (await probeHealth(instanceId)).serverVersion;
 }
 
 export function detectInstallMode(executablePath = process.argv[1] ?? "", paths = resolveInstallStorePaths()): InstallMode {
@@ -262,7 +269,22 @@ async function runUpdateCommand(options: UpdateOptions, overrides: Partial<Depen
     emit(options, { mode, action: "update", targetVersion, dryRun: Boolean(options.dryRun), command: ["npm", ...args] }, options.dryRun ? "Dry run complete." : pc.green(`Updated global npm install to ${targetVersion}.`)); return;
   }
   if (!manifest) throw new Error("Managed install metadata is missing.");
-  if (comparison === 0) { emit(options, { mode, currentVersion, targetVersion, changed: false }, `wardmote ${targetVersion} is already active.`); return; }
+  if (comparison === 0) {
+    const runningVersion = await (overrides.activeServiceVersion ?? readActiveServiceVersion)();
+    if (runningVersion === null || runningVersion === targetVersion) { emit(options, { mode, currentVersion, targetVersion, changed: false }, `wardmote ${targetVersion} is already active.`); return; }
+    if (compareVersions(targetVersion, runningVersion) < 0 && options.yes !== true) { const confirmed = await (overrides.confirm ?? defaultConfirm)(`Restart the service from ${runningVersion} down to the installed wardmote ${targetVersion}?`); if (!confirmed) throw new Error("Downgrade cancelled. Re-run with --yes to confirm explicitly."); }
+    if (options.dryRun) { emit(options, { mode, currentVersion, runningVersion, targetVersion, action: "restart", backup: options.backup !== false, dryRun: true }, `Would restart the service from ${runningVersion} onto the installed wardmote ${targetVersion}${options.backup === false ? " without a backup" : " after a database backup"}.`); return; }
+    if (options.backup !== false) await runPreUpdateBackup(options, overrides.backup ?? (() => dbBackupCommand({ pin: true })), overrides.hasInstanceData);
+    const restartActiveService = overrides.restartActiveService ?? restartActiveManagedService;
+    let restarted: boolean;
+    try {
+      restarted = await restartActiveService(targetVersion);
+    } catch (error) {
+      return rollbackAfterServiceValidationFailure(paths, restartActiveService, error, `Installed payload ${targetVersion} (the service ran ${runningVersion} before this restart)`);
+    }
+    emit(options, { mode, currentVersion, runningVersion, targetVersion, changed: false, restarted }, pc.green(`wardmote ${targetVersion} was installed but the service still ran ${runningVersion}${restarted ? `; restarted it on ${targetVersion}` : "; the service is no longer active, start it with `wardmote service start`"}.`));
+    return;
+  }
   if (comparison < 0 && options.yes !== true) { const confirmed = await (overrides.confirm ?? defaultConfirm)(`Downgrade wardmote from ${currentVersion} to ${targetVersion}?`); if (!confirmed) throw new Error("Downgrade cancelled. Re-run with --yes to confirm explicitly."); }
   if (options.dryRun) { emit(options, { mode, currentVersion, targetVersion, action: comparison < 0 ? "downgrade" : "update", backup: options.backup !== false, dryRun: true }, `Would ${comparison < 0 ? "downgrade" : "update"} wardmote ${currentVersion} → ${targetVersion}${options.backup === false ? " without a backup" : " after a database backup"}.`); return; }
   await assertReleaseSetPublished(targetVersion, runCommand);
