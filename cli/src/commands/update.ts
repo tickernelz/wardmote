@@ -272,6 +272,7 @@ async function runUpdateCommand(options: UpdateOptions, overrides: Partial<Depen
   if (comparison === 0) {
     const runningVersion = await (overrides.activeServiceVersion ?? readActiveServiceVersion)();
     if (runningVersion === null || runningVersion === targetVersion) { emit(options, { mode, currentVersion, targetVersion, changed: false }, `wardmote ${targetVersion} is already active.`); return; }
+    if (compareVersions(targetVersion, runningVersion) < 0 && options.yes !== true) { const confirmed = await (overrides.confirm ?? defaultConfirm)(`Restart the service from ${runningVersion} down to the installed wardmote ${targetVersion}?`); if (!confirmed) throw new Error("Downgrade cancelled. Re-run with --yes to confirm explicitly."); }
     if (options.dryRun) { emit(options, { mode, currentVersion, runningVersion, targetVersion, action: "restart", backup: options.backup !== false, dryRun: true }, `Would restart the service from ${runningVersion} onto the installed wardmote ${targetVersion}${options.backup === false ? " without a backup" : " after a database backup"}.`); return; }
     if (options.backup !== false) await runPreUpdateBackup(options, overrides.backup ?? (() => dbBackupCommand({ pin: true })), overrides.hasInstanceData);
     const restartActiveService = overrides.restartActiveService ?? restartActiveManagedService;
@@ -279,7 +280,7 @@ async function runUpdateCommand(options: UpdateOptions, overrides: Partial<Depen
     try {
       restarted = await restartActiveService(targetVersion);
     } catch (error) {
-      return rollbackAfterServiceValidationFailure(paths, restartActiveService, error, "Installed payload");
+      return rollbackAfterServiceValidationFailure(paths, restartActiveService, error, `Installed payload ${targetVersion} (the service ran ${runningVersion} before this restart)`);
     }
     emit(options, { mode, currentVersion, runningVersion, targetVersion, changed: false, restarted }, pc.green(`wardmote ${targetVersion} was installed but the service still ran ${runningVersion}${restarted ? `; restarted it on ${targetVersion}` : "; the service is no longer active, start it with `wardmote service start`"}.`));
     return;

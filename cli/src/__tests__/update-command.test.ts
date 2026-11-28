@@ -342,10 +342,20 @@ describe("update command", () => {
     expect(backup).not.toHaveBeenCalled();
   });
 
+  it("asks before restarting a newer running service down onto the pinned target", async () => {
+    const { paths, executable, runCommand, backup } = pinAhead();
+    const restartActiveService = vi.fn(async () => true);
+    const confirm = vi.fn(async () => false);
+    await expect(updateCommand({ version: "2.0.0" }, { paths, executablePath: executable, runCommand, backup, confirm, restartActiveService, activeServiceVersion: async () => "3.0.0", hasInstanceData: () => true })).rejects.toThrow("Downgrade cancelled");
+    expect(confirm).toHaveBeenCalledExactlyOnceWith("Restart the service from 3.0.0 down to the installed wardmote 2.0.0?");
+    expect(restartActiveService).not.toHaveBeenCalled();
+    expect(backup).not.toHaveBeenCalled();
+  });
+
   it("rolls back to the previous payload when the pin-ahead restart fails validation", async () => {
     const { paths, oldPayload, executable, runCommand, backup, resultFile } = pinAhead();
     const restartActiveService = vi.fn(async (version: string) => { if (version === "2.0.0") throw new Error("health timeout"); return true; });
-    await expect(updateCommand({ version: "2.0.0", yes: true, resultFile }, { paths, executablePath: executable, runCommand, backup, restartActiveService, activeServiceVersion: async () => "1.0.0", hasInstanceData: () => true })).rejects.toThrow("rolled back to 1.0.0");
+    await expect(updateCommand({ version: "2.0.0", yes: true, resultFile }, { paths, executablePath: executable, runCommand, backup, restartActiveService, activeServiceVersion: async () => "1.0.0", hasInstanceData: () => true })).rejects.toThrow("Installed payload 2.0.0 (the service ran 1.0.0 before this restart) failed service validation and was rolled back to 1.0.0");
     expect(restartActiveService).toHaveBeenLastCalledWith("1.0.0");
     expect(fs.realpathSync(paths.currentPath)).toBe(fs.realpathSync(oldPayload));
     expect(JSON.parse(fs.readFileSync(resultFile, "utf8"))).toMatchObject({ ok: false, version: "1.0.0", rolledBackTo: "1.0.0" });
