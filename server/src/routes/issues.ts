@@ -5275,6 +5275,20 @@ export function issueRoutes(
     return decision.allowed;
   }
 
+  function isTaskBridgeKeyRunlessCancelOfOwnIssue(
+    req: Request,
+    issue: { originKind: string | null; originId: string | null },
+  ) {
+    if (!isTaskBridgeKeyActor(req) || req.actor.runId || !req.actor.keyId) return false;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    return (
+      Object.keys(body).length === 1 &&
+      body.status === "cancelled" &&
+      issue.originKind === "task_bridge" &&
+      issue.originId === req.actor.keyId
+    );
+  }
+
   function taskBridgeKeyActivityDetails(req: Request) {
     return isTaskBridgeKeyActor(req) && req.actor.keyId ? { taskBridgeKeyId: req.actor.keyId } : {};
   }
@@ -5976,7 +5990,7 @@ export function issueRoutes(
       identifier?: string | null;
       checkoutRunId: string | null;
     },
-    options: { allowVisibleIssueWrite?: boolean; additive?: boolean } = {},
+    options: { allowVisibleIssueWrite?: boolean; additive?: boolean; taskBridgeOwnIssueCancel?: boolean } = {},
   ) {
     if (!(await assertIssueReadAllowed(req, res, issue))) return false;
     if (req.actor.type !== "agent" || isCompanyOwnerAgentActor(req)) return true;
@@ -6029,7 +6043,7 @@ export function issueRoutes(
         issueWriteDenialCodeForDecision(boundaryDecision),
       );
     }
-    if (issue.assigneeAgentId === null) {
+    if (options.taskBridgeOwnIssueCancel || issue.assigneeAgentId === null) {
       return true;
     }
     if (issue.assigneeAgentId !== actorAgentId) {
@@ -14601,11 +14615,12 @@ export function issueRoutes(
         );
         return;
       }
+      const taskBridgeOwnIssueCancel = isTaskBridgeKeyRunlessCancelOfOwnIssue(req, existing);
       const issueMutationAccess = await assertAgentIssueMutationAllowed(
         req,
         res,
         existing,
-        { allowVisibleIssueWrite: true },
+        { allowVisibleIssueWrite: true, taskBridgeOwnIssueCancel },
       );
       if (!issueMutationAccess) return;
       if (req.body.comment && !(await assertBoardCommentNotPaused(req, res, existing))) return;
@@ -14891,6 +14906,7 @@ export function issueRoutes(
 
       if (
         isAgentWorkUpdate &&
+        !taskBridgeOwnIssueCancel &&
         !(await assertCrossIssueInfluenceWithinRunCap(
           req,
           res,
@@ -15727,6 +15743,7 @@ export function issueRoutes(
               identifier: updated.identifier,
               authorizationReason: issueMutationAuthorizationReason,
               changes,
+              ...taskBridgeKeyActivityDetails(req),
               ...(reviewInteractionId ? { reviewInteractionId } : {}),
               ...(commentBody ? { source: "comment" } : {}),
               ...(resumeRequested === true
@@ -16181,6 +16198,7 @@ export function issueRoutes(
             identifier: issue.identifier,
             authorizationReason: issueMutationAuthorizationReason,
             changes: issueChanges,
+            ...taskBridgeKeyActivityDetails(req),
             ...(reviewInteractionId ? { reviewInteractionId } : {}),
             ...(commentBody ? { source: "comment" } : {}),
             ...(resumeRequested === true

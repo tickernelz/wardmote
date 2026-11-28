@@ -10,6 +10,7 @@ import {
   companies,
   companyMemberships,
   createDb,
+  heartbeatRuns,
   issues,
   projects,
 } from "@tickernelz/wardmote-db";
@@ -125,6 +126,7 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
       scopedProjectId,
       otherProjectId,
       bridgeKeyId,
+      otherBridgeKeyId,
       bridgeIssue: bridgeIssue!,
       otherBridgeIssue: otherBridgeIssue!,
       foreignIssue: foreignIssue!,
@@ -176,13 +178,91 @@ describeEmbeddedPostgres("task bridge keys on issue routes without a heartbeat r
     expect(audit).toEqual([attributed, attributed]);
   });
 
-  it("still requires a heartbeat run for a bridge key to update its own issue", async () => {
+  it("lets a bridge key cancel the issue it created while another agent works on it, attributed to that key", async () => {
     const fixture = await seed();
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId: fixture.companyId,
+      agentId: fixture.standardAgentId,
+      scopeKind: "issue",
+      issueId: fixture.bridgeIssue.id,
+      invocationSource: "assignment",
+      status: "running",
+    });
+    await db
+      .update(issues)
+      .set({ assigneeAgentId: fixture.standardAgentId, status: "in_progress", checkoutRunId: runId, executionRunId: runId })
+      .where(eq(issues.id, fixture.bridgeIssue.id));
+
     const patch = await request(createApp(fixture.bridgeActor()))
       .patch(`/api/issues/${fixture.bridgeIssue.id}`)
       .send({ status: "cancelled" });
-    expect(patch.status, JSON.stringify(patch.body)).toBe(403);
-    expect(JSON.stringify(patch.body)).toContain("cross_issue_influence_run_context_required");
+    expect(patch.status, JSON.stringify(patch.body)).toBe(200);
+
+    const [cancelled] = await db.select().from(issues).where(eq(issues.id, fixture.bridgeIssue.id));
+    expect(cancelled).toMatchObject({ status: "cancelled", assigneeAgentId: fixture.standardAgentId, title: "Bridge request" });
+    const [stoppedRun] = await db.select({ status: heartbeatRuns.status }).from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+    expect(stoppedRun?.status).toBe("cancelled");
+    const audit = await db
+      .select({ runId: activityLog.runId, details: activityLog.details })
+      .from(activityLog)
+      .where(and(
+        eq(activityLog.entityId, fixture.bridgeIssue.id),
+        eq(activityLog.agentId, fixture.bridgeAgentId),
+        eq(activityLog.action, "issue.updated"),
+      ));
+    expect(audit).toEqual([
+      expect.objectContaining({
+        runId: null,
+        details: expect.objectContaining({ status: "cancelled", taskBridgeKeyId: fixture.bridgeKeyId }),
+      }),
+    ]);
+  });
+
+  it("rejects every other runless bridge-key update and leaves the issues unchanged", async () => {
+    const fixture = await seed();
+    const issueIds = [fixture.bridgeIssue.id, fixture.otherBridgeIssue.id, fixture.foreignIssue.id];
+    const snapshot = async () =>
+      (await db.select().from(issues)).filter((row) => issueIds.includes(row.id)).map((row) => ({
+        id: row.id,
+        title: row.title,
+        description: row.description,
+        status: row.status,
+        assigneeAgentId: row.assigneeAgentId,
+        projectId: row.projectId,
+        parentId: row.parentId,
+      }));
+    const before = await snapshot();
+    const bridgeApp = createApp(fixture.bridgeActor());
+    const attempts: Array<{ app: express.Express; issueId: string; body: Record<string, unknown> }> = [
+      { title: "Renamed" },
+      { description: "Rewritten objective" },
+      { assigneeAgentId: fixture.standardAgentId },
+      { projectId: fixture.otherProjectId },
+      { parentId: fixture.otherBridgeIssue.id },
+      { status: "done" },
+      { status: "todo" },
+      { status: "cancelled", title: "Renamed" },
+      { status: "cancelled", comment: "Dibatalkan dari Chat" },
+    ].map((body) => ({ app: bridgeApp, issueId: fixture.bridgeIssue.id, body }));
+    attempts.push(
+      { app: bridgeApp, issueId: fixture.otherBridgeIssue.id, body: { status: "cancelled" } },
+      { app: bridgeApp, issueId: fixture.foreignIssue.id, body: { status: "cancelled" } },
+      { app: createApp(fixture.bridgeActor(fixture.otherBridgeKeyId)), issueId: fixture.bridgeIssue.id, body: { status: "cancelled" } },
+      { app: createApp(fixture.standardActor), issueId: fixture.bridgeIssue.id, body: { status: "cancelled" } },
+    );
+
+    for (const { app, issueId, body } of attempts) {
+      const patch = await request(app).patch(`/api/issues/${issueId}`).send(body);
+      expect([403, 404], `${JSON.stringify(body)} -> ${patch.status} ${JSON.stringify(patch.body)}`).toContain(patch.status);
+    }
+    expect(await snapshot()).toEqual(before);
+    const writes = await db
+      .select({ action: activityLog.action })
+      .from(activityLog)
+      .where(eq(activityLog.companyId, fixture.companyId));
+    expect(writes.filter((row) => row.action === "issue.updated" || row.action === "issue.comment_added")).toEqual([]);
   });
 
   it("keeps a bridge key out of issues it neither created nor holds", async () => {
